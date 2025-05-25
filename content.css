@@ -1,0 +1,260 @@
+/* YouTube Tab Blocker Modal Styles */
+
+.youtube-blocker-modal {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    background: linear-gradient(135deg, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0.85)) !important;
+    backdrop-filter: blur(10px) !important;
+    z-index: 2147483647 !important; /* Maximum z-index */
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
+    color: white !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    -moz-user-select: none !important;
+    animation: fadeIn 0.5s ease-out !important;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.youtube-blocker-content {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+    border-radius: 20px !important;
+    padding: 40px !important;
+    max-width: 600px !important;
+    width: 90% !important;
+    max-height: 90vh !important;
+    overflow-y: auto !important;
+    text-align: center !important;
+    box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5) !important;
+    border: 3px solid rgba(255, 255, 255, 0.2) !important;
+    position: relative !important;
+}
+
+.youtube-blocker-content::before {
+    content: '' !important;
+    position: absolute !important;
+    top: -3px !important;
+    left: -3px !important;
+    right: -3px !important;
+    bottom: -3px !important;
+    background: linear-gradient(45deg, #ff4444, #ff6b6b, #667eea, #764ba2) !important;
+    border-radius: 23px !important;
+    z-index: -1 !important;
+    animation: borderGlow 3s ease-in-out infinite alternate !important;
+}
+
+@keyframes borderGlow {
+    from {
+        box-shadow: 0 0 20px rgba(255, 68, 68, 0.5);
+    }
+    to {
+        box-shadow: 0 0 40px rgba(255, 68, 68, 0.8);
+    }
+}
+
+.youtube-blocker-icon {
+    margin-bottom: 20px !important;
+    animation: pulse 2s ease-in-out infinite !important;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.1);
+    }
+}
+
+.youtube-blocker-title {
+    font-size: 48px !important;
+    font-weight: 900 !important;
+    margin: 0 0 10px 0 !important;
+    color: #ff4444 !important;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5) !important;
+    animation: shake 0.5s ease-in-out !important;
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
+.youtube-blocker-subtitle {
+    font-size: 28px !important;
+    font-weight: 700 !important;
+    margin: 0 0 30px 0 !important;
+    color: #ffffff !important;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5) !important;
+}
+
+.youtube-blocker-message {
+    background: rgba(255, 255, 255, 0.1) !important;
+    border-radius: 15px !important;
+    padding: 25px !important;
+    margin-bottom: 25px !important;
+    text-align: left !important;
+    backdrop-filter: blur(5px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+.youtube-blocker-message p {
+    margin: 0 0 15px 0 !important;
+    font-size: 16px !important;
+    line-height: 1.6 !important;
+    color: #ffffff !important;
+}
+
+.youtube-blocker-message ul {
+    margin: 15px 0 !important;
+    padding-left: 20px !important;
+}
+
+.youtube-blocker-message li {
+    margin: 8px 0 !important;
+    font-size: 15px !important;
+    color: #ffffff !important;
+    line-height: 1.5 !important;
+}
+
+.youtube-blocker-quote {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border-left: 4px solid #ff4444 !important;
+    padding: 20px !important;
+    margin: 25px 0 !important;
+    border-radius: 0 10px 10px 0 !important;
+    font-style: italic !important;
+}
+
+.youtube-blocker-quote p {
+    margin: 5px 0 !important;
+    color: #ffffff !important;
+    font-size: 14px !important;
+}
+
+.youtube-blocker-actions {
+    margin: 30px 0 20px 0 !important;
+    display: flex !important;
+    gap: 15px !important;
+    justify-content: center !important;
+    flex-wrap: wrap !important;
+}
+
+.youtube-blocker-btn {
+    padding: 12px 24px !important;
+    border: none !important;
+    border-radius: 25px !important;
+    font-size: 16px !important;
+    font-weight: 600 !important;
+    cursor: pointer !important;
+    transition: all 0.3s ease !important;
+    min-width: 140px !important;
+    outline: none !important;
+}
+
+.youtube-blocker-btn.primary {
+    background: linear-gradient(45deg, #ff4444, #ff6b6b) !important;
+    color: white !important;
+    box-shadow: 0 4px 15px rgba(255, 68, 68, 0.4) !important;
+}
+
+.youtube-blocker-btn.primary:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 20px rgba(255, 68, 68, 0.6) !important;
+}
+
+.youtube-blocker-btn.secondary {
+    background: rgba(255, 255, 255, 0.2) !important;
+    color: white !important;
+    border: 2px solid rgba(255, 255, 255, 0.3) !important;
+}
+
+.youtube-blocker-btn.secondary:hover {
+    background: rgba(255, 255, 255, 0.3) !important;
+    transform: translateY(-2px) !important;
+}
+
+.youtube-blocker-footer {
+    margin-top: 25px !important;
+    padding-top: 20px !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+.youtube-blocker-footer p {
+    margin: 0 !important;
+    font-size: 13px !important;
+    color: rgba(255, 255, 255, 0.8) !important;
+    line-height: 1.4 !important;
+}
+
+/* Prevent any interaction with background content */
+.youtube-blocker-modal * {
+    box-sizing: border-box !important;
+}
+
+/* Override any YouTube styles that might interfere */
+.youtube-blocker-modal,
+.youtube-blocker-modal * {
+    all: initial !important;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
+}
+
+/* Re-apply our styles after the reset */
+.youtube-blocker-modal {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    background: linear-gradient(135deg, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0.85)) !important;
+    backdrop-filter: blur(10px) !important;
+    z-index: 2147483647 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    color: white !important;
+    user-select: none !important;
+    animation: fadeIn 0.5s ease-out !important;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .youtube-blocker-content {
+        padding: 30px 20px !important;
+        margin: 20px !important;
+    }
+    
+    .youtube-blocker-title {
+        font-size: 36px !important;
+    }
+    
+    .youtube-blocker-subtitle {
+        font-size: 22px !important;
+    }
+    
+    .youtube-blocker-actions {
+        flex-direction: column !important;
+        align-items: center !important;
+    }
+    
+    .youtube-blocker-btn {
+        width: 100% !important;
+        max-width: 250px !important;
+    }
+} 

@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 420px;
+      min-width: 380px;
+      max-width: 450px;
+      padding: 24px;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+      color: white;
+      min-height: 480px;
+      line-height: 1.5;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+      padding: 16px 0;
+    }
+    
+    .header h1 {
+      margin: 16px 0 8px 0;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    
+    .header p {
+      margin: 0;
+      font-size: 14px;
+      opacity: 0.9;
+      font-weight: 400;
+    }
+    
+    .card {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 20px;
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+      transition: background 0.3s ease;
+    }
+
+    .card:hover {
+      background: rgba(255, 255, 255, 0.18);
+    }
+    
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      color: white;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .section-title::before {
+      content: '';
+      width: 4px;
+      height: 16px;
+      background: linear-gradient(135deg, #00d4aa, #00a3ff);
+      border-radius: 2px;
+    }
+    
+    .input-group {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    
+    .input-field {
+      flex: 1;
+      min-width: 120px;
+      padding: 12px 16px;
+      border: none;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.95);
+      color: #2c3e50;
+      font-size: 14px;
+      font-weight: 500;
+      transition: background 0.3s ease, border 0.3s ease;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      border: 2px solid transparent;
+    }
+
+    .input-field:focus {
+      outline: none;
+      background: white;
+      border: 2px solid rgba(0, 212, 170, 0.5);
+    }
+
+    .input-field:hover:not(:focus) {
+      background: rgba(255, 255, 255, 0.98);
+    }
+    
+    .input-field::placeholder {
+      color: #7f8c8d;
+      font-weight: 400;
+    }
+    
+    .timer-input {
+      width: 80px;
+      flex: none;
+    }
+    
+    .add-btn {
+      background: linear-gradient(135deg, #00d4aa, #00a3ff);
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: background 0.3s ease;
+      box-shadow: 0 4px 16px rgba(0, 168, 255, 0.3);
+      min-width: 60px;
+    }
+    
+    .add-btn:hover {
+      background: linear-gradient(135deg, #00e6c0, #00b3ff);
+    }
+
+    .add-btn:active {
+      background: linear-gradient(135deg, #00c4a6, #0093e6);
+    }
+    
+    .input-helper {
+      font-size: 12px;
+      opacity: 0.8;
+      color: rgba(255, 255, 255, 0.9);
+      margin-top: 4px;
+    }
+    
+    .domain-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      margin-bottom: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .domain-item:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+    
+    .domain-item.active {
+      background: rgba(0, 212, 170, 0.15);
+      border: 1px solid rgba(0, 212, 170, 0.3);
+    }
+
+    .domain-item.active:hover {
+      background: rgba(0, 212, 170, 0.2);
+    }
+    
+    .domain-info {
+      flex: 1;
+      min-width: 0;
+    }
+    
+    .domain-name {
+      font-weight: 600;
+      font-size: 15px;
+      color: white;
+      margin-bottom: 4px;
+      word-break: break-all;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .active-indicator {
+      font-size: 11px;
+      font-weight: 500;
+      color: #00d4aa;
+      background: rgba(0, 212, 170, 0.2);
+      padding: 2px 6px;
+      border-radius: 8px;
+      border: 1px solid rgba(0, 212, 170, 0.3);
+    }
+    
+    .domain-timer {
+      font-size: 13px;
+      opacity: 0.9;
+      color: rgba(255, 255, 255, 0.8);
+      font-weight: 500;
+    }
+
+    .domain-timer.status-ready {
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .domain-timer.status-running {
+      color: #00d4aa;
+      font-weight: 600;
+    }
+
+    .domain-timer.status-paused {
+      color: #ffd700;
+      font-weight: 600;
+    }
+
+    .domain-timer.status-blocked {
+      color: #ff6b6b;
+      font-weight: 600;
+    }
+    
+    .remove-btn, .reset-btn {
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      transition: background 0.3s ease;
+      margin-left: 8px;
+    }
+
+    .remove-btn {
+      background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+      color: white;
+      box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
+    }
+    
+    .remove-btn:hover {
+      background: linear-gradient(135deg, #ff5252, #d63031);
+    }
+
+    .remove-btn:active {
+      background: linear-gradient(135deg, #e53e3e, #c53030);
+    }
+
+    .reset-btn {
+      background: linear-gradient(135deg, #ffa726, #ff9800);
+      color: white;
+      box-shadow: 0 2px 8px rgba(255, 167, 38, 0.3);
+    }
+    
+    .reset-btn:hover {
+      background: linear-gradient(135deg, #ff9800, #f57c00);
+    }
+
+    .reset-btn:active {
+      background: linear-gradient(135deg, #f57c00, #e65100);
+    }
+
+    .domain-buttons {
+      display: flex;
+      gap: 8px;
+      margin-left: 12px;
+    }
+    
+    .stats {
+      font-size: 13px;
+      opacity: 0.9;
+      text-align: center;
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      margin-top: 8px;
+      font-weight: 500;
+      letter-spacing: 0.3px;
+      transition: background 0.3s ease;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .stats:hover {
+      background: rgba(255, 255, 255, 0.12);
+    }
+    
+    .icon {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 16px;
+      background: linear-gradient(135deg, #00d4aa, #00a3ff);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 8px 24px rgba(0, 168, 255, 0.3);
+    }
+
+    .icon::before {
+      content: '🛡️';
+      font-size: 20px;
+    }
+    
+    .empty-domains {
+      text-align: center;
+      opacity: 0.8;
+      font-size: 14px;
+      padding: 32px 16px;
+      color: rgba(255, 255, 255, 0.9);
+      line-height: 1.6;
+    }
+
+    .empty-domains::before {
+      content: '📝';
+      display: block;
+      font-size: 32px;
+      margin-bottom: 12px;
+    }
+
+    /* Responsive Design */
+    @media (max-width: 380px) {
+      body {
+        width: 320px;
+        padding: 20px;
+      }
+
+      .header h1 {
+        font-size: 20px;
+      }
+
+      .card {
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+
+      .input-group {
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .timer-input {
+        width: 100%;
+      }
+
+      .domain-item {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+      }
+
+      .domain-buttons {
+        margin-left: 0;
+        justify-content: flex-end;
+      }
+    }
+
+    @media (max-height: 600px) {
+      body {
+        min-height: auto;
+        padding: 16px;
+      }
+
+      .header {
+        margin-bottom: 20px;
+      }
+
+      .card {
+        margin-bottom: 16px;
+      }
+    }
+
+    /* Simple slide-in animation for new items only */
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .domain-item.new {
+      animation: slideIn 0.3s ease-out forwards;
+    }
+
+    .domain-item.new:hover {
+      animation: none;
+    }
+
+    /* Focus accessibility */
+    .add-btn:focus,
+    .remove-btn:focus,
+    .reset-btn:focus,
+    .input-field:focus {
+      outline: 2px solid rgba(255, 255, 255, 0.8);
+      outline-offset: 2px;
+    }
+
+    /* Disabled button states */
+    .add-btn:disabled,
+    .reset-btn:disabled,
+    .remove-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="icon"></div>
+    <h1>Smart Tab Blocker</h1>
+    <p>Manage timers for any website</p>
+  </div>
+  
+  <div class="card">
+    <div class="section-title">Add Domain</div>
+    <div class="input-group">
+      <input type="text" id="domainInput" class="input-field" placeholder="example.com" autocomplete="off">
+      <input type="number" id="timerInput" class="input-field timer-input" placeholder="20" min="1" max="300" autocomplete="off">
+      <button id="addBtn" class="add-btn">Add</button>
+    </div>
+    <div class="input-helper">Timer in seconds (1-300)</div>
+  </div>
+  
+  <div class="card">
+    <div class="section-title">Tracked Domains</div>
+    <div id="domainsList"></div>
+  </div>
+  
+  <div class="stats" id="stats">
+    Ready to help you stay focused!
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html> 

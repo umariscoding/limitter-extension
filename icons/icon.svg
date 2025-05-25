@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="url(#grad)" stroke="#ffffff" stroke-width="4"/>
+  
+  <!-- YouTube play button shape -->
+  <polygon points="50,45 50,83 85,64" fill="#ffffff" opacity="0.3"/>
+  
+  <!-- Prohibition sign (red circle with diagonal line) -->
+  <circle cx="64" cy="64" r="45" fill="none" stroke="#ff4444" stroke-width="8"/>
+  <line x1="30" y1="30" x2="98" y2="98" stroke="#ff4444" stroke-width="8" stroke-linecap="round"/>
+  
+  <!-- Text "YT" in center -->
+  <text x="64" y="75" font-family="Arial, sans-serif" font-size="24" font-weight="bold" text-anchor="middle" fill="#ffffff">YT</text>
+</svg> 
