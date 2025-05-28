@@ -142,18 +142,20 @@ function updateAllTrackedTabs() {
   chrome.tabs.query({}, (tabs) => {
     tabs.forEach(tab => {
       if (tab.url) {
-        const domainInfo = isTrackedDomain(tab.url);
-        
-        if (domainInfo) {
-          const message = {
-            action: isEnabled ? 'updateConfig' : 'stopTimer',
-            enabled: isEnabled,
-            domainConfig: domainInfo
-          };
+        try {
+          const hostname = new URL(tab.url).hostname.toLowerCase();
+          const domainInfo = isTrackedDomain(tab.url);
           
-          chrome.tabs.sendMessage(tab.id, message).catch(() => {
-            // If content script not loaded, inject it
-            if (isEnabled) {
+          if (domainInfo && isEnabled) {
+            // Domain is still tracked and extension is enabled
+            const message = {
+              action: 'updateConfig',
+              enabled: true,
+              domainConfig: domainInfo
+            };
+            
+            chrome.tabs.sendMessage(tab.id, message).catch(() => {
+              // If content script not loaded, inject it
               chrome.scripting.executeScript({
                 target: { tabId: tab.id },
                 func: initializeTimer,
@@ -161,8 +163,18 @@ function updateAllTrackedTabs() {
               }).catch(() => {
                 // Ignore injection errors
               });
-            }
-          });
+            });
+          } else {
+            // Either domain is no longer tracked or extension is disabled
+            // First try to send a message to stop tracking
+            chrome.tabs.sendMessage(tab.id, {
+              action: 'stopTracking'
+            }).catch(() => {
+              // Content script might not be loaded, which is fine
+            });
+          }
+        } catch (error) {
+          // Invalid URL, ignore
         }
       }
     });

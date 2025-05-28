@@ -61,6 +61,7 @@
             
             chrome.storage.local.get([blockKey], (result) => {
                 const blockData = result[blockKey];
+                console.log("Block check result:", blockKey, blockData);
                 if (blockData && blockData.date === getTodayString()) {
                     resolve(true);
                 } else {
@@ -106,10 +107,12 @@
             date: getTodayString()
         };
         
+        console.log(`Smart Tab Blocker: Saving timer state with ${timeRemaining}s remaining`);
+        
         chrome.storage.local.set({
             [storageKey]: state
-        }).catch(() => {
-            // Ignore storage errors
+        }).catch((error) => {
+            console.error("Smart Tab Blocker: Error saving timer state", error);
         });
     }
     
@@ -122,20 +125,41 @@
                 return;
             }
             
+            console.log(`Smart Tab Blocker: Attempting to load timer state for ${getCurrentDomain()}`);
+            
             chrome.storage.local.get([storageKey], (result) => {
                 const state = result[storageKey];
-                if (state && state.url === window.location.href && state.date === getTodayString()) {
-                    // Only restore if same URL, same day, and recent (within 5 minutes)
-                    const timeDiff = Date.now() - state.timestamp;
-                    if (timeDiff < 5 * 60 * 1000) {
-                        resolve(state);
-                        return;
-                    }
+                console.log("Smart Tab Blocker: Retrieved state:", state);
+                
+                if (state && state.date === getTodayString()) {
+                    // Only restore if same day - we're more lenient about URL to handle subdomain variations
+                    console.log(`Smart Tab Blocker: Found saved timer state with ${state.timeRemaining}s remaining`);
+                    resolve(state);
+                    return;
                 }
+                
                 // Clean up old state
-                if (state && (state.date !== getTodayString() || state.url !== window.location.href)) {
+                if (state && state.date !== getTodayString()) {
+                    console.log("Smart Tab Blocker: Clearing outdated timer state");
                     chrome.storage.local.remove([storageKey]);
                 }
+                
+                // If the domain shouldn't be tracked, we'll also clean up any remaining state
+                chrome.runtime.sendMessage({ 
+                    action: 'checkDomainTracking',
+                    domain: getCurrentDomain()
+                }, (response) => {
+                    if (response && response.shouldTrack === false) {
+                        console.log("Smart Tab Blocker: Domain no longer tracked, clearing all state");
+                        chrome.storage.local.remove([storageKey]);
+                        // Also clear any daily blocks for this domain
+                        const blockKey = getDailyBlockKey();
+                        if (blockKey) {
+                            chrome.storage.local.remove([blockKey]);
+                        }
+                    }
+                });
+                
                 resolve(null);
             });
         });
@@ -205,47 +229,173 @@
             }
             
             // Not blocked, try to restore timer state
-            loadTimerState().then(savedState => {
-                if (savedState && savedState.timeRemaining > 0) {
-                    timeRemaining = savedState.timeRemaining;
-                    gracePeriod = savedState.gracePeriod || gracePeriod;
-                    isTimerPaused = savedState.isPaused || document.hidden;
-                    startCountdownTimer(true);
-                } else {
-                    startCountdownTimer();
-                }
-            });
+            if (domainConfig.savedState) {
+                // Use the saved state that was passed in
+                console.log(`Smart Tab Blocker: Using provided saved state with ${domainConfig.savedState.timeRemaining}s remaining`);
+                timeRemaining = domainConfig.savedState.timeRemaining;
+                gracePeriod = domainConfig.savedState.gracePeriod || gracePeriod;
+                isTimerPaused = domainConfig.savedState.isPaused || document.hidden;
+                startCountdownTimer(true);
+            } else {
+                // No saved state provided, check storage
+                loadTimerState().then(savedState => {
+                    if (savedState && savedState.timeRemaining > 0) {
+                        console.log(`Smart Tab Blocker: Loaded timer state from storage with ${savedState.timeRemaining}s remaining`);
+                        timeRemaining = savedState.timeRemaining;
+                        gracePeriod = savedState.gracePeriod || gracePeriod;
+                        isTimerPaused = savedState.isPaused || document.hidden;
+                        startCountdownTimer(true);
+                    } else {
+                        console.log(`Smart Tab Blocker: Starting fresh timer with ${gracePeriod}s`);
+                        startCountdownTimer();
+                    }
+                });
+            }
         });
         
         // Listen for messages from background script
         chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-            if (request.action === 'updateConfig' && request.enabled && request.domainConfig) {
-                gracePeriod = request.domainConfig.timer;
-                if (!countdownTimer) {
-                    timeRemaining = gracePeriod;
-                    startCountdownTimer();
+            console.log('Smart Tab Blocker: Message received:', request);
+            
+            if (request.action === 'updateConfig') {
+                if (request.enabled && request.domainConfig) {
+                    // Domain is still tracked, update config
+                    gracePeriod = request.domainConfig.timer;
+                    if (!countdownTimer) {
+                        timeRemaining = gracePeriod;
+                        startCountdownTimer();
+                    }
+                    sendResponse({ success: true });
+                } else {
+                    // Domain was removed from tracking or extension disabled
+                    console.log('Smart Tab Blocker: Domain removed from tracking or extension disabled');
+                    clearAllStateForDomain();
+                    sendResponse({ success: true });
                 }
-                sendResponse({ success: true });
-            } else if (request.action === 'stopTimer' || !request.enabled) {
+            } else if (request.action === 'checkDomainTracking') {
+                // Background script is checking if this domain is still being tracked
+                sendResponse({ 
+                    isTracking: isEnabled && isInitialized,
+                    domain: getCurrentDomain()
+                });
+            } else if (request.action === 'stopTracking') {
+                // Direct command to stop tracking this domain
+                console.log(`Smart Tab Blocker: Received direct command to stop tracking ${getCurrentDomain()}`);
                 isEnabled = false;
+                isInitialized = false;
                 stopCountdownTimer();
                 clearTimerState();
                 hideTimer();
                 hideModal();
+                
+                // Also clear any daily blocks for this domain
+                const blockKey = getDailyBlockKey();
+                if (blockKey) {
+                    chrome.storage.local.remove([blockKey]);
+                }
+                
                 sendResponse({ success: true });
             }
+            
+            return true; // Keep message channel open for async response
         });
     }
     
     // Check if current domain should be tracked
     function checkDomainAndInitialize() {
-        chrome.runtime.sendMessage({ action: 'getDomainConfig' }, (response) => {
-            if (chrome.runtime.lastError) return;
-            
-            if (response && response.domainConfig) {
-                initializeWithConfig(response.domainConfig);
+        console.log(`Smart Tab Blocker: Checking domain ${getCurrentDomain()}`);
+        
+        // Notify background script that we're checking this domain
+        chrome.runtime.sendMessage({ 
+            action: 'contentScriptLoaded', 
+            domain: getCurrentDomain() 
+        }, (response) => {
+            // If background responds that domain should not be tracked, stop initialization
+            if (response && response.shouldTrack === false) {
+                console.log(`Smart Tab Blocker: Background script says not to track ${getCurrentDomain()}`);
+                // Ensure we clean up any state for this domain
+                clearAllStateForDomain();
+                return;
             }
+            
+            // First check if domain is already blocked today
+            isDomainBlockedToday().then(isBlocked => {
+                if (isBlocked) {
+                    console.log(`Smart Tab Blocker: ${getCurrentDomain()} is already blocked for today`);
+                    // Initialize with config so we can show the blocked modal
+                    initializeWithConfig({ timer: 20 });
+                    return;
+                }
+                
+                // If not blocked, check if we have saved timer state
+                loadTimerState().then(savedState => {
+                    if (savedState && savedState.timeRemaining > 0) {
+                        // Double-check that domain should still be tracked before using saved state
+                        chrome.runtime.sendMessage({ action: 'checkDomainTracking', domain: getCurrentDomain() }, (trackingResponse) => {
+                            if (trackingResponse && trackingResponse.shouldTrack === false) {
+                                console.log(`Smart Tab Blocker: Domain no longer tracked, ignoring saved state`);
+                                clearAllStateForDomain();
+                                return;
+                            }
+                            
+                            console.log(`Smart Tab Blocker: Restoring from saved timer state with ${savedState.timeRemaining}s remaining`);
+                            // We have saved state, initialize with it
+                            initializeWithConfig({ 
+                                timer: savedState.gracePeriod || 20,
+                                savedState: savedState
+                            });
+                        });
+                    } else {
+                        // No saved state, proceed with normal initialization
+                        console.log(`Smart Tab Blocker: No saved state, requesting domain config`);
+                        chrome.runtime.sendMessage({ action: 'getDomainConfig' }, (response) => {
+                            if (chrome.runtime.lastError) {
+                                console.error("Smart Tab Blocker: Error getting domain config", chrome.runtime.lastError);
+                                return;
+                            }
+                            
+                            if (response && response.domainConfig) {
+                                initializeWithConfig(response.domainConfig);
+                            } else if (response && response.shouldTrack === false) {
+                                console.log(`Smart Tab Blocker: Domain ${getCurrentDomain()} should not be tracked`);
+                                clearAllStateForDomain();
+                            }
+                        });
+                    }
+                });
+            });
         });
+    }
+    
+    // Helper function to clean up all state for a domain
+    function clearAllStateForDomain() {
+        console.log(`Smart Tab Blocker: Cleaning up all state for ${getCurrentDomain()}`);
+        
+        // Clear timer state
+        const storageKey = getStorageKey();
+        if (storageKey) {
+            chrome.storage.local.remove([storageKey]);
+        }
+        
+        // Clear daily block
+        const blockKey = getDailyBlockKey();
+        if (blockKey) {
+            chrome.storage.local.remove([blockKey]);
+        }
+        
+        // Clean up UI and variables
+        stopCountdownTimer();
+        hideTimer();
+        hideModal();
+        isEnabled = false;
+        isInitialized = false;
+        
+        // Try to clean up localStorage temp data too
+        try {
+            localStorage.removeItem('_smartBlockerTemp');
+        } catch (e) {
+            // Ignore localStorage errors
+        }
     }
     
     function createTimer() {
@@ -684,10 +834,62 @@
     
     // Handle page unload to save state
     window.addEventListener('beforeunload', () => {
-        if (countdownTimer && timeRemaining > 0) {
-            saveTimerState();
+        if (isEnabled && isInitialized) {
+            console.log(`Smart Tab Blocker: Saving timer state before unload - ${timeRemaining}s remaining`);
+            // Force immediate save to ensure it completes before page closes
+            const storageKey = getStorageKey();
+            if (storageKey) {
+                const state = {
+                    timeRemaining: timeRemaining,
+                    isActive: !!countdownTimer,
+                    isPaused: isTimerPaused,
+                    tabId: getTabId(),
+                    timestamp: Date.now(),
+                    url: window.location.href,
+                    gracePeriod: gracePeriod,
+                    date: getTodayString()
+                };
+                
+                try {
+                    // Use synchronous storage API for beforeunload
+                    localStorage.setItem('_smartBlockerTemp', JSON.stringify({
+                        key: storageKey,
+                        state: state
+                    }));
+                } catch (e) {
+                    console.error("Smart Tab Blocker: Error saving state to localStorage", e);
+                }
+                
+                // Also try the async API
+                chrome.storage.local.set({
+                    [storageKey]: state
+                });
+            }
         }
     });
+    
+    // Check for temporary state in localStorage on startup
+    function checkLocalStorageTemp() {
+        try {
+            const tempData = localStorage.getItem('_smartBlockerTemp');
+            if (tempData) {
+                const parsed = JSON.parse(tempData);
+                if (parsed && parsed.key && parsed.state) {
+                    console.log("Smart Tab Blocker: Found temporary state in localStorage, restoring to chrome.storage");
+                    chrome.storage.local.set({
+                        [parsed.key]: parsed.state
+                    });
+                }
+                // Clear the temporary storage
+                localStorage.removeItem('_smartBlockerTemp');
+            }
+        } catch (e) {
+            console.error("Smart Tab Blocker: Error checking localStorage", e);
+        }
+    }
+    
+    // Check for temporary state on initialization
+    checkLocalStorageTemp();
     
     // Prevent escape key from closing modal
     document.addEventListener('keydown', (event) => {

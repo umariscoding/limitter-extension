@@ -154,6 +154,33 @@ document.addEventListener('DOMContentLoaded', function() {
       blockedDomains: domains
     });
   }
+
+  function stopTrackingDomain(domain) {
+    chrome.tabs.query({}, (tabs) => {
+      tabs.forEach(tab => {
+        if (tab.url) {
+          try {
+            const hostname = new URL(tab.url).hostname.toLowerCase();
+            if (hostname === domain || hostname.endsWith('.' + domain)) {
+              console.log(`Smart Tab Blocker: Sending stop tracking for removed domain ${domain} to tab ${tab.id}`);
+              
+              // Send explicit stopTracking message
+              chrome.tabs.sendMessage(tab.id, {
+                action: 'stopTracking',
+                domain: domain
+              }).catch(() => {
+                // Tab might not have content script loaded, which is fine
+                console.log(`Could not send stop tracking to tab ${tab.id} - content script may not be loaded`);
+              });
+            }
+          } catch (error) {
+            // Invalid URL, ignore
+          }
+        }
+      });
+    });
+
+  }
   
   // Clear daily block for a specific domain
   function clearDailyBlock(domain) {
@@ -251,10 +278,8 @@ document.addEventListener('DOMContentLoaded', function() {
     delete domains[domain];
     delete domainStates[domain];
     saveDomains();
-    
-    // Clear daily block when domain is removed
     clearDailyBlock(domain);
-    
+    stopTrackingDomain(domain);
     renderDomainsList();
     updateStats();
     showFeedback(`Removed ${domain}`);
