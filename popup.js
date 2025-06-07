@@ -652,41 +652,18 @@ document.addEventListener('DOMContentLoaded', function() {
     // Clear any existing daily block for this domain to allow fresh timer
     clearDailyBlock(cleanDomain);
     
-    // Notify existing tabs about the new domain
+    // Reload existing tabs that match the new domain
     chrome.tabs.query({}, (tabs) => {
       tabs.forEach(tab => {
-        if (tab.url) {
+        if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
           try {
             const hostname = new URL(tab.url).hostname.toLowerCase();
             if (hostname === cleanDomain || hostname.endsWith('.' + cleanDomain)) {
-              // Send message to start tracking on this tab
-              chrome.tabs.sendMessage(tab.id, {
-                action: 'startTracking',
-                domain: cleanDomain,
-                timer: totalSeconds
-              }).then((response) => {
-                console.log(`Started tracking on tab ${tab.id}:`, response);
-              }).catch(() => {
-                // Tab might not have content script yet, inject it
-                chrome.scripting.executeScript({
-                  target: { tabId: tab.id },
-                  files: ['content.js']
-                }).then(() => {
-                  // Try sending message again after injection
-                  setTimeout(() => {
-                    chrome.tabs.sendMessage(tab.id, {
-                      action: 'startTracking',
-                      domain: cleanDomain,
-                      timer: totalSeconds
-                    }).catch(() => {
-                      // Still failed, user may need to refresh
-                      console.log(`Could not start tracking on tab ${tab.id}, may need refresh`);
-                    });
-                  }, 100);
-                }).catch(() => {
-                  console.log(`Could not inject script into tab ${tab.id}`);
-                });
+              // Reload the tab so the extension can start tracking immediately
+              chrome.tabs.reload(tab.id).catch((error) => {
+                console.log(`Could not reload tab ${tab.id}:`, error);
               });
+              console.log(`Reloaded tab ${tab.id} for domain ${cleanDomain}`);
             }
           } catch (error) {
             // Invalid URL, ignore
@@ -704,7 +681,7 @@ document.addEventListener('DOMContentLoaded', function() {
     minutesInput.value = '';
     secondsInput.value = '';
     
-    showFeedback(`Added ${cleanDomain} with ${formatTime(totalSeconds)} timer`);
+    showFeedback(`Added ${cleanDomain} with ${formatTime(totalSeconds)} timer. Open tabs for this site will be reloaded.`);
   }
   
   async function removeDomain(domain) {
