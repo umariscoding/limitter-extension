@@ -29,6 +29,9 @@ document.addEventListener('DOMContentLoaded', function() {
   const firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
   const firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
   
+  // Initialize Subscription Service
+  const subscriptionService = new SubscriptionService(firebaseAuth, firestore);
+  
   // Authentication elements
   const authContent = document.getElementById('authContent');
   const userSection = document.getElementById('userSection');
@@ -40,6 +43,19 @@ document.addEventListener('DOMContentLoaded', function() {
   const logoutBtn = document.getElementById('logoutBtn');
   const userEmail = document.getElementById('userEmail');
   const authError = document.getElementById('authError');
+  
+  // Subscription elements
+  const subscriptionBtn = document.getElementById('subscriptionBtn');
+  const currentPlanSpan = document.getElementById('currentPlan');
+  const subscriptionModal = document.getElementById('subscriptionModal');
+  const closeSubscriptionModal = document.getElementById('closeSubscriptionModal');
+  const subscriptionPlans = document.getElementById('subscriptionPlans');
+  
+  // Plan status elements
+  const planStatusCard = document.getElementById('planStatusCard');
+  const planBadge = document.getElementById('planBadge');
+  const planLimits = document.getElementById('planLimits');
+  const domainUsage = document.getElementById('domainUsage');
   
   // App elements
   const stats = document.getElementById('stats');
@@ -58,6 +74,23 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Initialize authentication on startup
   initializeAuth();
+  
+  // Subscription event listeners
+  if (subscriptionBtn) {
+    subscriptionBtn.addEventListener('click', showSubscriptionModal);
+  }
+  
+  if (closeSubscriptionModal) {
+    closeSubscriptionModal.addEventListener('click', hideSubscriptionModal);
+  }
+  
+  if (subscriptionModal) {
+    subscriptionModal.addEventListener('click', (e) => {
+      if (e.target === subscriptionModal) {
+        hideSubscriptionModal();
+      }
+    });
+  }
   
   // Firestore data functions
   async function loadUserDataFromFirestore() {
@@ -91,6 +124,12 @@ document.addEventListener('DOMContentLoaded', function() {
       updateStats();
 
       console.log('User data loaded successfully, domains:', domains);
+      
+      // Update subscription UI
+      updateSubscriptionUI();
+      
+      // Update timer inputs for plan
+      updateTimerInputsForPlan();
     } catch (error) {
       console.error('Error loading user data from Firestore:', error);
       // Fallback to local storage
@@ -189,6 +228,8 @@ document.addEventListener('DOMContentLoaded', function() {
     mainContent.classList.add('authenticated');
     userEmail.textContent = user.email;
     hideAuthError();
+    updateSubscriptionUI();
+    updateTimerInputsForPlan();
   }
   
   function showUnauthenticatedState() {
@@ -613,25 +654,47 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     const domain = domainInput.value.trim().toLowerCase();
-    const hours = parseInt(hoursInput.value) || 0;
-    const minutes = parseInt(minutesInput.value) || 0;
-    const seconds = parseInt(secondsInput.value) || 0;
+    const userPlan = subscriptionService.getCurrentPlan();
+    
+    let hours, minutes, seconds, totalSeconds;
+    
+    if (userPlan.id === 'free') {
+      // Free plan: force 1 hour timer
+      hours = 1;
+      minutes = 0;
+      seconds = 0;
+      totalSeconds = 3600; // 1 hour
+    } else {
+      // Pro/Elite plans: use user input
+      hours = parseInt(hoursInput.value) || 0;
+      minutes = parseInt(minutesInput.value) || 0;
+      seconds = parseInt(secondsInput.value) || 0;
+      totalSeconds = hours * 3600 + minutes * 60 + seconds;
+      
+      // Validate time input for non-free plans
+      if (totalSeconds < 1) {
+        showError('Please enter a time greater than 0');
+        return;
+      }
+      
+      if (totalSeconds > 86400) { // 24 hours max
+        showError('Timer cannot exceed 24 hours');
+        return;
+      }
+    }
     
     if (!domain) {
       showError('Please enter a domain');
       return;
     }
     
-    // Calculate total seconds
-    const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+    // Check subscription limits for domain count
+    const currentDomainCount = Object.keys(domains).length;
+    const canAdd = await subscriptionService.canAddDomain(currentDomainCount);
     
-    if (totalSeconds < 1) {
-      showError('Please enter a time greater than 0');
-      return;
-    }
-    
-    if (totalSeconds > 86400) { // 24 hours max
-      showError('Timer cannot exceed 24 hours');
+    if (!canAdd) {
+      const maxDomains = subscriptionService.getMaxDomains();
+      showPlanLimitError(`You've reached your limit of ${maxDomains} domains. Upgrade to Pro for unlimited domains.`, 'pro');
       return;
     }
     
@@ -675,11 +738,19 @@ document.addEventListener('DOMContentLoaded', function() {
     updateDomainStates();
     updateStats();
     
-    // Clear inputs
+    // Clear inputs and reset to plan defaults
     domainInput.value = '';
-    hoursInput.value = '';
-    minutesInput.value = '';
-    secondsInput.value = '';
+    const planForClear = subscriptionService.getCurrentPlan();
+    if (planForClear.id === 'free') {
+      // Keep 1 hour for free plan (inputs are disabled)
+      hoursInput.value = '1';
+      minutesInput.value = '0';
+      secondsInput.value = '0';
+    } else {
+      hoursInput.value = '';
+      minutesInput.value = '';
+      secondsInput.value = '';
+    }
     
     showFeedback(`Added ${cleanDomain} with ${formatTime(totalSeconds)} timer. Open tabs for this site will be reloaded.`);
   }
@@ -776,6 +847,9 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Update previous order
     previousDomainOrder = [...sortedDomains];
+    
+    // Update subscription UI to reflect domain count changes
+    updateSubscriptionUI();
     
     // Remove 'new' class after animation
     setTimeout(() => {
@@ -948,4 +1022,185 @@ document.addEventListener('DOMContentLoaded', function() {
       });
     });
   }
+  
+  // Subscription functions
+  function showSubscriptionModal() {
+    renderSubscriptionPlans();
+    subscriptionModal.style.display = 'flex';
+  }
+  
+  function hideSubscriptionModal() {
+    subscriptionModal.style.display = 'none';
+  }
+  
+  function renderSubscriptionPlans() {
+    const currentPlan = subscriptionService.getCurrentPlan();
+    const plans = subscriptionService.getAllPlans();
+    
+    subscriptionPlans.innerHTML = plans.map(plan => {
+      const isCurrent = plan.id === currentPlan.id;
+      const isRecommended = plan.id === 'pro';
+      
+      return `
+        <div class="plan-card ${isCurrent ? 'current' : ''} ${isRecommended ? 'recommended' : ''}">
+          <div class="plan-header">
+            <div class="plan-name">${plan.name}</div>
+            <div class="plan-price">$${plan.price}${plan.price > 0 ? '/month' : ''}</div>
+          </div>
+          <ul class="plan-features">
+            ${plan.features.map(feature => `<li>${feature}</li>`).join('')}
+          </ul>
+          <button class="plan-action ${isCurrent ? 'current' : 'upgrade'}" 
+                  onclick="handlePlanAction('${plan.id}', ${isCurrent})"
+                  ${isCurrent ? 'disabled' : ''}>
+            ${isCurrent ? 'Current Plan' : (plan.price > 0 ? `Upgrade - $${plan.price}/month` : 'Downgrade to Free')}
+          </button>
+        </div>
+      `;
+    }).join('');
+  }
+  
+  async function handlePlanAction(planId, isCurrent) {
+    if (isCurrent) return;
+    
+    try {
+      const user = firebaseAuth.getCurrentUser();
+      if (!user) {
+        showError('Please log in to manage subscription');
+        return;
+      }
+      
+      if (planId === 'free') {
+        // Handle downgrade to free (would need cancellation logic)
+        showFeedback('Contact support to downgrade your plan');
+        return;
+      }
+      
+      // Redirect to payment page
+      const paymentUrl = await subscriptionService.upgradeSubscription(planId, user.uid);
+      window.open(paymentUrl, '_blank');
+      hideSubscriptionModal();
+      
+    } catch (error) {
+      console.error('Error upgrading subscription:', error);
+      showError('Failed to process upgrade. Please try again.');
+    }
+  }
+  
+  function updateSubscriptionUI() {
+    const status = subscriptionService.getSubscriptionStatus();
+    const currentDomainCount = Object.keys(domains).length;
+    
+    // Update subscription button
+    if (currentPlanSpan) {
+      currentPlanSpan.textContent = status.planName;
+    }
+    
+    // Update plan status card
+    if (planStatusCard && planBadge && planLimits && domainUsage) {
+      planStatusCard.style.display = 'block';
+      
+      // Update plan badge
+      planBadge.textContent = status.planName;
+      planBadge.className = `plan-badge ${status.planId}`;
+      
+      // Update plan limits
+      const maxDomains = status.limits.maxDomains;
+      if (maxDomains === -1) {
+        planLimits.textContent = 'Unlimited domains';
+        domainUsage.textContent = `${currentDomainCount} domains`;
+      } else {
+        planLimits.textContent = `${maxDomains} domains max`;
+        domainUsage.textContent = `${currentDomainCount}/${maxDomains} domains`;
+        
+        // Add warning color if approaching limit
+        if (currentDomainCount >= maxDomains * 0.8) {
+          domainUsage.style.color = '#ffc107';
+        } else {
+          domainUsage.style.color = '';
+        }
+      }
+      
+      // Add custom duration info for free plan
+      if (status.planId === 'free') {
+        planLimits.textContent += ' • 1-hour timers only';
+      }
+    }
+    
+    // Update timer inputs based on plan
+    updateTimerInputsForPlan();
+  }
+  
+  function showPlanLimitError(message, suggestedPlan) {
+    // Create a plan limit error message with upgrade option
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'plan-limit-error';
+    errorDiv.innerHTML = `
+      <div>${message}</div>
+      <button onclick="showSubscriptionModal()" style="margin-top: 8px; padding: 8px 16px; background: #00d4aa; color: white; border: none; border-radius: 6px; cursor: pointer;">
+        View Plans
+      </button>
+    `;
+    
+    // Insert before the add domain card
+    const addDomainCard = document.querySelector('.card');
+    if (addDomainCard && addDomainCard.parentNode) {
+      addDomainCard.parentNode.insertBefore(errorDiv, addDomainCard);
+      
+      // Remove after 10 seconds
+      setTimeout(() => {
+        if (errorDiv.parentNode) {
+          errorDiv.parentNode.removeChild(errorDiv);
+        }
+      }, 10000);
+    }
+  }
+  
+  // Update timer inputs based on subscription plan
+  function updateTimerInputsForPlan() {
+    const plan = subscriptionService.getCurrentPlan();
+    
+    if (plan.id === 'free') {
+      // Disable timer inputs for free plan
+      hoursInput.disabled = true;
+      minutesInput.disabled = true;
+      secondsInput.disabled = true;
+      
+      // Set default values
+      hoursInput.value = '1';
+      minutesInput.value = '0';
+      secondsInput.value = '0';
+      
+      // Add visual styling
+      hoursInput.style.backgroundColor = 'rgba(255, 255, 255, 0.6)';
+      minutesInput.style.backgroundColor = 'rgba(255, 255, 255, 0.6)';
+      secondsInput.style.backgroundColor = 'rgba(255, 255, 255, 0.6)';
+      
+      // Update helper text
+      const helperText = document.querySelector('.input-helper');
+      if (helperText) {
+        helperText.innerHTML = 'Free plan: 1-hour timer only. <button onclick="showSubscriptionModal()" style="background: none; border: none; color: #00d4aa; text-decoration: underline; cursor: pointer; font-size: inherit;">Upgrade to Pro</button> for custom timers.';
+      }
+    } else {
+      // Enable timer inputs for paid plans
+      hoursInput.disabled = false;
+      minutesInput.disabled = false;
+      secondsInput.disabled = false;
+      
+      // Reset styling
+      hoursInput.style.backgroundColor = '';
+      minutesInput.style.backgroundColor = '';
+      secondsInput.style.backgroundColor = '';
+      
+      // Update helper text
+      const helperText = document.querySelector('.input-helper');
+      if (helperText) {
+        helperText.textContent = 'Timer in hours, minutes, seconds';
+      }
+    }
+  }
+  
+  // Make functions available globally for onclick handlers
+  window.handlePlanAction = handlePlanAction;
+  window.showSubscriptionModal = showSubscriptionModal;
 }); 

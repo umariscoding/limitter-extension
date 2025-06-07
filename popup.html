@@ -179,6 +179,17 @@
       font-weight: 400;
     }
 
+    .time-input:disabled {
+      background: rgba(255, 255, 255, 0.6) !important;
+      color: #7f8c8d !important;
+      cursor: not-allowed !important;
+      opacity: 0.7;
+    }
+
+    .time-input:disabled:hover {
+      background: rgba(255, 255, 255, 0.6) !important;
+    }
+
     .time-label {
       font-size: 10px;
       font-weight: 500;
@@ -220,6 +231,21 @@
       opacity: 0.8;
       color: rgba(255, 255, 255, 0.9);
       margin-top: 4px;
+    }
+
+    .input-helper button {
+      background: none !important;
+      border: none !important;
+      color: #00d4aa !important;
+      text-decoration: underline !important;
+      cursor: pointer !important;
+      font-size: inherit !important;
+      font-weight: 600 !important;
+      padding: 0 !important;
+    }
+
+    .input-helper button:hover {
+      color: #00e6c0 !important;
     }
     
     .domain-item {
@@ -710,6 +736,382 @@
       opacity: 0.6;
       cursor: not-allowed;
     }
+
+    /* Subscription UI Styles */
+    .user-info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .user-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .subscription-btn {
+      background: linear-gradient(135deg, #ffd700, #ffb347);
+      color: #2c3e50;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+      transition: all 0.3s ease;
+    }
+
+    .subscription-btn:hover {
+      background: linear-gradient(135deg, #ffe55c, #ffc875);
+      transform: translateY(-1px);
+    }
+
+    .subscription-modal,
+    .override-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 10000;
+    }
+
+    .subscription-modal-content,
+    .override-modal-content {
+      background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+      border-radius: 16px;
+      padding: 24px;
+      max-width: 500px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+      position: relative;
+      color: white;
+    }
+
+    .subscription-header,
+    .override-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .close-modal-btn {
+      background: none;
+      border: none;
+      color: white;
+      font-size: 24px;
+      cursor: pointer;
+      padding: 0;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      transition: background 0.3s ease;
+    }
+
+    .close-modal-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .subscription-plans {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .plan-card {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 20px;
+      border: 2px solid transparent;
+      transition: all 0.3s ease;
+      cursor: pointer;
+    }
+
+    .plan-card:hover {
+      background: rgba(255, 255, 255, 0.15);
+      border-color: rgba(255, 255, 255, 0.3);
+    }
+
+    .plan-card.current {
+      border-color: #ffd700;
+      background: rgba(255, 215, 0, 0.1);
+    }
+
+    .plan-card.recommended {
+      border-color: #00d4aa;
+      background: rgba(0, 212, 170, 0.1);
+      position: relative;
+    }
+
+    .plan-card.recommended::before {
+      content: 'RECOMMENDED';
+      position: absolute;
+      top: -8px;
+      right: 16px;
+      background: #00d4aa;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .plan-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .plan-name {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .plan-price {
+      font-size: 16px;
+      font-weight: 600;
+      color: #ffd700;
+    }
+
+    .plan-features {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 16px 0;
+    }
+
+    .plan-features li {
+      padding: 4px 0;
+      font-size: 14px;
+      opacity: 0.9;
+    }
+
+    .plan-features li::before {
+      content: '✓';
+      color: #00d4aa;
+      font-weight: bold;
+      margin-right: 8px;
+    }
+
+    .plan-action {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .plan-action.current {
+      background: rgba(255, 215, 0, 0.2);
+      color: #ffd700;
+      border: 1px solid #ffd700;
+    }
+
+    .plan-action.upgrade {
+      background: linear-gradient(135deg, #00d4aa, #00a3ff);
+      color: white;
+    }
+
+    .plan-action.upgrade:hover {
+      background: linear-gradient(135deg, #00e6c0, #00b3ff);
+      transform: translateY(-1px);
+    }
+
+    /* Override Modal Styles */
+    .override-content p {
+      margin-bottom: 16px;
+      opacity: 0.9;
+    }
+
+    .override-option {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+      border: 2px solid transparent;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .override-option:hover {
+      background: rgba(255, 255, 255, 0.15);
+      border-color: rgba(255, 255, 255, 0.3);
+    }
+
+    .override-option.selected {
+      border-color: #00d4aa;
+      background: rgba(0, 212, 170, 0.1);
+    }
+
+    .option-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .option-description {
+      font-size: 14px;
+      opacity: 0.8;
+    }
+
+    .option-cost {
+      color: #ffd700;
+      font-weight: 600;
+      float: right;
+    }
+
+    .override-justification {
+      margin: 16px 0;
+    }
+
+    .override-justification label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    .override-justification textarea {
+      width: 100%;
+      min-height: 80px;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
+      font-family: inherit;
+      resize: vertical;
+    }
+
+    .override-justification textarea::placeholder {
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .override-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .override-btn {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .override-btn.primary {
+      background: linear-gradient(135deg, #ff6b6b, #ff8e8e);
+      color: white;
+    }
+
+    .override-btn.primary:hover {
+      background: linear-gradient(135deg, #ff5252, #ff7979);
+      transform: translateY(-1px);
+    }
+
+    .override-btn.secondary {
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+    }
+
+    .override-btn.secondary:hover {
+      background: rgba(255, 255, 255, 0.3);
+    }
+
+    /* Plan limit indicators */
+    .plan-limit-warning {
+      background: rgba(255, 193, 7, 0.1);
+      border: 1px solid rgba(255, 193, 7, 0.3);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+      color: #ffc107;
+      font-size: 14px;
+    }
+
+    .plan-limit-error {
+      background: rgba(220, 53, 69, 0.1);
+      border: 1px solid rgba(220, 53, 69, 0.3);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+      color: #dc3545;
+      font-size: 14px;
+    }
+
+    /* Plan Status Card */
+    .plan-status-card {
+      margin-bottom: 16px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+
+    .plan-status-content {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .plan-status-header {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .plan-badge {
+      background: linear-gradient(135deg, #ffd700, #ffb347);
+      color: #2c3e50;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      width: fit-content;
+    }
+
+    .plan-badge.pro {
+      background: linear-gradient(135deg, #00d4aa, #00a3ff);
+      color: white;
+    }
+
+    .plan-badge.elite {
+      background: linear-gradient(135deg, #8b5cf6, #a855f7);
+      color: white;
+    }
+
+    .plan-limits {
+      font-size: 11px;
+      opacity: 0.7;
+      font-weight: 500;
+    }
+
+    .plan-usage {
+      text-align: right;
+    }
+
+    #domainUsage {
+      font-size: 13px;
+      font-weight: 600;
+      opacity: 0.9;
+    }
   </style>
 </head>
 <body>
@@ -722,8 +1124,15 @@
 
   <!-- User Info Section (Visible when authenticated) -->
   <div id="userSection" class="user-info-compact" style="display: none;">
-    <span id="userEmail" class="user-email-compact"></span>
-    <button id="logoutBtn" class="logout-btn-compact">Logout</button>
+    <div class="user-info-row">
+      <span id="userEmail" class="user-email-compact"></span>
+      <div class="user-actions">
+        <button id="subscriptionBtn" class="subscription-btn">
+          <span id="currentPlan">Free Plan</span>
+        </button>
+        <button id="logoutBtn" class="logout-btn-compact">Logout</button>
+      </div>
+    </div>
   </div>
 
   <!-- Authentication Content (Visible when not authenticated) -->
@@ -750,8 +1159,58 @@
     </div>
   </div>
 
+  <!-- Subscription Modal -->
+  <div id="subscriptionModal" class="subscription-modal" style="display: none;">
+    <div class="subscription-modal-content">
+      <div class="subscription-header">
+        <h2>Choose Your Plan</h2>
+        <button id="closeSubscriptionModal" class="close-modal-btn">&times;</button>
+      </div>
+      <div class="subscription-plans" id="subscriptionPlans">
+        <!-- Plans will be populated by JavaScript -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Override Modal -->
+  <div id="overrideModal" class="override-modal" style="display: none;">
+    <div class="override-modal-content">
+      <div class="override-header">
+        <h3>Override Site Block</h3>
+        <button id="closeOverrideModal" class="close-modal-btn">&times;</button>
+      </div>
+      <div class="override-content">
+        <p>This site is currently blocked. You can override this block:</p>
+        <div id="overrideOptions">
+          <!-- Override options will be populated by JavaScript -->
+        </div>
+        <div class="override-justification" id="overrideJustification" style="display: none;">
+          <label for="overrideReason">Why do you need to override this block?</label>
+          <textarea id="overrideReason" placeholder="Enter your reason (optional for Pro users, required for Elite users)"></textarea>
+        </div>
+        <div class="override-actions">
+          <button id="confirmOverride" class="override-btn primary">Confirm Override</button>
+          <button id="cancelOverride" class="override-btn secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Main App Content (Visible when authenticated) -->
   <div class="main-content" id="mainContent">
+    <!-- Plan Status Card -->
+    <div class="card plan-status-card" id="planStatusCard" style="display: none;">
+      <div class="plan-status-content">
+        <div class="plan-status-header">
+          <span class="plan-badge" id="planBadge">Free Plan</span>
+          <span class="plan-limits" id="planLimits">3 domains max</span>
+        </div>
+        <div class="plan-usage" id="planUsage">
+          <span id="domainUsage">0/3 domains used</span>
+        </div>
+      </div>
+    </div>
+    
     <div class="card">
       <div class="section-title">Add Domain</div>
       <div class="input-group">
@@ -791,6 +1250,7 @@
   </div>
   
   <script src="firebase-config.js"></script>
+  <script src="subscription-service.js"></script>
   <script src="popup.js"></script>
 </body>
 </html> 

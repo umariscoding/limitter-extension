@@ -317,6 +317,27 @@
         }
     }
     
+    function clearDailyBlock() {
+        const blockKey = getDailyBlockKey();
+        if (!blockKey) return;
+        
+        try {
+            if (chrome.runtime?.id) {
+                chrome.storage.local.remove([blockKey]).catch((error) => {
+                    if (error.message && error.message.includes('Extension context invalidated')) {
+                        console.log("Smart Tab Blocker: Extension context invalidated, cannot clear daily block");
+                    } else {
+                        console.error("Smart Tab Blocker: Error clearing daily block", error);
+                    }
+                });
+            } else {
+                console.log("Smart Tab Blocker: Extension context invalidated, cannot clear daily block");
+            }
+        } catch (e) {
+            console.log("Smart Tab Blocker: Extension context invalidated, cannot clear daily block");
+        }
+    }
+    
     // Handle page visibility changes
     function handleVisibilityChange() {
         if (!isEnabled || !countdownTimer) return;
@@ -853,13 +874,109 @@
                     ${alreadyBlocked ? '<p><small>Access will reset at midnight</small></p>' : '<p><small>Site blocked until midnight</small></p>'}
                 </div>
                 
+                <div class="smart-blocker-actions">
+                    <button id="overrideBlockBtn" class="smart-blocker-btn override-btn">
+                        Override Block
+                    </button>
+                </div>
+                
                 <div class="smart-blocker-footer">
                     <p>💡 Manage your blocked domains in the extension settings</p>
                 </div>
             </div>
         `;
         
+        // Add override button event listener
+        const overrideBtn = modal.querySelector('#overrideBlockBtn');
+        if (overrideBtn) {
+            overrideBtn.addEventListener('click', handleOverrideRequest);
+        }
+        
         return modal;
+    }
+    
+    function handleOverrideRequest() {
+        // Send message to background script to handle override
+        chrome.runtime.sendMessage({
+            action: 'requestOverride',
+            domain: currentDomain,
+            url: window.location.href
+        }, (response) => {
+            if (response && response.success) {
+                if (response.requiresPayment) {
+                    // Show payment modal or redirect
+                    showPaymentModal(response.cost);
+                } else {
+                    // Override granted, hide modal and allow access
+                    hideModal();
+                    clearDailyBlock();
+                    showOverrideGrantedMessage();
+                }
+            } else {
+                showOverrideError(response ? response.error : 'Override failed');
+            }
+        });
+    }
+    
+    function showPaymentModal(cost) {
+        const paymentModal = document.createElement('div');
+        paymentModal.className = 'smart-blocker-payment-modal';
+        paymentModal.innerHTML = `
+            <div class="smart-blocker-content">
+                <h2>Override Block - $${cost}</h2>
+                <p>This override will cost $${cost}. Do you want to proceed?</p>
+                <div class="payment-actions">
+                    <button id="proceedPayment" class="smart-blocker-btn primary">Pay $${cost}</button>
+                    <button id="cancelPayment" class="smart-blocker-btn secondary">Cancel</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(paymentModal);
+        
+        paymentModal.querySelector('#proceedPayment').addEventListener('click', () => {
+            // Redirect to payment page
+            window.open(`http://localhost:3000/override-payment?domain=${currentDomain}&cost=${cost}`, '_blank');
+            document.body.removeChild(paymentModal);
+        });
+        
+        paymentModal.querySelector('#cancelPayment').addEventListener('click', () => {
+            document.body.removeChild(paymentModal);
+        });
+    }
+    
+    function showOverrideGrantedMessage() {
+        const message = document.createElement('div');
+        message.className = 'smart-blocker-override-message';
+        message.innerHTML = `
+            <div class="override-success">
+                ✅ Override granted! You can now access this site.
+            </div>
+        `;
+        document.body.appendChild(message);
+        
+        setTimeout(() => {
+            if (message.parentNode) {
+                message.parentNode.removeChild(message);
+            }
+        }, 3000);
+    }
+    
+    function showOverrideError(error) {
+        const message = document.createElement('div');
+        message.className = 'smart-blocker-override-message error';
+        message.innerHTML = `
+            <div class="override-error">
+                ❌ ${error}
+            </div>
+        `;
+        document.body.appendChild(message);
+        
+        setTimeout(() => {
+            if (message.parentNode) {
+                message.parentNode.removeChild(message);
+            }
+        }, 5000);
     }
     
     function showModal(alreadyBlocked = false) {
@@ -1213,6 +1330,30 @@
                     startCountdownTimer();
                 }
             }
+        }
+    });
+    
+    // Listen for messages from background script
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message.action === 'overrideGranted' && message.domain === getCurrentDomain()) {
+            console.log('Smart Tab Blocker: Override granted, restoring access');
+            hideModal();
+            hideTimer();
+            
+            // Reset timer state
+            if (countdownTimer) {
+                clearInterval(countdownTimer);
+                countdownTimer = null;
+            }
+            
+            // Clear daily block and timer state
+            clearDailyBlock();
+            clearTimerState();
+            
+            // Show success message
+            showOverrideGrantedMessage();
+            
+            sendResponse({ success: true });
         }
     });
     

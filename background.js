@@ -3,14 +3,20 @@ let blockedDomains = {};
 let isEnabled = true;
 let isAuthenticated = false;
 let firebaseAuth = null;
+let firestore = null;
+let subscriptionService = null;
 
 // Import Firebase configuration
 importScripts('firebase-config.js');
+importScripts('subscription-service.js');
 
 // Initialize authentication
 async function initializeAuth() {
   try {
     firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
+    firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
+    subscriptionService = new SubscriptionService(firebaseAuth, firestore);
+    
     const storedUser = await firebaseAuth.getStoredAuthData();
     isAuthenticated = !!storedUser;
     console.log('Smart Tab Blocker Background: Authentication initialized, isAuthenticated:', isAuthenticated);
@@ -192,6 +198,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
       
+    case 'requestOverride':
+      if (!isAuthenticated || !subscriptionService) {
+        sendResponse({ success: false, error: 'Not authenticated' });
+        break;
+      }
+      
+      handleOverrideRequest(request.domain, sender.tab?.id)
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true; // Keep message channel open for async response
+      
     case 'userLoggedOut':
       isAuthenticated = false;
       console.log('Smart Tab Blocker Background: User logged out, stopping all timers and clearing data');
@@ -362,4 +379,69 @@ function updateAllTrackedTabs() {
       }
     });
   });
+}
+
+// Handle override requests from content scripts
+async function handleOverrideRequest(domain, tabId) {
+  try {
+    if (!subscriptionService || !firebaseAuth) {
+      throw new Error('Services not initialized');
+    }
+    
+    const user = firebaseAuth.getCurrentUser();
+    if (!user) {
+      throw new Error('User not authenticated');
+    }
+    
+    // Check if user can override based on their subscription plan
+    const overrideCheck = await subscriptionService.canOverride(user.uid);
+    
+    if (!overrideCheck.allowed) {
+      throw new Error('Override not allowed for your subscription plan');
+    }
+    
+    if (overrideCheck.cost > 0) {
+      // Requires payment
+      return {
+        success: true,
+        requiresPayment: true,
+        cost: overrideCheck.cost,
+        reason: overrideCheck.reason
+      };
+    } else {
+      // Free override available
+      try {
+        await subscriptionService.processOverride(user.uid, domain, 'User requested override');
+        
+        // Clear the daily block for this domain
+        const blockKey = `dailyBlock_${domain}`;
+        chrome.storage.local.remove([blockKey]);
+        
+        // Send message to content script to hide modal and allow access
+        if (tabId) {
+          chrome.tabs.sendMessage(tabId, {
+            action: 'overrideGranted',
+            domain: domain
+          }).catch(error => {
+            console.log('Could not send override granted message:', error);
+          });
+        }
+        
+        return {
+          success: true,
+          requiresPayment: false,
+          reason: overrideCheck.reason,
+          remaining: overrideCheck.remaining
+        };
+      } catch (error) {
+        throw new Error('Failed to process override: ' + error.message);
+      }
+    }
+  } catch (error) {
+    console.error('Override request failed:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
 } 
