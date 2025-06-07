@@ -8,10 +8,15 @@
     "activeTab",
     "storage",
     "notifications",
-    "scripting"
+    "scripting",
+    "identity"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "<all_urls>",
+    "https://securetoken.googleapis.com/*",
+    "https://www.googleapis.com/*",
+    "https://identitytoolkit.googleapis.com/*",
+    "https://firestore.googleapis.com/*"
   ],
   "background": {
     "service_worker": "background.js"

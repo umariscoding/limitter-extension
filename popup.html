@@ -79,6 +79,24 @@
       gap: 12px;
       margin-bottom: 16px;
       flex-wrap: wrap;
+      align-items: flex-start;
+    }
+
+    .domain-input-container {
+      flex: 1;
+      min-width: 180px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .domain-input-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.8);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
     }
     
     .input-field {
@@ -115,7 +133,66 @@
       width: 80px;
       flex: none;
     }
-    
+
+    .time-inputs-container {
+      display: flex;
+      gap: 6px;
+      align-items: flex-start;
+      flex-wrap: nowrap;
+      margin-top: 20px; /* Align with domain input field */
+    }
+
+    .time-input-group {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .time-input {
+      width: 55px;
+      padding: 10px 6px;
+      border: none;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.95);
+      color: #2c3e50;
+      font-size: 13px;
+      font-weight: 500;
+      text-align: center;
+      transition: background 0.3s ease, border 0.3s ease;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      border: 2px solid transparent;
+    }
+
+    .time-input:focus {
+      outline: none;
+      background: white;
+      border: 2px solid rgba(0, 212, 170, 0.5);
+    }
+
+    .time-input:hover:not(:focus) {
+      background: rgba(255, 255, 255, 0.98);
+    }
+
+    .time-input::placeholder {
+      color: #7f8c8d;
+      font-weight: 400;
+    }
+
+    .time-label {
+      font-size: 10px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.7);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .add-btn-container {
+      display: flex;
+      align-items: flex-start;
+      margin-top: 20px; /* Align with time inputs */
+    }
+
     .add-btn {
       background: linear-gradient(135deg, #00d4aa, #00a3ff);
       color: white;
@@ -317,6 +394,200 @@
       margin-bottom: 12px;
     }
 
+    /* Authentication styles */
+    .auth-form {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .auth-container {
+      text-align: center;
+      padding: 20px 0;
+    }
+
+    .auth-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: white;
+    }
+
+    .auth-subtitle {
+      font-size: 14px;
+      opacity: 0.8;
+      margin-bottom: 24px;
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .auth-input-group {
+      margin-bottom: 16px;
+    }
+
+    .auth-input {
+      width: 100%;
+      padding: 14px 18px;
+      border: none;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.95);
+      color: #2c3e50;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.3s ease;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      border: 2px solid transparent;
+    }
+
+    .auth-input:focus {
+      outline: none;
+      background: white;
+      border: 2px solid rgba(0, 212, 170, 0.5);
+      box-shadow: 0 4px 16px rgba(0, 212, 170, 0.2);
+    }
+
+    .auth-input:hover:not(:focus) {
+      background: rgba(255, 255, 255, 0.98);
+    }
+
+    .auth-input::placeholder {
+      color: #7f8c8d;
+      font-weight: 400;
+    }
+
+    .auth-buttons {
+      display: flex;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .auth-btn-primary {
+      flex: 1;
+      background: linear-gradient(135deg, #00d4aa, #00a3ff);
+      color: white;
+      border: none;
+      padding: 14px 20px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 16px rgba(0, 168, 255, 0.3);
+    }
+
+    .auth-btn-primary:hover {
+      background: linear-gradient(135deg, #00e6c0, #00b3ff);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(0, 168, 255, 0.4);
+    }
+
+    .auth-btn-primary:active {
+      background: linear-gradient(135deg, #00c4a6, #0093e6);
+      transform: translateY(0);
+    }
+
+    .auth-btn-secondary {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      padding: 12px 20px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      transition: all 0.3s ease;
+      backdrop-filter: blur(10px);
+    }
+
+    .auth-btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.2);
+      border-color: rgba(255, 255, 255, 0.5);
+      transform: translateY(-1px);
+    }
+
+    .auth-btn-secondary:active {
+      background: rgba(255, 255, 255, 0.15);
+      transform: translateY(0);
+    }
+
+    .auth-error {
+      background: rgba(255, 107, 107, 0.15);
+      color: #ff6b6b;
+      padding: 12px;
+      border-radius: 12px;
+      font-size: 13px;
+      border: 1px solid rgba(255, 107, 107, 0.3);
+      text-align: center;
+      margin-top: 12px;
+      backdrop-filter: blur(10px);
+    }
+
+    .user-info {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .user-email {
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 14px;
+      margin: 0;
+      flex: 1;
+      word-break: break-word;
+    }
+
+    .user-info-compact {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      margin-bottom: 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .user-email-compact {
+      color: rgba(255, 255, 255, 0.8);
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .logout-btn-compact {
+      background: rgba(255, 255, 255, 0.1);
+      color: rgba(255, 255, 255, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 4px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      transition: all 0.3s ease;
+    }
+
+    .logout-btn-compact:hover {
+      background: rgba(255, 255, 255, 0.15);
+      color: white;
+      border-color: rgba(255, 255, 255, 0.3);
+    }
+
+    /* Hide main app content when not authenticated */
+    .main-content {
+      display: none;
+    }
+
+    .main-content.authenticated {
+      display: block;
+    }
+
+    /* Show auth content when not authenticated */
+    .auth-content {
+      display: block;
+    }
+
+    .auth-content.authenticated {
+      display: none;
+    }
+
     /* Responsive Design */
     @media (max-width: 380px) {
       body {
@@ -335,10 +606,33 @@
 
       .input-group {
         flex-direction: column;
-        gap: 8px;
+        gap: 12px;
+        align-items: stretch;
+      }
+
+      .domain-input-container {
+        min-width: auto;
       }
 
       .timer-input {
+        width: 100%;
+      }
+
+      .time-inputs-container {
+        justify-content: center;
+        width: 100%;
+        gap: 8px;
+      }
+
+      .time-input {
+        width: 65px;
+      }
+
+      .add-btn-container {
+        width: 100%;
+      }
+
+      .add-btn {
         width: 100%;
       }
 
@@ -351,6 +645,10 @@
       .domain-buttons {
         margin-left: 0;
         justify-content: flex-end;
+      }
+
+      .auth-buttons {
+        flex-direction: column;
       }
     }
 
@@ -393,7 +691,12 @@
     .add-btn:focus,
     .remove-btn:focus,
     .reset-btn:focus,
-    .input-field:focus {
+    .logout-btn-compact:focus,
+    .input-field:focus,
+    .time-input:focus,
+    .auth-input:focus,
+    .auth-btn-primary:focus,
+    .auth-btn-secondary:focus {
       outline: 2px solid rgba(255, 255, 255, 0.8);
       outline-offset: 2px;
     }
@@ -401,38 +704,93 @@
     /* Disabled button states */
     .add-btn:disabled,
     .reset-btn:disabled,
-    .remove-btn:disabled {
+    .remove-btn:disabled,
+    .auth-btn-primary:disabled,
+    .auth-btn-secondary:disabled {
       opacity: 0.6;
       cursor: not-allowed;
     }
   </style>
 </head>
 <body>
+  <!-- Header (Always Visible) -->
   <div class="header">
     <div class="icon"></div>
     <h1>Smart Tab Blocker</h1>
     <p>Manage timers for any website</p>
   </div>
-  
-  <div class="card">
-    <div class="section-title">Add Domain</div>
-    <div class="input-group">
-      <input type="text" id="domainInput" class="input-field" placeholder="example.com" autocomplete="off">
-      <input type="number" id="timerInput" class="input-field timer-input" placeholder="20" min="1" max="300" autocomplete="off">
-      <button id="addBtn" class="add-btn">Add</button>
+
+  <!-- User Info Section (Visible when authenticated) -->
+  <div id="userSection" class="user-info-compact" style="display: none;">
+    <span id="userEmail" class="user-email-compact"></span>
+    <button id="logoutBtn" class="logout-btn-compact">Logout</button>
+  </div>
+
+  <!-- Authentication Content (Visible when not authenticated) -->
+  <div id="authContent" class="auth-content">
+    <div class="card">
+      <div class="auth-container">
+        <div class="auth-title">Welcome Back!</div>
+        <div class="auth-subtitle">Please sign in to continue managing your website timers</div>
+        
+        <div class="auth-form">
+          <div class="auth-input-group">
+            <input type="email" id="emailInput" class="auth-input" placeholder="Enter your email" autocomplete="email">
+          </div>
+          <div class="auth-input-group">
+            <input type="password" id="passwordInput" class="auth-input" placeholder="Enter your password" autocomplete="current-password">
+          </div>
+          <div class="auth-buttons">
+            <button id="loginBtn" class="auth-btn-primary">Sign In</button>
+            <button id="registerBtn" class="auth-btn-secondary">Register</button>
+          </div>
+          <div id="authError" class="auth-error" style="display: none;"></div>
+        </div>
+      </div>
     </div>
-    <div class="input-helper">Timer in seconds (1-300)</div>
+  </div>
+
+  <!-- Main App Content (Visible when authenticated) -->
+  <div class="main-content" id="mainContent">
+    <div class="card">
+      <div class="section-title">Add Domain</div>
+      <div class="input-group">
+        <div class="domain-input-container">
+          <label for="domainInput" class="domain-input-label">Domain</label>
+          <input type="text" id="domainInput" class="input-field" placeholder="example.com" autocomplete="off">
+        </div>
+        <div class="time-inputs-container">
+          <div class="time-input-group">
+            <input type="number" id="hoursInput" class="time-input" placeholder="0" min="0" max="24" autocomplete="off">
+            <label for="hoursInput" class="time-label">Hrs</label>
+          </div>
+          <div class="time-input-group">
+            <input type="number" id="minutesInput" class="time-input" placeholder="30" min="0" max="59" autocomplete="off">
+            <label for="minutesInput" class="time-label">Min</label>
+          </div>
+          <div class="time-input-group">
+            <input type="number" id="secondsInput" class="time-input" placeholder="0" min="0" max="59" autocomplete="off">
+            <label for="secondsInput" class="time-label">Sec</label>
+          </div>
+        </div>
+        <div class="add-btn-container">
+          <button id="addBtn" class="add-btn">Add</button>
+        </div>
+      </div>
+      <div class="input-helper">Timer in hours, minutes, seconds</div>
+    </div>
+    
+    <div class="card">
+      <div class="section-title">Tracked Domains</div>
+      <div id="domainsList"></div>
+    </div>
+    
+    <div class="stats" id="stats">
+      Ready to help you stay focused!
+    </div>
   </div>
   
-  <div class="card">
-    <div class="section-title">Tracked Domains</div>
-    <div id="domainsList"></div>
-  </div>
-  
-  <div class="stats" id="stats">
-    Ready to help you stay focused!
-  </div>
-  
+  <script src="firebase-config.js"></script>
   <script src="popup.js"></script>
 </body>
 </html> 

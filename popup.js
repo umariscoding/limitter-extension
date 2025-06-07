@@ -1,8 +1,52 @@
 // Smart Tab Blocker Popup Script
+
+// Check if extension context is valid
+function isExtensionContextValid() {
+  try {
+    return !!(chrome && chrome.runtime && chrome.runtime.id);
+  } catch (error) {
+    return false;
+  }
+}
+
+// Safe chrome API wrapper
+function safeChromeCall(apiCall, errorCallback) {
+  if (!isExtensionContextValid()) {
+    console.warn('Extension context invalidated, skipping chrome API call');
+    if (errorCallback) errorCallback(new Error('Extension context invalidated'));
+    return;
+  }
+  try {
+    return apiCall();
+  } catch (error) {
+    console.error('Chrome API call failed:', error);
+    if (errorCallback) errorCallback(error);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
+  // Initialize Firebase Auth and Firestore
+  const firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
+  const firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
+  
+  // Authentication elements
+  const authContent = document.getElementById('authContent');
+  const userSection = document.getElementById('userSection');
+  const mainContent = document.getElementById('mainContent');
+  const emailInput = document.getElementById('emailInput');
+  const passwordInput = document.getElementById('passwordInput');
+  const loginBtn = document.getElementById('loginBtn');
+  const registerBtn = document.getElementById('registerBtn');
+  const logoutBtn = document.getElementById('logoutBtn');
+  const userEmail = document.getElementById('userEmail');
+  const authError = document.getElementById('authError');
+  
+  // App elements
   const stats = document.getElementById('stats');
   const domainInput = document.getElementById('domainInput');
-  const timerInput = document.getElementById('timerInput');
+  const hoursInput = document.getElementById('hoursInput');
+  const minutesInput = document.getElementById('minutesInput');
+  const secondsInput = document.getElementById('secondsInput');
   const addBtn = document.getElementById('addBtn');
   const domainsList = document.getElementById('domainsList');
   
@@ -10,12 +54,285 @@ document.addEventListener('DOMContentLoaded', function() {
   let domainStates = {};
   let updateInterval = null;
   let previousDomainOrder = [];
+  let userProfile = null;
   
-  // Load domains on startup
-  loadDomains();
+  // Initialize authentication on startup
+  initializeAuth();
   
-  // Start periodic updates
-  startPeriodicUpdates();
+  // Firestore data functions
+  async function loadUserDataFromFirestore() {
+    try {
+      const user = firebaseAuth.getCurrentUser();
+      if (!user) {
+        throw new Error('No authenticated user');
+      }
+
+      console.log('Loading user data from Firestore for user:', user.uid);
+      
+      // Show loading state
+      if (stats) {
+        stats.textContent = 'Loading your data...';
+      }
+
+      // Load user profile
+      try {
+        userProfile = await firestore.getUserProfile(user.uid);
+        console.log('User profile loaded:', userProfile);
+      } catch (error) {
+        console.log('User profile not found, will create on first site add');
+        userProfile = null;
+      }
+
+      // Load domains from local storage instead of Firestore
+      loadDomains();
+      
+      // Update UI
+      updateDomainStates();
+      updateStats();
+
+      console.log('User data loaded successfully, domains:', domains);
+    } catch (error) {
+      console.error('Error loading user data from Firestore:', error);
+      // Fallback to local storage
+      loadDomains();
+      // Show user a subtle message that we're working offline
+      showFeedback('Working offline - data will sync when connection is restored');
+    }
+  }
+
+  async function syncDomainToFirestore(domain, timer) {
+    try {
+      const user = firebaseAuth.getCurrentUser();
+      if (!user) return;
+
+      // Create or update the site in Firestore
+      const siteId = `${user.uid}_${domain}`;
+      const now = new Date();
+      const todayString = getTodayString();
+      
+      const siteData = {
+        user_id: user.uid,
+        url: domain,
+        name: domain,
+        time_limit: timer,
+        time_remaining: timer,
+        time_spent_today: 0,
+        last_reset_date: todayString,
+        is_blocked: false,
+        is_active: true,
+        blocked_until: null,
+        schedule: null,
+        created_at: now,
+        updated_at: now
+      };
+
+      await firestore.updateBlockedSite(siteId, siteData);
+      console.log(`Synced domain ${domain} to Firestore`);
+
+      // Update user profile stats if we have one
+      if (userProfile) {
+        userProfile.total_sites_blocked = Object.keys(domains).length;
+        userProfile.updated_at = now;
+        await firestore.updateUserProfile(user.uid, userProfile);
+      }
+    } catch (error) {
+      console.error('Error syncing domain to Firestore:', error);
+    }
+  }
+
+  async function removeDomainFromFirestore(domain) {
+    try {
+      const user = firebaseAuth.getCurrentUser();
+      if (!user) return;
+
+      // Mark site as inactive in Firestore
+      const siteId = `${user.uid}_${domain}`;
+      const siteData = {
+        is_active: false,
+        updated_at: new Date()
+      };
+
+      await firestore.updateBlockedSite(siteId, siteData);
+      console.log(`Removed domain ${domain} from Firestore`);
+
+      // Update user profile stats
+      if (userProfile) {
+        userProfile.total_sites_blocked = Math.max(0, Object.keys(domains).length);
+        userProfile.updated_at = new Date();
+        await firestore.updateUserProfile(user.uid, userProfile);
+      }
+    } catch (error) {
+      console.error('Error removing domain from Firestore:', error);
+    }
+  }
+
+  // Authentication functions
+  async function initializeAuth() {
+    try {
+      const storedUser = await firebaseAuth.getStoredAuthData();
+      if (storedUser) {
+        showAuthenticatedState(storedUser);
+        await loadUserDataFromFirestore();
+        startPeriodicUpdates();
+      } else {
+        showUnauthenticatedState();
+      }
+    } catch (error) {
+      console.error('Auth initialization error:', error);
+      showUnauthenticatedState();
+    }
+  }
+  
+  function showAuthenticatedState(user) {
+    authContent.classList.add('authenticated');
+    userSection.style.display = 'block';
+    mainContent.classList.add('authenticated');
+    userEmail.textContent = user.email;
+    hideAuthError();
+  }
+  
+  function showUnauthenticatedState() {
+    authContent.classList.remove('authenticated');
+    userSection.style.display = 'none';
+    mainContent.classList.remove('authenticated');
+    hideAuthError();
+    
+    // Clear app data when not authenticated
+    domains = {};
+    domainStates = {};
+    if (updateInterval) {
+      clearInterval(updateInterval);
+      updateInterval = null;
+    }
+    
+    // Clear UI
+    if (domainsList) {
+      domainsList.innerHTML = '';
+    }
+    if (stats) {
+      stats.textContent = 'Please log in to start tracking domains';
+    }
+  }
+  
+  function showAuthError(message) {
+    authError.textContent = message;
+    authError.style.display = 'block';
+  }
+  
+  function hideAuthError() {
+    authError.style.display = 'none';
+  }
+  
+  async function handleLogin() {
+    const email = emailInput.value.trim();
+    const password = passwordInput.value.trim();
+    
+    if (!email || !password) {
+      showAuthError('Please enter both email and password');
+      return;
+    }
+    
+    try {
+      loginBtn.disabled = true;
+      loginBtn.textContent = 'Logging in...';
+      hideAuthError();
+      
+      const user = await firebaseAuth.signInWithEmailAndPassword(email, password);
+      showAuthenticatedState(user);
+      
+      // Clear form
+      emailInput.value = '';
+      passwordInput.value = '';
+      
+      // Notify background script of login
+      safeChromeCall(() => {
+        chrome.runtime.sendMessage({ action: 'userLoggedIn' });
+      });
+      
+      // Load app data after successful login
+      await loadUserDataFromFirestore();
+      startPeriodicUpdates();
+      
+    } catch (error) {
+      console.error('Login error:', error);
+      showAuthError(error.message || 'Login failed. Please check your credentials.');
+    } finally {
+      loginBtn.disabled = false;
+      loginBtn.textContent = 'Login';
+    }
+  }
+  
+  function handleRegister() {
+    // Open the website for registration
+    chrome.tabs.create({ url: 'http://localhost:3000/register' });
+  }
+  
+  async function handleLogout() {
+    try {
+      await firebaseAuth.signOut();
+      
+      // Notify background script of logout (this will stop all timers)
+      safeChromeCall(() => {
+        chrome.runtime.sendMessage({ action: 'userLoggedOut' });
+      });
+      
+      // Clear all Chrome storage data
+      await clearAllChromeStorageData();
+      
+      showUnauthenticatedState();
+      
+      // Clear app data
+      domains = {};
+      domainStates = {};
+      if (updateInterval) {
+        clearInterval(updateInterval);
+        updateInterval = null;
+      }
+      
+      // Clear UI
+      domainsList.innerHTML = '';
+      stats.textContent = 'Ready to help you stay focused!';
+      
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  }
+
+  // Clear all Chrome storage data on logout
+  async function clearAllChromeStorageData() {
+    return new Promise((resolve) => {
+      console.log('Smart Tab Blocker: Clearing all Chrome storage data on logout');
+      
+      // Clear sync storage (blocked domains)
+      safeChromeCall(() => {
+        chrome.storage.sync.clear(() => {
+          console.log('Smart Tab Blocker: Sync storage cleared');
+        });
+      });
+      
+      // Clear local storage (timer states, daily blocks, etc.)
+      safeChromeCall(() => {
+        chrome.storage.local.clear(() => {
+          console.log('Smart Tab Blocker: Local storage cleared');
+          resolve();
+        });
+      });
+    });
+  }
+  
+  // Authentication event listeners
+  loginBtn.addEventListener('click', handleLogin);
+  registerBtn.addEventListener('click', handleRegister);
+  logoutBtn.addEventListener('click', handleLogout);
+  
+  // Enter key handlers for auth inputs
+  emailInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') handleLogin();
+  });
+  
+  passwordInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') handleLogin();
+  });
   
   // Add domain button handler
   addBtn.addEventListener('click', addDomain);
@@ -25,53 +342,94 @@ document.addEventListener('DOMContentLoaded', function() {
     if (e.key === 'Enter') addDomain();
   });
   
-  timerInput.addEventListener('keypress', function(e) {
+  hoursInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') addDomain();
+  });
+  
+  minutesInput.addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') addDomain();
+  });
+  
+  secondsInput.addEventListener('keypress', function(e) {
     if (e.key === 'Enter') addDomain();
   });
   
   // Event delegation for buttons
-  domainsList.addEventListener('click', function(e) {
+  domainsList.addEventListener('click', async function(e) {
     const domain = e.target.getAttribute('data-domain');
     if (!domain) return;
     
     if (e.target.classList.contains('remove-btn')) {
-      removeDomain(domain);
+      await removeDomain(domain);
     } else if (e.target.classList.contains('reset-btn')) {
       resetDomain(domain);
     }
   });
   
+  // Check if user is authenticated
+  function isUserAuthenticated() {
+    return firebaseAuth.getCurrentUser() !== null;
+  }
+
   // Start periodic updates for timer states
   function startPeriodicUpdates() {
     updateDomainStates();
-    updateInterval = setInterval(updateDomainStates, 1000); // Update every second
+    updateInterval = setInterval(() => {
+      if (!isExtensionContextValid()) {
+        console.warn('Extension context invalid, clearing interval');
+        if (updateInterval) {
+          clearInterval(updateInterval);
+          updateInterval = null;
+        }
+        return;
+      }
+      
+      // Only update if user is authenticated
+      if (!isUserAuthenticated()) {
+        console.warn('User not authenticated, stopping timer updates');
+        if (updateInterval) {
+          clearInterval(updateInterval);
+          updateInterval = null;
+        }
+        return;
+      }
+      
+      updateDomainStates();
+    }, 1000); // Update every second
   }
   
   // Get current active domain from tabs
   function getCurrentActiveDomain() {
     return new Promise((resolve) => {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0] && tabs[0].url) {
-          try {
-            const hostname = new URL(tabs[0].url).hostname.toLowerCase();
-            // Check if this hostname matches any of our tracked domains
-            for (const domain of Object.keys(domains)) {
-              if (hostname === domain || hostname.endsWith('.' + domain)) {
-                resolve(domain);
-                return;
+      safeChromeCall(() => {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          if (tabs[0] && tabs[0].url) {
+            try {
+              const hostname = new URL(tabs[0].url).hostname.toLowerCase();
+              // Check if this hostname matches any of our tracked domains
+              for (const domain of Object.keys(domains)) {
+                if (hostname === domain || hostname.endsWith('.' + domain)) {
+                  resolve(domain);
+                  return;
+                }
               }
+            } catch (error) {
+              // Invalid URL
             }
-          } catch (error) {
-            // Invalid URL
           }
-        }
-        resolve(null);
-      });
+          resolve(null);
+        });
+      }, () => resolve(null));
     });
   }
   
   // Update domain states from storage
   function updateDomainStates() {
+    // Only update if user is authenticated
+    if (!isUserAuthenticated()) {
+      return;
+    }
+
     const domainKeys = Object.keys(domains);
     if (domainKeys.length === 0) return;
     
@@ -81,58 +439,101 @@ document.addEventListener('DOMContentLoaded', function() {
       `dailyBlock_${domain}`
     ]);
     
-    chrome.storage.local.get(storageKeys, (result) => {
-      const newStates = {};
-      
-      domainKeys.forEach(domain => {
-        const timerKey = `timerState_${domain}`;
-        const blockKey = `dailyBlock_${domain}`;
-        const timerState = result[timerKey];
-        const blockState = result[blockKey];
+    safeChromeCall(() => {
+      chrome.storage.local.get(storageKeys, (result) => {
+        const newStates = {};
         
-        // Check if blocked for today
-        const today = getTodayString();
-        const isBlocked = blockState && blockState.date === today;
-        
-        if (isBlocked) {
-          newStates[domain] = {
-            status: 'blocked',
-            timeRemaining: 0,
-            isActive: false
-          };
-        } else if (timerState && timerState.date === today) {
-          // Has timer state for today
-          const timeDiff = Date.now() - timerState.timestamp;
-          const shouldExpire = timeDiff > 5 * 60 * 1000; // 5 minutes
+        domainKeys.forEach(domain => {
+          const timerKey = `timerState_${domain}`;
+          const blockKey = `dailyBlock_${domain}`;
+          const timerState = result[timerKey];
+          const blockState = result[blockKey];
           
-          if (shouldExpire) {
+          // Check if blocked for today
+          const today = getTodayString();
+          const isBlocked = blockState && blockState.date === today;
+          
+          if (isBlocked) {
+            newStates[domain] = {
+              status: 'blocked',
+              timeRemaining: 0,
+              isActive: false
+            };
+          } else if (timerState && timerState.date === today) {
+            // Has timer state for today
+            const timeDiff = Date.now() - timerState.timestamp;
+            const shouldExpire = timeDiff > 5 * 60 * 1000; // 5 minutes
+            
+            if (shouldExpire) {
+              newStates[domain] = {
+                status: 'ready',
+                timeRemaining: domains[domain],
+                isActive: false
+              };
+            } else {
+              // Calculate actual remaining time based on timestamp for running timers
+              let actualTimeRemaining = timerState.timeRemaining || domains[domain];
+              
+              if (timerState.isActive && !timerState.isPaused) {
+                // Timer is running, calculate how much time has passed
+                const timeElapsed = Math.floor((Date.now() - timerState.timestamp) / 1000);
+                actualTimeRemaining = Math.max(0, timerState.timeRemaining - timeElapsed);
+              }
+              
+              newStates[domain] = {
+                status: timerState.isActive ? (timerState.isPaused ? 'paused' : 'running') : 'ready',
+                timeRemaining: actualTimeRemaining,
+                isActive: timerState.isActive || false
+              };
+            }
+          } else {
+            // No state, ready to start
             newStates[domain] = {
               status: 'ready',
               timeRemaining: domains[domain],
               isActive: false
             };
-          } else {
-            newStates[domain] = {
-              status: timerState.isActive ? (timerState.isPaused ? 'paused' : 'running') : 'ready',
-              timeRemaining: timerState.timeRemaining || domains[domain],
-              isActive: timerState.isActive || false
-            };
           }
-        } else {
-          // No state, ready to start
-          newStates[domain] = {
-            status: 'ready',
-            timeRemaining: domains[domain],
-            isActive: false
-          };
-        }
+        });
+        
+        domainStates = newStates;
+        renderDomainsList();
       });
-      
-      domainStates = newStates;
-      renderDomainsList();
     });
   }
   
+  // Format seconds into hours, minutes, and seconds
+  function formatTime(seconds) {
+    if (seconds <= 0) return '0s';
+    
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainingSeconds = seconds % 60;
+    
+    const parts = [];
+    
+    if (hours > 0) {
+      parts.push(`${hours}h`);
+    }
+    if (minutes > 0) {
+      parts.push(`${minutes}m`);
+    }
+    if (remainingSeconds > 0 || parts.length === 0) {
+      parts.push(`${remainingSeconds}s`);
+    }
+    
+    return parts.join(' ');
+  }
+
+  // Convert total seconds to hours, minutes, seconds object
+  function secondsToTimeComponents(totalSeconds) {
+    return {
+      hours: Math.floor(totalSeconds / 3600),
+      minutes: Math.floor((totalSeconds % 3600) / 60),
+      seconds: totalSeconds % 60
+    };
+  }
+
   // Get today's date string
   function getTodayString() {
     const today = new Date();
@@ -142,16 +543,20 @@ document.addEventListener('DOMContentLoaded', function() {
   }
   
   function loadDomains() {
-    chrome.storage.sync.get(['blockedDomains'], function(result) {
-      domains = result.blockedDomains || {};
-      updateDomainStates();
-      updateStats();
+    safeChromeCall(() => {
+      chrome.storage.sync.get(['blockedDomains'], function(result) {
+        domains = result.blockedDomains || {};
+        updateDomainStates();
+        updateStats();
+      });
     });
   }
   
   function saveDomains() {
-    chrome.storage.sync.set({
-      blockedDomains: domains
+    safeChromeCall(() => {
+      chrome.storage.sync.set({
+        blockedDomains: domains
+      });
     });
   }
 
@@ -189,34 +594,60 @@ document.addEventListener('DOMContentLoaded', function() {
     
     console.log(`Smart Tab Blocker: Clearing storage for domain: ${domain}`);
     
-    chrome.storage.local.remove([blockKey, timerKey], () => {
-      if (chrome.runtime.lastError) {
-        console.error('Storage clear error:', chrome.runtime.lastError);
-      } else {
-        console.log(`Smart Tab Blocker: Successfully cleared storage for ${domain}`);
-      }
+    safeChromeCall(() => {
+      chrome.storage.local.remove([blockKey, timerKey], () => {
+        if (chrome.runtime.lastError) {
+          console.error('Storage clear error:', chrome.runtime.lastError);
+        } else {
+          console.log(`Smart Tab Blocker: Successfully cleared storage for ${domain}`);
+        }
+      });
     });
   }
   
-  function addDomain() {
+  async function addDomain() {
+    // Check if user is authenticated
+    if (!isUserAuthenticated()) {
+      showError('Please log in to add domains');
+      return;
+    }
+
     const domain = domainInput.value.trim().toLowerCase();
-    const timer = parseInt(timerInput.value);
+    const hours = parseInt(hoursInput.value) || 0;
+    const minutes = parseInt(minutesInput.value) || 0;
+    const seconds = parseInt(secondsInput.value) || 0;
     
     if (!domain) {
       showError('Please enter a domain');
       return;
     }
     
-    if (!timer || timer < 1 || timer > 300) {
-      showError('Timer must be between 1-300 seconds');
+    // Calculate total seconds
+    const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+    
+    if (totalSeconds < 1) {
+      showError('Please enter a time greater than 0');
+      return;
+    }
+    
+    if (totalSeconds > 86400) { // 24 hours max
+      showError('Timer cannot exceed 24 hours');
       return;
     }
     
     // Clean domain (remove protocol, www, etc.)
     const cleanDomain = domain.replace(/^(https?:\/\/)?(www\.)?/, '').replace(/\/$/, '');
     
-    domains[cleanDomain] = timer;
+    domains[cleanDomain] = totalSeconds;
     saveDomains();
+    
+    // Sync to Firestore
+    await syncDomainToFirestore(cleanDomain, totalSeconds);
+    
+    // Notify background script that a domain was added
+    safeChromeCall(() => {
+      chrome.runtime.sendMessage({ action: 'domainAdded', domain: cleanDomain });
+    });
     
     // Clear any existing daily block for this domain to allow fresh timer
     clearDailyBlock(cleanDomain);
@@ -232,7 +663,7 @@ document.addEventListener('DOMContentLoaded', function() {
               chrome.tabs.sendMessage(tab.id, {
                 action: 'startTracking',
                 domain: cleanDomain,
-                timer: timer
+                timer: totalSeconds
               }).then((response) => {
                 console.log(`Started tracking on tab ${tab.id}:`, response);
               }).catch(() => {
@@ -246,7 +677,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     chrome.tabs.sendMessage(tab.id, {
                       action: 'startTracking',
                       domain: cleanDomain,
-                      timer: timer
+                      timer: totalSeconds
                     }).catch(() => {
                       // Still failed, user may need to refresh
                       console.log(`Could not start tracking on tab ${tab.id}, may need refresh`);
@@ -269,15 +700,27 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Clear inputs
     domainInput.value = '';
-    timerInput.value = '';
+    hoursInput.value = '';
+    minutesInput.value = '';
+    secondsInput.value = '';
     
-    showFeedback(`Added ${cleanDomain} with ${timer}s timer`);
+    showFeedback(`Added ${cleanDomain} with ${formatTime(totalSeconds)} timer`);
   }
   
-  function removeDomain(domain) {
+  async function removeDomain(domain) {
+    // Check if user is authenticated
+    if (!isUserAuthenticated()) {
+      showError('Please log in to remove domains');
+      return;
+    }
+
     delete domains[domain];
     delete domainStates[domain];
     saveDomains();
+    
+    // Sync to Firestore
+    await removeDomainFromFirestore(domain);
+    
     clearDailyBlock(domain);
     stopTrackingDomain(domain);
     renderDomainsList();
@@ -312,6 +755,8 @@ document.addEventListener('DOMContentLoaded', function() {
       const isActive = domain === activeDomain;
       const isNewlyAdded = newDomains.includes(domain);
       
+      console.log('Domain state:', state);
+      
       let statusText = '';
       let statusClass = '';
       
@@ -321,15 +766,17 @@ document.addEventListener('DOMContentLoaded', function() {
           statusClass = 'status-blocked';
           break;
         case 'running':
-          statusText = `${state.timeRemaining}s remaining`;
+          statusText = `⏱️ ${formatTime(state.timeRemaining)} left`;
           statusClass = 'status-running';
           break;
         case 'paused':
-          statusText = `${state.timeRemaining}s (paused)`;
+          statusText = `⏸️ ${formatTime(state.timeRemaining)} (paused)`;
           statusClass = 'status-paused';
           break;
         default:
-          statusText = `${domains[domain]} seconds`;
+          console.log(state);
+          // For ready state, show the remaining time (which could be full limit or partial if previously used)
+          statusText = `⏰ ${formatTime(state.timeRemaining)}`;
           statusClass = 'status-ready';
       }
       
@@ -394,40 +841,85 @@ document.addEventListener('DOMContentLoaded', function() {
   }
   
   // Listen for storage changes
-  chrome.storage.onChanged.addListener(function(changes, area) {
-    if (area === 'sync') {
-      if (changes.blockedDomains) {
-        domains = changes.blockedDomains.newValue || {};
-        updateDomainStates();
-        updateStats();
+  let storageListener;
+  safeChromeCall(() => {
+    storageListener = function(changes, area) {
+      if (!isExtensionContextValid()) {
+        console.warn('Extension context invalid, removing storage listener');
+        if (storageListener) {
+          chrome.storage.onChanged.removeListener(storageListener);
+        }
+        return;
       }
-    } else if (area === 'local') {
-      // Timer states changed, update display
-      updateDomainStates();
-    }
+      
+      if (area === 'sync') {
+        if (changes.blockedDomains) {
+          domains = changes.blockedDomains.newValue || {};
+          updateDomainStates();
+          updateStats();
+        }
+      } else if (area === 'local') {
+        // Timer states changed, update display
+        updateDomainStates();
+      }
+    };
+    chrome.storage.onChanged.addListener(storageListener);
   });
   
-  // Clean up interval when popup closes
+  // Clean up resources when popup closes
   window.addEventListener('beforeunload', () => {
+    console.log('Popup closing, cleaning up resources');
+    
+    // Clear interval
     if (updateInterval) {
       clearInterval(updateInterval);
+      updateInterval = null;
+    }
+    
+    // Remove storage listener
+    if (storageListener && isExtensionContextValid()) {
+      try {
+        chrome.storage.onChanged.removeListener(storageListener);
+      } catch (error) {
+        console.warn('Could not remove storage listener:', error);
+      }
     }
   });
   
+  // Also clean up if extension context becomes invalid
+  function checkExtensionContext() {
+    if (!isExtensionContextValid()) {
+      console.warn('Extension context invalidated, cleaning up');
+      if (updateInterval) {
+        clearInterval(updateInterval);
+        updateInterval = null;
+      }
+      return false;
+    }
+    return true;
+  }
+  
   function resetDomain(domain) {
+    // Check if user is authenticated
+    if (!isUserAuthenticated()) {
+      showError('Please log in to reset domains');
+      return;
+    }
+
     console.log(`Smart Tab Blocker: Initiating reset for domain: ${domain}`);
     
     // Clear daily block and timer state for this domain
     clearDailyBlock(domain);
     
-    // Update domain state to ready
-    if (domainStates[domain]) {
-      domainStates[domain] = {
-        status: 'ready',
-        timeRemaining: domains[domain],
-        isActive: false
-      };
-    }
+    // Update domain state to ready and reset timer to full amount
+    domainStates[domain] = {
+      status: 'ready',
+      timeRemaining: domains[domain],
+      isActive: false
+    };
+    
+    // Immediately update the display
+    renderDomainsList();
     
     // Force refresh of content scripts by sending a message
     chrome.tabs.query({}, (tabs) => {
@@ -469,7 +961,6 @@ document.addEventListener('DOMContentLoaded', function() {
       
       // Wait for all tab messages to complete
       Promise.all(promises).then(() => {
-        renderDomainsList();
         if (resetSuccess) {
           showFeedback(`✅ ${domain} reset - timer restarted and site unblocked`);
         } else if (tabsFound > 0) {

@@ -2,6 +2,42 @@
 (function() {
     'use strict';
     
+    // Early extension context validation
+    function isExtensionContextValid() {
+        try {
+            return !!(chrome && chrome.runtime && chrome.runtime.id && chrome.storage && chrome.storage.local);
+        } catch (e) {
+            return false;
+        }
+    }
+    
+    // Check if extension context is valid before proceeding
+    if (!isExtensionContextValid()) {
+        console.log('Smart Tab Blocker: Extension context not available, content script will not initialize');
+        return;
+    }
+    
+    // Monitor extension context throughout execution
+    function checkExtensionContext() {
+        if (!isExtensionContextValid()) {
+            console.log('Smart Tab Blocker: Extension context lost during execution');
+            // Clean up any running timers
+            if (countdownTimer) {
+                clearInterval(countdownTimer);
+                countdownTimer = null;
+            }
+            // Hide any UI elements
+            if (modal) {
+                hideModal();
+            }
+            if (timerElement) {
+                hideTimer();
+            }
+            return false;
+        }
+        return true;
+    }
+    
     let modal = null;
     let timerElement = null;
     let isEnabled = false;
@@ -37,6 +73,29 @@
                String(today.getMonth() + 1).padStart(2, '0') + '-' + 
                String(today.getDate()).padStart(2, '0');
     }
+
+    // Format seconds into hours, minutes, and seconds
+    function formatTime(seconds) {
+        if (seconds <= 0) return '0s';
+        
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const remainingSeconds = seconds % 60;
+        
+        const parts = [];
+        
+        if (hours > 0) {
+            parts.push(`${hours}h`);
+        }
+        if (minutes > 0) {
+            parts.push(`${minutes}m`);
+        }
+        if (remainingSeconds > 0 || parts.length === 0) {
+            parts.push(`${remainingSeconds}s`);
+        }
+        
+        return parts.join(' ');
+    }
     
     // Storage key for this domain's timer state
     function getStorageKey() {
@@ -59,19 +118,36 @@
                 return;
             }
             
-            chrome.storage.local.get([blockKey], (result) => {
-                const blockData = result[blockKey];
-                console.log("Block check result:", blockKey, blockData);
-                if (blockData && blockData.date === getTodayString()) {
-                    resolve(true);
-                } else {
-                    // Clean up old block data if it exists
-                    if (blockData && blockData.date !== getTodayString()) {
-                        chrome.storage.local.remove([blockKey]);
-                    }
+            try {
+                if (!chrome.runtime?.id) {
+                    console.log("Smart Tab Blocker: Extension context invalidated, cannot check if domain is blocked");
                     resolve(false);
+                    return;
                 }
-            });
+                
+                chrome.storage.local.get([blockKey], (result) => {
+                    if (chrome.runtime.lastError) {
+                        console.log("Smart Tab Blocker: Error checking if domain is blocked:", chrome.runtime.lastError);
+                        resolve(false);
+                        return;
+                    }
+                    
+                    const blockData = result[blockKey];
+                    console.log("Block check result:", blockKey, blockData);
+                    if (blockData && blockData.date === getTodayString()) {
+                        resolve(true);
+                    } else {
+                        // Clean up old block data if it exists
+                        if (blockData && blockData.date !== getTodayString() && chrome.runtime?.id) {
+                            chrome.storage.local.remove([blockKey]);
+                        }
+                        resolve(false);
+                    }
+                });
+            } catch (e) {
+                console.log("Smart Tab Blocker: Extension context invalidated, cannot check if domain is blocked");
+                resolve(false);
+            }
         });
     }
     
@@ -80,13 +156,27 @@
         const blockKey = getDailyBlockKey();
         if (!blockKey) return;
         
-        chrome.storage.local.set({
-            [blockKey]: {
-                date: getTodayString(),
-                timestamp: Date.now(),
-                domain: getCurrentDomain()
+        try {
+            if (chrome.runtime?.id) {
+                chrome.storage.local.set({
+                    [blockKey]: {
+                        date: getTodayString(),
+                        timestamp: Date.now(),
+                        domain: getCurrentDomain()
+                    }
+                }).catch((error) => {
+                    if (error.message && error.message.includes('Extension context invalidated')) {
+                        console.log("Smart Tab Blocker: Extension context invalidated, cannot mark domain as blocked");
+                    } else {
+                        console.error("Smart Tab Blocker: Error marking domain as blocked", error);
+                    }
+                });
+            } else {
+                console.log("Smart Tab Blocker: Extension context invalidated, cannot mark domain as blocked");
             }
-        });
+        } catch (e) {
+            console.log("Smart Tab Blocker: Extension context invalidated, cannot mark domain as blocked");
+        }
         
         console.log(`Smart Tab Blocker: ${getCurrentDomain()} blocked for the rest of the day`);
     }
@@ -109,11 +199,23 @@
         
         console.log(`Smart Tab Blocker: Saving timer state with ${timeRemaining}s remaining`);
         
-        chrome.storage.local.set({
-            [storageKey]: state
-        }).catch((error) => {
-            console.error("Smart Tab Blocker: Error saving timer state", error);
-        });
+        try {
+            if (chrome.runtime?.id) {
+                chrome.storage.local.set({
+                    [storageKey]: state
+                }).catch((error) => {
+                    if (error.message && error.message.includes('Extension context invalidated')) {
+                        console.log("Smart Tab Blocker: Extension context invalidated, cannot save timer state");
+                    } else {
+                        console.error("Smart Tab Blocker: Error saving timer state", error);
+                    }
+                });
+            } else {
+                console.log("Smart Tab Blocker: Extension context invalidated, cannot save timer state");
+            }
+        } catch (e) {
+            console.log("Smart Tab Blocker: Extension context invalidated, cannot save timer state");
+        }
     }
     
     // Load timer state from storage
@@ -127,41 +229,69 @@
             
             console.log(`Smart Tab Blocker: Attempting to load timer state for ${getCurrentDomain()}`);
             
-            chrome.storage.local.get([storageKey], (result) => {
-                const state = result[storageKey];
-                console.log("Smart Tab Blocker: Retrieved state:", state);
-                
-                if (state && state.date === getTodayString()) {
-                    // Only restore if same day - we're more lenient about URL to handle subdomain variations
-                    console.log(`Smart Tab Blocker: Found saved timer state with ${state.timeRemaining}s remaining`);
-                    resolve(state);
+            try {
+                if (!chrome.runtime?.id) {
+                    console.log("Smart Tab Blocker: Extension context invalidated, cannot load timer state");
+                    resolve(null);
                     return;
                 }
                 
-                // Clean up old state
-                if (state && state.date !== getTodayString()) {
-                    console.log("Smart Tab Blocker: Clearing outdated timer state");
-                    chrome.storage.local.remove([storageKey]);
-                }
-                
-                // If the domain shouldn't be tracked, we'll also clean up any remaining state
-                chrome.runtime.sendMessage({ 
-                    action: 'checkDomainTracking',
-                    domain: getCurrentDomain()
-                }, (response) => {
-                    if (response && response.shouldTrack === false) {
-                        console.log("Smart Tab Blocker: Domain no longer tracked, clearing all state");
-                        chrome.storage.local.remove([storageKey]);
-                        // Also clear any daily blocks for this domain
-                        const blockKey = getDailyBlockKey();
-                        if (blockKey) {
-                            chrome.storage.local.remove([blockKey]);
+                chrome.storage.local.get([storageKey], (result) => {
+                    if (chrome.runtime.lastError) {
+                        console.log("Smart Tab Blocker: Error loading timer state:", chrome.runtime.lastError);
+                        resolve(null);
+                        return;
+                    }
+                    
+                    const state = result[storageKey];
+                    console.log("Smart Tab Blocker: Retrieved state:", state);
+                    
+                    if (state && state.date === getTodayString()) {
+                        // Only restore if same day - we're more lenient about URL to handle subdomain variations
+                        console.log(`Smart Tab Blocker: Found saved timer state with ${state.timeRemaining}s remaining`);
+                        resolve(state);
+                        return;
+                    }
+                    
+                    // Clean up old state
+                    if (state && state.date !== getTodayString()) {
+                        console.log("Smart Tab Blocker: Clearing outdated timer state");
+                        if (chrome.runtime?.id) {
+                            chrome.storage.local.remove([storageKey]);
                         }
                     }
+                    
+                    // If the domain shouldn't be tracked, we'll also clean up any remaining state
+                    if (chrome.runtime?.id) {
+                        chrome.runtime.sendMessage({ 
+                            action: 'checkDomainTracking',
+                            domain: getCurrentDomain()
+                        }, (response) => {
+                            if (chrome.runtime.lastError) {
+                                console.log("Smart Tab Blocker: Error checking domain tracking:", chrome.runtime.lastError);
+                                return;
+                            }
+                            
+                            if (response && response.shouldTrack === false) {
+                                console.log("Smart Tab Blocker: Domain no longer tracked, clearing all state");
+                                if (chrome.runtime?.id) {
+                                    chrome.storage.local.remove([storageKey]);
+                                    // Also clear any daily blocks for this domain
+                                    const blockKey = getDailyBlockKey();
+                                    if (blockKey) {
+                                        chrome.storage.local.remove([blockKey]);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                    
+                    resolve(null);
                 });
-                
+            } catch (e) {
+                console.log("Smart Tab Blocker: Extension context invalidated, cannot load timer state");
                 resolve(null);
-            });
+            }
         });
     }
     
@@ -170,9 +300,21 @@
         const storageKey = getStorageKey();
         if (!storageKey) return;
         
-        chrome.storage.local.remove([storageKey]).catch(() => {
-            // Ignore storage errors
-        });
+        try {
+            if (chrome.runtime?.id) {
+                chrome.storage.local.remove([storageKey]).catch((error) => {
+                    if (error.message && error.message.includes('Extension context invalidated')) {
+                        console.log("Smart Tab Blocker: Extension context invalidated, cannot clear timer state");
+                    } else {
+                        console.log("Smart Tab Blocker: Error clearing timer state:", error);
+                    }
+                });
+            } else {
+                console.log("Smart Tab Blocker: Extension context invalidated, cannot clear timer state");
+            }
+        } catch (e) {
+            console.log("Smart Tab Blocker: Extension context invalidated, cannot clear timer state");
+        }
     }
     
     // Handle page visibility changes
@@ -305,14 +447,25 @@
     function checkDomainAndInitialize() {
         console.log(`Smart Tab Blocker: Checking domain ${getCurrentDomain()}`);
         
+        // Check extension context before proceeding
+        if (!checkExtensionContext()) {
+            console.log('Smart Tab Blocker: Extension context not available, cannot initialize');
+            return;
+        }
+        
         // Notify background script that we're checking this domain
         chrome.runtime.sendMessage({ 
             action: 'contentScriptLoaded', 
             domain: getCurrentDomain() 
         }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.log('Smart Tab Blocker: Error communicating with background script:', chrome.runtime.lastError);
+                return;
+            }
             // If background responds that domain should not be tracked, stop initialization
-            if (response && response.shouldTrack === false) {
-                console.log(`Smart Tab Blocker: Background script says not to track ${getCurrentDomain()}`);
+            if (response!={} && response.shouldTrack === false) {
+                console.log('Response:', response);
+                console.log(`Smart Tab Blocker: ${response} Background script says not to track ${getCurrentDomain()}`);
                 // Ensure we clean up any state for this domain
                 clearAllStateForDomain();
                 return;
@@ -410,7 +563,7 @@
                 <div class="smart-blocker-timer-icon">⏰</div>
                 <div class="smart-blocker-timer-text">
                     <h3>${currentDomain}</h3>
-                    <p class="timer-status">Blocking in <span class="countdown">${timeRemaining}</span>s</p>
+                    <p class="timer-status">Blocking in <span class="countdown">${formatTime(timeRemaining)}</span></p>
                     <div class="progress-bar">
                         <div class="progress-fill"></div>
                     </div>
@@ -580,7 +733,7 @@
         const iconElement = timerElement.querySelector('.smart-blocker-timer-icon');
         
         if (countdownElement) {
-            countdownElement.textContent = timeRemaining;
+            countdownElement.textContent = formatTime(timeRemaining);
         }
         
         if (progressFill) {
@@ -591,7 +744,7 @@
         if (isTimerPaused) {
             timerElement.classList.add('paused');
             if (statusElement) {
-                statusElement.textContent = `⏸️ Paused - ${timeRemaining}s remaining`;
+                statusElement.textContent = `⏸️ Paused - ${formatTime(timeRemaining)} remaining`;
                 statusElement.classList.add('paused');
             }
             if (iconElement) {
@@ -600,7 +753,7 @@
         } else {
             timerElement.classList.remove('paused');
             if (statusElement) {
-                statusElement.textContent = `Blocking in ${timeRemaining}s`;
+                statusElement.textContent = `Blocking in ${formatTime(timeRemaining)}`;
                 statusElement.classList.remove('paused');
             }
             if (iconElement) {
@@ -627,7 +780,7 @@
     }
     
     function startCountdownTimer(isResuming = false) {
-        if (!isEnabled) return;
+        if (!isEnabled || !checkExtensionContext()) return;
         
         stopCountdownTimer();
         
@@ -641,6 +794,12 @@
         updateTimerDisplay();
         
         countdownTimer = setInterval(() => {
+            // Check extension context on each tick
+            if (!checkExtensionContext()) {
+                stopCountdownTimer();
+                return;
+            }
+            
             if (!isTimerPaused) {
                 timeRemaining--;
                 updateTimerDisplay();
@@ -816,9 +975,9 @@
     window.smartBlockerInitialize = initializeWithConfig;
     
     // Check if we have injected config
-    if (window.smartBlockerConfig) {
+    if (window.smartBlockerConfig && checkExtensionContext()) {
         initializeWithConfig(window.smartBlockerConfig);
-    } else {
+    } else if (checkExtensionContext()) {
         // Check with background script
         checkDomainAndInitialize();
     }
@@ -826,7 +985,7 @@
     // Initialize when DOM is ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
-            if (!isInitialized) {
+            if (!isInitialized && checkExtensionContext()) {
                 checkDomainAndInitialize();
             }
         });
@@ -861,9 +1020,21 @@
                 }
                 
                 // Also try the async API
-                chrome.storage.local.set({
-                    [storageKey]: state
-                });
+                try {
+                    if (chrome.runtime?.id && chrome.storage?.local?.set) {
+                        chrome.storage.local.set({
+                            [storageKey]: state
+                        }).catch((error) => {
+                            if (error.message && error.message.includes('Extension context invalidated')) {
+                                console.log("Smart Tab Blocker: Extension context invalidated during beforeunload save");
+                            } else {
+                                console.log("Smart Tab Blocker: Error saving during beforeunload:", error);
+                            }
+                        });
+                    }
+                } catch (e) {
+                    console.log("Smart Tab Blocker: Extension context invalidated, cannot save to chrome.storage");
+                }
             }
         }
     });
@@ -876,9 +1047,15 @@
                 const parsed = JSON.parse(tempData);
                 if (parsed && parsed.key && parsed.state) {
                     console.log("Smart Tab Blocker: Found temporary state in localStorage, restoring to chrome.storage");
-                    chrome.storage.local.set({
-                        [parsed.key]: parsed.state
-                    });
+                    try {
+                        if (chrome.runtime?.id) {
+                            chrome.storage.local.set({
+                                [parsed.key]: parsed.state
+                            });
+                        }
+                    } catch (e) {
+                        console.log("Smart Tab Blocker: Extension context invalidated, cannot restore to chrome.storage");
+                    }
                 }
                 // Clear the temporary storage
                 localStorage.removeItem('_smartBlockerTemp');
@@ -890,6 +1067,15 @@
     
     // Check for temporary state on initialization
     checkLocalStorageTemp();
+    
+    // Periodic extension context check to handle developer tools being opened
+    setInterval(() => {
+        if (isInitialized && !checkExtensionContext()) {
+            console.log('Smart Tab Blocker: Extension context lost, cleaning up');
+            isInitialized = false;
+            isEnabled = false;
+        }
+    }, 5000); // Check every 5 seconds
     
     // Prevent escape key from closing modal
     document.addEventListener('keydown', (event) => {
