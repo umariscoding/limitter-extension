@@ -458,6 +458,12 @@
                 }
                 
                 sendResponse({ success: true });
+            } else if (request.action === 'requestTimerUpdate') {
+                // Popup is requesting a timer update (usually after tab switch)
+                if (isEnabled && countdownTimer) {
+                    sendTimerUpdateToPopup();
+                }
+                sendResponse({ success: true });
             }
             
             return true; // Keep message channel open for async response

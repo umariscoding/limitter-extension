@@ -1495,9 +1495,52 @@ function hideActiveTimerDisplay() {
 // Listen for timer updates from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'TIMER_UPDATE') {
-    updateActiveTimerDisplay(message.data);
+    // Only show timer for currently active tab
+    chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+      if (tabs.length > 0 && sender.tab && sender.tab.id === tabs[0].id) {
+        updateActiveTimerDisplay(message.data);
+      }
+    });
   } else if (message.type === 'TIMER_STOPPED') {
-    hideActiveTimerDisplay();
+    // Only hide timer if it's from the currently active tab
+    chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+      if (tabs.length > 0 && sender.tab && sender.tab.id === tabs[0].id) {
+        hideActiveTimerDisplay();
+      }
+    });
+  }
+});
+
+// Listen for tab changes and request timer update from new active tab
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  // Clear current timer display when switching tabs
+  hideActiveTimerDisplay();
+  
+  // Request timer update from the newly active tab after a short delay
+  setTimeout(() => {
+    chrome.tabs.sendMessage(activeInfo.tabId, {
+      action: 'requestTimerUpdate'
+    }).catch(() => {
+      // Content script might not be loaded or no timer running, which is fine
+    });
+  }, 100);
+});
+
+// Also listen for window focus changes
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId !== chrome.windows.WINDOW_ID_NONE) {
+    // Window gained focus, refresh timer display
+    chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+      if (tabs.length > 0) {
+        setTimeout(() => {
+          chrome.tabs.sendMessage(tabs[0].id, {
+            action: 'requestTimerUpdate'
+          }).catch(() => {
+            // Content script might not be loaded, which is fine
+          });
+        }, 100);
+      }
+    });
   }
 });
 
@@ -1507,6 +1550,17 @@ document.addEventListener('DOMContentLoaded', () => {
   if (closeTimerBtn) {
     closeTimerBtn.addEventListener('click', hideActiveTimerDisplay);
   }
+  
+  // When popup opens, request timer update from current active tab
+  chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+    if (tabs.length > 0) {
+      chrome.tabs.sendMessage(tabs[0].id, {
+        action: 'requestTimerUpdate'
+      }).catch(() => {
+        // Content script might not be loaded or no timer running, which is fine
+      });
+    }
+  });
 });
   }
   
