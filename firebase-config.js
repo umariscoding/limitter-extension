@@ -321,6 +321,29 @@ class FirebaseFirestore {
     }
   }
 
+  // Get a single blocked site from Firestore
+  async getBlockedSite(siteId) {
+    try {
+      const response = await fetch(`${this.baseUrl}/blocked_sites/${siteId}`, {
+        method: 'GET',
+        headers: this.getAuthHeaders()
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          return null; // Site doesn't exist
+        }
+        throw new Error(`Failed to fetch blocked site: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return this.convertFirestoreDoc(data);
+    } catch (error) {
+      console.error('Get blocked site error:', error);
+      throw error;
+    }
+  }
+
   // Create or update blocked site entry in Firestore
   async updateBlockedSite(siteId, siteData) {
     try {
