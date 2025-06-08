@@ -256,15 +256,25 @@ document.addEventListener('DOMContentLoaded', function() {
       const user = firebaseAuth.getCurrentUser();
       if (!user) return;
 
-      // Mark site as inactive in Firestore
       const siteId = `${user.uid}_${domain}`;
+      
+      // First, get the existing site data to preserve it
+      const existingSite = await firestore.getBlockedSite(siteId);
+      
+      if (!existingSite) {
+        console.log(`Site ${domain} not found in Firestore`);
+        return;
+      }
+
+      // Mark site as inactive while preserving all other data
       const siteData = {
-        is_active: false,
-        updated_at: new Date()
+        ...existingSite, // Preserve all existing data
+        is_active: false, // Only change the active status
+        updated_at: new Date() // Update the timestamp
       };
 
       await firestore.updateBlockedSite(siteId, siteData);
-      console.log(`Removed domain ${domain} from Firestore`);
+      console.log(`Removed domain ${domain} from Firestore (marked as inactive)`);
 
       // Update user profile stats
       if (userProfile) {

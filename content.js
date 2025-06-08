@@ -419,7 +419,7 @@
         // Listen for messages from background script
         chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             console.log('Smart Tab Blocker: Message received:', request);
-            
+            console.log('request.action', request.action);
             if (request.action === 'updateConfig') {
                 if (request.enabled && request.domainConfig) {
                     // Domain is still tracked, update config
@@ -436,7 +436,6 @@
                     sendResponse({ success: true });
                 }
             } else if (request.action === 'checkDomainTracking') {
-                // Background script is checking if this domain is still being tracked
                 sendResponse({ 
                     isTracking: isEnabled && isInitialized,
                     domain: getCurrentDomain()

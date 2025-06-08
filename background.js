@@ -138,6 +138,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       });
     } else if (domainInfo && (!isAuthenticated || !isEnabled)) {
       // Send message to stop tracking if not authenticated or disabled
+      console.log('stopTracking Domain Info' + domainInfo + "isAuthenticated: " + isAuthenticated + "isEnabled: " + isEnabled );
       chrome.tabs.sendMessage(tabId, {
         action: 'stopTracking'
       }).catch((error) => {
@@ -394,6 +395,7 @@ function updateAllTrackedTabs() {
           } else {
             // Either domain is no longer tracked, extension is disabled, or user is not authenticated
             // First try to send a message to stop tracking
+            console.log('stopTracking tab.id', tab.id);
             chrome.tabs.sendMessage(tab.id, {
               action: 'stopTracking'
             }).catch((error) => {
