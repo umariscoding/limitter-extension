@@ -1433,9 +1433,81 @@ document.addEventListener('DOMContentLoaded', function() {
       // Update helper text
       const helperText = document.querySelector('.input-helper');
       if (helperText) {
-        helperText.textContent = 'Timer in hours, minutes, seconds';
-      }
+            helperText.textContent = 'Timer in hours, minutes, seconds';
+  }
+}
+
+// Active Timer Display Functions
+function updateActiveTimerDisplay(timerData) {
+  const activeTimerCard = document.getElementById('activeTimerCard');
+  const timerDomain = document.getElementById('timerDomain');
+  const timerStatus = document.getElementById('timerStatus');
+  const timerCountdown = document.getElementById('timerCountdown');
+  const timerProgressFill = document.getElementById('timerProgressFill');
+  const timerIcon = document.querySelector('.timer-icon');
+  
+  if (!activeTimerCard || !timerData) return;
+  
+  // Show the timer card
+  activeTimerCard.style.display = 'block';
+  
+  // Update domain name
+  if (timerDomain) {
+    timerDomain.textContent = timerData.domain;
+  }
+  
+  // Update countdown
+  if (timerCountdown) {
+    timerCountdown.textContent = formatTime(timerData.timeRemaining);
+  }
+  
+  // Update status and styling based on timer state
+  if (timerData.isPaused) {
+    activeTimerCard.classList.add('paused');
+    if (timerIcon) timerIcon.classList.add('paused');
+    if (timerStatus) {
+      timerStatus.textContent = `⏸️ Paused - ${formatTime(timerData.timeRemaining)} remaining`;
+      timerStatus.classList.add('paused');
     }
+  } else {
+    activeTimerCard.classList.remove('paused');
+    if (timerIcon) timerIcon.classList.remove('paused');
+    if (timerStatus) {
+      timerStatus.innerHTML = `Blocking in <span class="countdown">${formatTime(timerData.timeRemaining)}</span>`;
+      timerStatus.classList.remove('paused');
+    }
+  }
+  
+  // Update progress bar
+  if (timerProgressFill && timerData.gracePeriod) {
+    const progressPercentage = (timerData.timeRemaining / timerData.gracePeriod) * 100;
+    timerProgressFill.style.width = Math.max(0, progressPercentage) + '%';
+  }
+}
+
+function hideActiveTimerDisplay() {
+  const activeTimerCard = document.getElementById('activeTimerCard');
+  if (activeTimerCard) {
+    activeTimerCard.style.display = 'none';
+  }
+}
+
+// Listen for timer updates from content scripts
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'TIMER_UPDATE') {
+    updateActiveTimerDisplay(message.data);
+  } else if (message.type === 'TIMER_STOPPED') {
+    hideActiveTimerDisplay();
+  }
+});
+
+// Set up timer close button when DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+  const closeTimerBtn = document.getElementById('closeTimerDisplay');
+  if (closeTimerBtn) {
+    closeTimerBtn.addEventListener('click', hideActiveTimerDisplay);
+  }
+});
   }
   
   // Make functions available globally for onclick handlers

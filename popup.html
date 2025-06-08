@@ -1112,6 +1112,102 @@
       font-weight: 600;
       opacity: 0.9;
     }
+
+    /* Active Timer Card */
+    .active-timer {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: relative;
+      padding: 8px;
+    }
+
+    .timer-icon {
+      font-size: 20px;
+      animation: timerPulse 1s ease-in-out infinite;
+    }
+
+    .timer-icon.paused {
+      animation: none;
+      opacity: 0.6;
+    }
+
+    @keyframes timerPulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.1); }
+    }
+
+    .timer-info {
+      flex: 1;
+    }
+
+    .timer-domain {
+      margin: 0 0 4px 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: white;
+    }
+
+    .timer-status {
+      margin: 0 0 8px 0;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .timer-status.paused {
+      color: #ffd700;
+      font-weight: 600;
+    }
+
+    .countdown {
+      font-weight: 700;
+      font-size: 13px;
+      color: #00d4aa;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 3px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(135deg, #00d4aa, #00a3ff);
+      width: 100%;
+      transition: width 1s linear;
+    }
+
+    .timer-close {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 50%;
+      transition: all 0.2s ease;
+    }
+
+    .timer-close:hover {
+      color: white;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    #activeTimerCard.paused {
+      background: linear-gradient(135deg, rgba(107, 114, 128, 0.1), rgba(75, 85, 99, 0.1));
+      animation: timerPaused 2s ease-in-out infinite;
+    }
+
+    @keyframes timerPaused {
+      0%, 100% { opacity: 0.7; }
+      50% { opacity: 1; }
+    }
   </style>
 </head>
 <body>
@@ -1208,6 +1304,21 @@
         <div class="plan-usage" id="planUsage">
           <span id="domainUsage">0/3 domains used</span>
         </div>
+      </div>
+    </div>
+    
+    <!-- Active Timer Display -->
+    <div class="card" id="activeTimerCard" style="display: none;">
+      <div class="active-timer">
+        <div class="timer-icon">⏰</div>
+        <div class="timer-info">
+          <h3 id="timerDomain" class="timer-domain">Domain</h3>
+          <p id="timerStatus" class="timer-status">Blocking in <span id="timerCountdown" class="countdown">00:30:00</span></p>
+          <div class="progress-bar">
+            <div id="timerProgressFill" class="progress-fill"></div>
+          </div>
+        </div>
+        <button id="closeTimerDisplay" class="timer-close">×</button>
       </div>
     </div>
     

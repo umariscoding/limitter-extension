@@ -610,14 +610,12 @@
         if (!isEnabled) return;
         
         hideTimer();
-        const timer = createTimer();
         
-        if (!document.body) {
-            setTimeout(showTimer, 100);
-            return;
-        }
+        // Send timer data to extension popup instead of showing on page
+        sendTimerUpdateToPopup();
         
-        document.body.appendChild(timer);
+        // Note: Timer is now displayed in the extension popup
+        // No longer appending to document.body
         
         // Add timer styles
         if (!document.getElementById('smart-blocker-timer-styles')) {
@@ -739,65 +737,40 @@
     }
     
     function hideTimer() {
+        // Send message to popup to hide timer
+        sendTimerStoppedToPopup();
+        
         if (timerElement && timerElement.parentNode) {
             timerElement.parentNode.removeChild(timerElement);
             timerElement = null;
         }
     }
     
+    function sendTimerUpdateToPopup() {
+        const timerData = {
+            domain: currentDomain,
+            timeRemaining: timeRemaining,
+            gracePeriod: gracePeriod,
+            isPaused: isTimerPaused
+        };
+        
+        chrome.runtime.sendMessage({
+            type: 'TIMER_UPDATE',
+            data: timerData
+        });
+    }
+    
+    function sendTimerStoppedToPopup() {
+        chrome.runtime.sendMessage({
+            type: 'TIMER_STOPPED'
+        });
+    }
+    
     function updateTimerDisplay() {
-        if (!timerElement || !isEnabled) return;
+        if (!isEnabled) return;
         
-        const countdownElement = timerElement.querySelector('.countdown');
-        const progressFill = timerElement.querySelector('.progress-fill');
-        const statusElement = timerElement.querySelector('.timer-status');
-        const iconElement = timerElement.querySelector('.smart-blocker-timer-icon');
-        
-        if (countdownElement) {
-            countdownElement.textContent = formatTime(timeRemaining);
-        }
-        
-        if (progressFill) {
-            const progressPercentage = (timeRemaining / gracePeriod) * 100;
-            progressFill.style.width = progressPercentage + '%';
-        }
-        
-        if (isTimerPaused) {
-            timerElement.classList.add('paused');
-            if (statusElement) {
-                statusElement.textContent = `⏸️ Paused - ${formatTime(timeRemaining)} remaining`;
-                statusElement.classList.add('paused');
-            }
-            if (iconElement) {
-                iconElement.classList.add('paused');
-            }
-        } else {
-            timerElement.classList.remove('paused');
-            if (statusElement) {
-                statusElement.textContent = `Blocking in ${formatTime(timeRemaining)}`;
-                statusElement.classList.remove('paused');
-            }
-            if (iconElement) {
-                iconElement.classList.remove('paused');
-            }
-        }
-        
-        if (timeRemaining <= 5 && !isTimerPaused) {
-            timerElement.style.background = 'linear-gradient(135deg, #dc2626, #991b1b) !important';
-            timerElement.style.animation = 'timerUrgent 0.5s ease-in-out infinite alternate !important';
-            
-            if (!document.getElementById('timer-urgent-styles')) {
-                const urgentStyles = document.createElement('style');
-                urgentStyles.id = 'timer-urgent-styles';
-                urgentStyles.textContent = `
-                    @keyframes timerUrgent {
-                        from { transform: scale(1); }
-                        to { transform: scale(1.05); }
-                    }
-                `;
-                document.head.appendChild(urgentStyles);
-            }
-        }
+        // Send updated timer data to popup instead of updating on-page elements
+        sendTimerUpdateToPopup();
     }
     
     function startCountdownTimer(isResuming = false) {
