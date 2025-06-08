@@ -19,6 +19,30 @@ async function initializeAuth() {
     
     const storedUser = await firebaseAuth.getStoredAuthData();
     isAuthenticated = !!storedUser;
+    
+    // If user is authenticated, initialize subscription service
+    if (isAuthenticated && subscriptionService) {
+      await subscriptionService.initializePlan();
+      
+      // Load user's actual plan data if available
+      try {
+        const user = firebaseAuth.getCurrentUser();
+        if (user) {
+          const userProfile = await firestore.getUserProfile(user.uid);
+          if (userProfile && userProfile.plan) {
+            await subscriptionService.updateUserPlan(userProfile.plan);
+          }
+          
+          const subscriptionData = await firestore.getDocument(`subscriptions/${user.uid}`);
+          if (subscriptionData) {
+            await subscriptionService.updateUserSubscription(subscriptionData);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading user plan data in background:', error);
+      }
+    }
+    
     console.log('Smart Tab Blocker Background: Authentication initialized, isAuthenticated:', isAuthenticated);
   } catch (error) {
     console.error('Smart Tab Blocker Background: Auth initialization failed:', error);
@@ -187,8 +211,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
     case 'userLoggedIn':
       isAuthenticated = true;
-      console.log('Smart Tab Blocker Background: User logged in, reloading all tabs and updating tracked tabs');
+      console.log('Smart Tab Blocker Background: User logged in, initializing subscription service and updating tabs');
     
+      // Re-initialize subscription service for the new user
+      if (subscriptionService) {
+        subscriptionService.initializePlan().catch(error => {
+          console.error('Error initializing subscription service after login:', error);
+        });
+      }
+      
       updateAllTrackedTabs();
   
       // Also update tracked tabs after reload

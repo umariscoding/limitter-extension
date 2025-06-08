@@ -5,12 +5,14 @@ class SubscriptionService {
     this.firebaseAuth = firebaseAuth;
     this.firestore = firestore;
     this.currentPlan = null;
+    this.availablePlans = {}; // Will be loaded from database
     this.usageCache = {};
-    this.initializePlan();
+    this.plansLoaded = false;
+    this.planLoadPromise = null;
   }
 
-  // Subscription Plans Configuration
-  static PLANS = {
+  // Default fallback plans (used if database is unavailable)
+  static FALLBACK_PLANS = {
     FREE: {
       id: 'free',
       name: 'Free Plan',
@@ -79,48 +81,174 @@ class SubscriptionService {
     }
   };
 
-  async initializePlan() {
-    try {
-      const user = this.firebaseAuth.getCurrentUser();
-      if (!user) {
-        this.currentPlan = SubscriptionService.PLANS.FREE;
-        return;
-      }
+  // Load subscription plans from Firestore
+  async loadPlansFromDatabase() {
+    if (this.planLoadPromise) {
+      return this.planLoadPromise;
+    }
 
-      // Load user's subscription from Firestore
-      const subscription = await this.loadUserSubscription(user.uid);
-      this.currentPlan = subscription || SubscriptionService.PLANS.FREE;
+    this.planLoadPromise = this._loadPlansFromDatabase();
+    return this.planLoadPromise;
+  }
+
+  async _loadPlansFromDatabase() {
+    try {
+      console.log('Loading subscription plans from database...');
+      
+      // Get all active plans from the subscription_plans collection
+      const plansSnapshot = await this.firestore.getCollection('subscription_plans');
+      
+      if (plansSnapshot && plansSnapshot.length > 0) {
+        // Convert array of plans to object keyed by plan ID
+        this.availablePlans = {};
+        plansSnapshot.forEach(planDoc => {
+          if (planDoc.active !== false) { // Include plans that are active or don't have active field
+            this.availablePlans[planDoc.id.toUpperCase()] = planDoc;
+          }
+        });
+        
+        console.log('Plans loaded from database:', Object.keys(this.availablePlans));
+        this.plansLoaded = true;
+        return this.availablePlans;
+      } else {
+        console.warn('No plans found in database, using fallback plans');
+        this.availablePlans = SubscriptionService.FALLBACK_PLANS;
+        this.plansLoaded = true;
+        return this.availablePlans;
+      }
+      
     } catch (error) {
-      console.error('Error initializing subscription plan:', error);
-      this.currentPlan = SubscriptionService.PLANS.FREE;
+      console.error('Error loading plans from database:', error);
+      console.warn('Using fallback plans due to database error');
+      this.availablePlans = SubscriptionService.FALLBACK_PLANS;
+      this.plansLoaded = true;
+      return this.availablePlans;
     }
   }
 
+  // Initialize user's current plan
+  async initializePlan() {
+    try {
+      // First, ensure plans are loaded from database
+      await this.loadPlansFromDatabase();
+      
+      const user = this.firebaseAuth.getCurrentUser();
+      if (!user) {
+        this.currentPlan = this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
+        return;
+      }
 
+      // Start with free plan as default
+      this.currentPlan = this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
+      
+      // The actual user plan will be set when loadUserDataFromFirestore() is called
+      // This method just ensures we have a valid current plan initialized
+      
+    } catch (error) {
+      console.error('Error initializing subscription plan:', error);
+      this.currentPlan = this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
+    }
+  }
 
   async loadUserSubscription(userId) {
     try {
+      // First get user's subscription status
       const subscriptionData = await this.firestore.getDocument(`subscriptions/${userId}`);
-      if (subscriptionData && subscriptionData.status === 'active' && new Date(subscriptionData.expires_at) > new Date()) {
-        return SubscriptionService.PLANS[subscriptionData.plan.toUpperCase()] || SubscriptionService.PLANS.FREE;
+      if (subscriptionData && subscriptionData.status === 'active') {
+        // Check if subscription is still valid
+        if (subscriptionData.current_period_end && new Date(subscriptionData.current_period_end) > new Date()) {
+          // Return the plan from our loaded plans
+          const planId = subscriptionData.plan.toUpperCase();
+          return this.availablePlans[planId] || this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
+        }
       }
-      return SubscriptionService.PLANS.FREE;
+      
+      // Also check user document for plan information (fallback)
+      const userData = await this.firestore.getDocument(`users/${userId}`);
+      if (userData && userData.plan) {
+        const planId = userData.plan.toUpperCase();
+        return this.availablePlans[planId] || this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
+      }
+      
+      return this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
     } catch (error) {
       console.error('Error loading user subscription:', error);
-      return SubscriptionService.PLANS.FREE;
+      return this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
+    }
+  }
+
+  // Wait for plans to be loaded
+  async waitForPlansLoaded() {
+    if (this.plansLoaded) {
+      return true;
+    }
+    
+    if (this.planLoadPromise) {
+      await this.planLoadPromise;
+      return true;
+    }
+    
+    await this.loadPlansFromDatabase();
+    return true;
+  }
+
+  // Update user's current plan based on user data
+  async updateUserPlan(planId) {
+    try {
+      await this.waitForPlansLoaded(); // Ensure plans are loaded first
+      
+      const plan = this.availablePlans[planId.toUpperCase()];
+      if (plan) {
+        this.currentPlan = plan;
+        console.log(`Updated user plan to: ${plan.name}`);
+      } else {
+        console.warn(`Plan ${planId} not found in available plans, keeping current plan`);
+        this.currentPlan = this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
+      }
+    } catch (error) {
+      console.error('Error updating user plan:', error);
+      this.currentPlan = this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
+    }
+  }
+
+  // Update user subscription data (for paid plans)
+  async updateUserSubscription(subscriptionData) {
+    try {
+      await this.waitForPlansLoaded(); // Ensure plans are loaded first
+      
+      if (subscriptionData && subscriptionData.status === 'active') {
+        // Check if subscription is still valid
+        if (subscriptionData.current_period_end && new Date(subscriptionData.current_period_end) > new Date()) {
+          const planId = subscriptionData.plan.toUpperCase();
+          const plan = this.availablePlans[planId];
+          if (plan) {
+            this.currentPlan = plan;
+            console.log(`Updated user subscription to: ${plan.name}`);
+            return;
+          }
+        }
+      }
+      
+      // If subscription is inactive or expired, fall back to free plan
+      this.currentPlan = this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
+      console.log('Subscription inactive or expired, using free plan');
+      
+    } catch (error) {
+      console.error('Error updating user subscription:', error);
+      this.currentPlan = this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
     }
   }
 
   getCurrentPlan() {
-    return this.currentPlan || SubscriptionService.PLANS.FREE;
+    return this.currentPlan || this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
   }
 
   getPlanById(planId) {
-    return SubscriptionService.PLANS[planId.toUpperCase()] || SubscriptionService.PLANS.FREE;
+    return this.availablePlans[planId.toUpperCase()] || this.availablePlans.FREE || SubscriptionService.FALLBACK_PLANS.FREE;
   }
 
   getAllPlans() {
-    return Object.values(SubscriptionService.PLANS);
+    return Object.values(this.availablePlans);
   }
 
   // Check if user can add more domains
@@ -238,7 +366,7 @@ class SubscriptionService {
 
   // Initiate subscription upgrade
   async upgradeSubscription(planId, userId) {
-    const plan = SubscriptionService.PLANS[planId.toUpperCase()];
+    const plan = this.getPlanById(planId);
     if (!plan) {
       throw new Error('Invalid plan selected');
     }
@@ -296,8 +424,9 @@ class SubscriptionService {
 
     if (current.id === 'free') {
       if (currentDomainCount >= 3 || needsCustomDuration || needsMoreOverrides) {
+        const proPlan = this.availablePlans.PRO || SubscriptionService.FALLBACK_PLANS.PRO;
         recommendations.push({
-          plan: SubscriptionService.PLANS.PRO,
+          plan: proPlan,
           reason: 'Unlock unlimited domains and custom timers'
         });
       }
@@ -305,8 +434,9 @@ class SubscriptionService {
 
     if (current.id === 'pro' || current.id === 'free') {
       if (needsMoreOverrides) {
+        const elitePlan = this.availablePlans.ELITE || SubscriptionService.FALLBACK_PLANS.ELITE;
         recommendations.push({
-          plan: SubscriptionService.PLANS.ELITE,
+          plan: elitePlan,
           reason: 'Get unlimited overrides and advanced features'
         });
       }

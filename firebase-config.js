@@ -362,6 +362,77 @@ class FirebaseFirestore {
       throw error;
     }
   }
+
+  // Get entire collection from Firestore
+  async getCollection(collectionName) {
+    try {
+      const response = await fetch(`${this.baseUrl}:runQuery`, {
+        method: 'POST',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: collectionName }]
+          }
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch collection ${collectionName}: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const documents = [];
+
+      if (data.length) {
+        for (const item of data) {
+          if (item.document) {
+            const convertedDoc = this.convertFirestoreDoc(item.document);
+            // Extract document ID from the document path
+            const pathParts = item.document.name.split('/');
+            convertedDoc.id = pathParts[pathParts.length - 1];
+            documents.push(convertedDoc);
+          }
+        }
+      }
+
+      return documents;
+    } catch (error) {
+      console.error(`Get collection ${collectionName} error:`, error);
+      throw error;
+    }
+  }
+
+  // Get user override data from Firestore
+  async getUserOverrides(userId) {
+    try {
+      console.log(`Fetching user overrides for userId: ${userId}`);
+      
+      const response = await fetch(`${this.baseUrl}/user_overrides/${userId}`, {
+        method: 'GET',
+        headers: this.getAuthHeaders()
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.log('User overrides not found (404)');
+          return null;
+        }
+        const errorText = await response.text();
+        console.error(`HTTP Error ${response.status}: ${errorText}`);
+        throw new Error(`Failed to fetch user overrides: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      return this.convertFirestoreDoc(data);
+    } catch (error) {
+      console.error('Get user overrides error:', error);
+      if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+        console.error('Network error - check internet connection and CORS permissions');
+        throw new Error('Network error: Unable to connect to Firebase. Please check your internet connection.');
+      }
+      throw error;
+    }
+  }
 }
 
 // Export for use in other scripts

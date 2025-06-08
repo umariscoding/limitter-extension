@@ -107,13 +107,45 @@ document.addEventListener('DOMContentLoaded', function() {
         stats.textContent = 'Loading your data...';
       }
 
-      // Load user profile
+      // Load user profile (contains plan information)
       try {
         userProfile = await firestore.getUserProfile(user.uid);
         console.log('User profile loaded:', userProfile);
+        
+        // If user profile has plan information, update subscription service
+        if (userProfile && userProfile.plan) {
+          await subscriptionService.updateUserPlan(userProfile.plan);
+        }
       } catch (error) {
         console.log('User profile not found, will create on first site add');
         userProfile = null;
+      }
+
+      // Load user override data
+      try {
+        const userOverrides = await firestore.getUserOverrides(user.uid);
+        if (userOverrides) {
+          console.log('User overrides loaded:', userOverrides);
+          // Store override data for use in UI
+          if (userProfile) {
+            userProfile.override_credits = userOverrides.override_credits || 0;
+            userProfile.overrides = userOverrides.overrides || 0;
+            userProfile.monthly_stats = userOverrides.monthly_stats || {};
+          }
+        }
+      } catch (error) {
+        console.log('User overrides not found, will create on first override usage');
+      }
+
+      // Load subscription data (for paid plans)
+      try {
+        const subscriptionData = await firestore.getDocument(`subscriptions/${user.uid}`);
+        if (subscriptionData) {
+          console.log('Subscription data loaded:', subscriptionData);
+          await subscriptionService.updateUserSubscription(subscriptionData);
+        }
+      } catch (error) {
+        console.log('No subscription data found for user');
       }
 
       // Load domains from local storage instead of Firestore
@@ -210,8 +242,17 @@ document.addEventListener('DOMContentLoaded', function() {
     try {
       const storedUser = await firebaseAuth.getStoredAuthData();
       if (storedUser) {
+        // Show authenticated state but don't show main content yet
+        showAuthenticatingState(storedUser);
+        
+        // Load plans and user data
+        await Promise.all([
+          subscriptionService.waitForPlansLoaded(),
+          loadUserDataFromFirestore()
+        ]);
+        
+        // Now show the full authenticated state
         showAuthenticatedState(storedUser);
-        await loadUserDataFromFirestore();
         startPeriodicUpdates();
       } else {
         showUnauthenticatedState();
@@ -219,6 +260,25 @@ document.addEventListener('DOMContentLoaded', function() {
     } catch (error) {
       console.error('Auth initialization error:', error);
       showUnauthenticatedState();
+    }
+  }
+  
+  function showAuthenticatingState(user) {
+    authContent.classList.add('authenticated');
+    userSection.style.display = 'block';
+    userEmail.textContent = user.email;
+    hideAuthError();
+    
+    // Show loading state in stats
+    if (stats) {
+      stats.textContent = 'Loading subscription plans...';
+    }
+    
+    // Show loading indicator in plan status
+    if (planStatusCard) {
+      planStatusCard.style.display = 'block';
+      if (planBadge) planBadge.textContent = 'Loading...';
+      if (planLimits) planLimits.textContent = 'Fetching your plan data...';
     }
   }
   
@@ -279,7 +339,9 @@ document.addEventListener('DOMContentLoaded', function() {
       hideAuthError();
       
       const user = await firebaseAuth.signInWithEmailAndPassword(email, password);
-      showAuthenticatedState(user);
+      
+      // Show loading state first
+      showAuthenticatingState(user);
       
       // Clear form
       emailInput.value = '';
@@ -290,8 +352,15 @@ document.addEventListener('DOMContentLoaded', function() {
         chrome.runtime.sendMessage({ action: 'userLoggedIn' });
       });
       
-      // Load app data after successful login
-      await loadUserDataFromFirestore();
+      // Load plans and user data
+      loginBtn.textContent = 'Loading plans...';
+      await Promise.all([
+        subscriptionService.waitForPlansLoaded(),
+        loadUserDataFromFirestore()
+      ]);
+      
+      // Now show the full authenticated state
+      showAuthenticatedState(user);
       startPeriodicUpdates();
       
     } catch (error) {
@@ -299,7 +368,7 @@ document.addEventListener('DOMContentLoaded', function() {
       showAuthError(error.message || 'Login failed. Please check your credentials.');
     } finally {
       loginBtn.disabled = false;
-      loginBtn.textContent = 'Login';
+      loginBtn.textContent = 'Sign In';
     }
   }
   
@@ -1106,11 +1175,13 @@ document.addEventListener('DOMContentLoaded', function() {
       
       // Update plan limits
       const maxDomains = status.limits.maxDomains;
+      let limitsText = '';
+      
       if (maxDomains === -1) {
-        planLimits.textContent = 'Unlimited domains';
+        limitsText = 'Unlimited domains';
         domainUsage.textContent = `${currentDomainCount} domains`;
       } else {
-        planLimits.textContent = `${maxDomains} domains max`;
+        limitsText = `${maxDomains} domains max`;
         domainUsage.textContent = `${currentDomainCount}/${maxDomains} domains`;
         
         // Add warning color if approaching limit
@@ -1123,8 +1194,26 @@ document.addEventListener('DOMContentLoaded', function() {
       
       // Add custom duration info for free plan
       if (status.planId === 'free') {
-        planLimits.textContent += ' • 1-hour timers only';
+        limitsText += ' • 1-hour timers only';
       }
+      
+      // Add override credits info if user has any
+      if (userProfile) {
+        const overrideCredits = userProfile.override_credits || 0;
+        const freeOverrides = status.limits.freeOverrides;
+        
+        if (freeOverrides === -1) {
+          limitsText += ' • Unlimited overrides';
+        } else if (freeOverrides > 0) {
+          limitsText += ` • ${freeOverrides} free overrides/month`;
+        }
+        
+        if (overrideCredits > 0) {
+          limitsText += ` • ${overrideCredits} override credits`;
+        }
+      }
+      
+      planLimits.textContent = limitsText;
     }
     
     // Update timer inputs based on plan
