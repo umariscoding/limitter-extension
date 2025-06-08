@@ -156,8 +156,8 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('No subscription data found for user');
       }
 
-      // Load domains from local storage instead of Firestore
-      loadDomains();
+      // Load blocked sites from Firestore
+      await loadDomainsFromFirestore();
       
       // Update UI
       updateDomainStates();
@@ -393,7 +393,7 @@ document.addEventListener('DOMContentLoaded', function() {
       });
       
       // Load plans and user data
-      loginBtn.textContent = 'Loading plans...';
+      loginBtn.textContent = 'Loading your sites...';
       await Promise.all([
         subscriptionService.waitForPlansLoaded(),
         loadUserDataFromFirestore()
@@ -708,6 +708,49 @@ document.addEventListener('DOMContentLoaded', function() {
         blockedDomains: domains
       });
     });
+  }
+
+  async function loadDomainsFromFirestore() {
+    try {
+      const user = firebaseAuth.getCurrentUser();
+      if (!user) {
+        console.log('No authenticated user, falling back to local storage');
+        loadDomains();
+        return;
+      }
+
+      console.log('Loading blocked sites from Firestore for user:', user.uid);
+      
+      // Get user's blocked sites from Firestore
+      const blockedSites = await firestore.getUserBlockedSites(user.uid);
+      
+      // Clear existing domains object
+      domains = {};
+      
+      if (blockedSites && blockedSites.length > 0) {
+        // Convert Firestore sites to local domains format
+        blockedSites.forEach(site => {
+          // Only load active sites
+          if (site.is_active) {
+            domains[site.url] = site.time_limit;
+            console.log(`Loaded site from Firestore: ${site.url} with ${site.time_limit}s timer`);
+          }
+        });
+        
+        console.log(`Loaded ${Object.keys(domains).length} active sites from Firestore:`, Object.keys(domains));
+      } else {
+        console.log('No blocked sites found in Firestore');
+      }
+      
+      // Save to local storage to sync with background script
+      saveDomains();
+      
+    } catch (error) {
+      console.error('Error loading domains from Firestore:', error);
+      // Fallback to local storage
+      console.log('Falling back to local storage due to error');
+      loadDomains();
+    }
   }
 
   function stopTrackingDomain(domain) {
