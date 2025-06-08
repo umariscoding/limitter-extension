@@ -331,24 +331,7 @@ class SubscriptionService {
     };
 
     try {
-      // If using credit override, decrement user's override count
-      if (overrideCheck.reason === 'credit_override') {
-        const userOverrides = await this.firestore.getUserOverrides(userId);
-        if (userOverrides && userOverrides.overrides > 0) {
-          const updatedOverrides = {
-            ...userOverrides,
-            overrides: Math.max(0, userOverrides.overrides - 1),
-            overrides_used_total: (userOverrides.overrides_used_total || 0) + 1,
-            updated_at: new Date()
-          };
-          
-          // Update user overrides in Firestore
-          await this.firestore.updateDocument(`user_overrides/${userId}`, updatedOverrides);
-          console.log(`Override credit used. Remaining: ${updatedOverrides.overrides}`);
-        }
-      }
-
-      // Record the override in history
+      // Record the override (this will also decrement the count and update stats)
       await this.recordOverride(userId, overrideData);
 
       // Update monthly usage
@@ -364,7 +347,45 @@ class SubscriptionService {
   async recordOverride(userId, overrideData) {
     try {
       const overrideId = `${userId}_${Date.now()}`;
-      await this.firestore.updateDocument(`overrides/${overrideId}`, overrideData);
+      const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM format
+      
+      const historyRecord = {
+        ...overrideData,
+        site_url: overrideData.domain,
+        month: currentMonth,
+        override_type: overrideData.override_type || 'credit',
+        created_at: new Date()
+      };
+      
+      // Record in override_history collection
+      await this.firestore.createOverrideHistory(overrideId, historyRecord);
+      console.log('Override recorded in history:', overrideId);
+      
+      // Also decrement the user's total overrides count
+      if (overrideData.override_type === 'credit' || overrideData.cost === 0) {
+        const userOverrides = await this.firestore.getUserOverrides(userId);
+        if (userOverrides && userOverrides.overrides > 0) {
+          const updatedOverrides = {
+            ...userOverrides,
+            overrides: Math.max(0, userOverrides.overrides - 1),
+            overrides_used_total: (userOverrides.overrides_used_total || 0) + 1,
+            updated_at: new Date(),
+            // Update monthly stats
+            monthly_stats: {
+              ...userOverrides.monthly_stats,
+              [currentMonth]: {
+                ...userOverrides.monthly_stats?.[currentMonth],
+                overrides_used: ((userOverrides.monthly_stats?.[currentMonth]?.overrides_used) || 0) + 1,
+                credit_overrides_used: ((userOverrides.monthly_stats?.[currentMonth]?.credit_overrides_used) || 0) + 1
+              }
+            }
+          };
+          
+          // Update user overrides in Firestore
+          await this.firestore.updateUserOverrides(userId, updatedOverrides);
+          console.log(`Override used. Remaining: ${updatedOverrides.overrides}`);
+        }
+      }
     } catch (error) {
       console.error('Error recording override:', error);
       throw error;

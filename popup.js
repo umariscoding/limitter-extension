@@ -1174,6 +1174,13 @@ document.addEventListener('DOMContentLoaded', function() {
             showFeedback(`Override granted for ${domain} - timer ready to start`);
           }
           
+          // Update Firestore after successful override
+          try {
+            await updateFirestoreAfterOverride(domain, domains[domain]);
+          } catch (error) {
+            console.error('Error updating Firestore after override:', error);
+          }
+          
           // Reload user data to reflect updated override count
           try {
             await loadUserDataFromFirestore();
@@ -1186,6 +1193,49 @@ document.addEventListener('DOMContentLoaded', function() {
     } catch (error) {
       console.error('Error processing override:', error);
       showError('Failed to process override');
+    }
+  }
+
+  // Update Firestore after successful override
+  async function updateFirestoreAfterOverride(domain, timerDuration) {
+    try {
+      const user = firebaseAuth.getCurrentUser();
+      if (!user) {
+        console.log('No authenticated user, skipping Firestore update');
+        return;
+      }
+
+      const siteId = `${user.uid}_${domain}`;
+      const now = new Date();
+      const todayString = getTodayString();
+      
+      console.log(`Updating Firestore for ${domain} after override - resetting timer to ${timerDuration}s`);
+      
+      // Update the blocked site record to reflect override
+      const siteUpdateData = {
+        time_remaining: timerDuration, // Reset to full timer duration
+        time_spent_today: 0, // Reset daily usage
+        last_reset_date: todayString, // Update reset date
+        is_blocked: false, // Site is no longer blocked
+        blocked_until: null, // Clear any blocking timestamp
+        updated_at: now
+      };
+
+      await firestore.updateBlockedSite(siteId, siteUpdateData);
+      console.log(`Successfully updated Firestore for ${domain} after override`);
+
+      // Also update user profile stats if we have one
+      if (userProfile) {
+        userProfile.updated_at = now;
+        // Optionally track override usage in user profile
+        userProfile.total_overrides_used = (userProfile.total_overrides_used || 0) + 1;
+        await firestore.updateUserProfile(user.uid, userProfile);
+        console.log('Updated user profile with override usage');
+      }
+
+    } catch (error) {
+      console.error('Error updating Firestore after override:', error);
+      // Don't throw error - this shouldn't block the override functionality
     }
   }
 

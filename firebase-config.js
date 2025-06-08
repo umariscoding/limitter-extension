@@ -433,6 +433,118 @@ class FirebaseFirestore {
       throw error;
     }
   }
+
+  // Update user overrides data in Firestore
+  async updateUserOverrides(userId, overrideData) {
+    try {
+      const firestoreData = {};
+      
+      for (const [key, value] of Object.entries(overrideData)) {
+        if (typeof value === 'string') {
+          firestoreData[key] = { stringValue: value };
+        } else if (typeof value === 'number') {
+          if (Number.isInteger(value)) {
+            firestoreData[key] = { integerValue: value.toString() };
+          } else {
+            firestoreData[key] = { doubleValue: value };
+          }
+        } else if (typeof value === 'boolean') {
+          firestoreData[key] = { booleanValue: value };
+        } else if (value instanceof Date) {
+          firestoreData[key] = { timestampValue: value.toISOString() };
+        } else if (value === null) {
+          firestoreData[key] = { nullValue: null };
+        } else if (typeof value === 'object') {
+          // Handle nested objects (like monthly_stats)
+          firestoreData[key] = { mapValue: { fields: this.convertToFirestoreFields(value) } };
+        }
+      }
+
+      const response = await fetch(`${this.baseUrl}/user_overrides/${userId}`, {
+        method: 'PATCH',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({
+          fields: firestoreData
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update user overrides: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Update user overrides error:', error);
+      throw error;
+    }
+  }
+
+  // Create override history record in Firestore
+  async createOverrideHistory(historyId, historyData) {
+    try {
+      const firestoreData = {};
+      
+      for (const [key, value] of Object.entries(historyData)) {
+        if (typeof value === 'string') {
+          firestoreData[key] = { stringValue: value };
+        } else if (typeof value === 'number') {
+          if (Number.isInteger(value)) {
+            firestoreData[key] = { integerValue: value.toString() };
+          } else {
+            firestoreData[key] = { doubleValue: value };
+          }
+        } else if (typeof value === 'boolean') {
+          firestoreData[key] = { booleanValue: value };
+        } else if (value instanceof Date) {
+          firestoreData[key] = { timestampValue: value.toISOString() };
+        } else if (value === null) {
+          firestoreData[key] = { nullValue: null };
+        }
+      }
+
+      const response = await fetch(`${this.baseUrl}/override_history/${historyId}`, {
+        method: 'PATCH',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({
+          fields: firestoreData
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create override history: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Create override history error:', error);
+      throw error;
+    }
+  }
+
+  // Helper method to convert nested objects to Firestore fields
+  convertToFirestoreFields(obj) {
+    const fields = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (typeof value === 'string') {
+        fields[key] = { stringValue: value };
+      } else if (typeof value === 'number') {
+        if (Number.isInteger(value)) {
+          fields[key] = { integerValue: value.toString() };
+        } else {
+          fields[key] = { doubleValue: value };
+        }
+      } else if (typeof value === 'boolean') {
+        fields[key] = { booleanValue: value };
+      } else if (value instanceof Date) {
+        fields[key] = { timestampValue: value.toISOString() };
+      } else if (value === null) {
+        fields[key] = { nullValue: null };
+      } else if (typeof value === 'object') {
+        fields[key] = { mapValue: { fields: this.convertToFirestoreFields(value) } };
+      }
+    }
+    return fields;
+  }
 }
 
 // Export for use in other scripts
