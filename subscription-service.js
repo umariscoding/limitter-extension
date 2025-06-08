@@ -283,14 +283,33 @@ class SubscriptionService {
       return { allowed: true, cost: 0, reason: 'unlimited' };
     }
 
-    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM format
-    const usage = await this.getMonthlyUsage(userId, currentMonth);
-    
-    if (usage.overrides < plan.limits.freeOverrides) {
-      return { allowed: true, cost: 0, reason: 'free_remaining', remaining: plan.limits.freeOverrides - usage.overrides };
-    }
+    try {
+      // Fetch user's override credits from Firestore
+      const userOverrides = await this.firestore.getUserOverrides(userId);
+      const totalOverrides = userOverrides ? (userOverrides.overrides || 0) : 0;
+      
+      console.log(`User ${userId} has ${totalOverrides} overrides remaining`);
+      
+      // If user has overrides remaining, allow free override
+      if (totalOverrides > 0) {
+        return { allowed: true, cost: 0, reason: 'credit_override', remaining: totalOverrides };
+      }
+      
+      // No overrides remaining - redirect to checkout
+      return { allowed: false, cost: 0, reason: 'no_overrides', redirectUrl: 'http://localhost:3000/checkout?overrides=1' };
+      
+    } catch (error) {
+      console.error('Error fetching user overrides:', error);
+      // Fallback to monthly usage system if Firestore is unavailable
+      const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM format
+      const usage = await this.getMonthlyUsage(userId, currentMonth);
+      
+      if (usage.overrides < plan.limits.freeOverrides) {
+        return { allowed: true, cost: 0, reason: 'free_remaining', remaining: plan.limits.freeOverrides - usage.overrides };
+      }
 
-    return { allowed: true, cost: plan.limits.overrideCost, reason: 'paid_override' };
+      return { allowed: true, cost: plan.limits.overrideCost, reason: 'paid_override' };
+    }
   }
 
   // Process an override
@@ -307,16 +326,39 @@ class SubscriptionService {
       timestamp: new Date(),
       cost: overrideCheck.cost,
       reason: reason,
-      plan: this.currentPlan.id
+      plan: this.currentPlan.id,
+      override_type: overrideCheck.reason === 'credit_override' ? 'credit' : 'free'
     };
 
-    // Record the override
-    await this.recordOverride(userId, overrideData);
+    try {
+      // If using credit override, decrement user's override count
+      if (overrideCheck.reason === 'credit_override') {
+        const userOverrides = await this.firestore.getUserOverrides(userId);
+        if (userOverrides && userOverrides.overrides > 0) {
+          const updatedOverrides = {
+            ...userOverrides,
+            overrides: Math.max(0, userOverrides.overrides - 1),
+            overrides_used_total: (userOverrides.overrides_used_total || 0) + 1,
+            updated_at: new Date()
+          };
+          
+          // Update user overrides in Firestore
+          await this.firestore.updateDocument(`user_overrides/${userId}`, updatedOverrides);
+          console.log(`Override credit used. Remaining: ${updatedOverrides.overrides}`);
+        }
+      }
 
-    // Update monthly usage
-    await this.updateMonthlyUsage(userId);
+      // Record the override in history
+      await this.recordOverride(userId, overrideData);
 
-    return overrideData;
+      // Update monthly usage
+      await this.updateMonthlyUsage(userId);
+
+      return overrideData;
+    } catch (error) {
+      console.error('Error processing override:', error);
+      throw error;
+    }
   }
 
   async recordOverride(userId, overrideData) {

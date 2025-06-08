@@ -431,18 +431,32 @@ async function handleOverrideRequest(domain, tabId) {
       throw new Error('Override not allowed for your subscription plan');
     }
     
+    if (!overrideCheck.allowed) {
+      if (overrideCheck.reason === 'no_overrides') {
+        // No overrides remaining, redirect to checkout
+        return {
+          success: false,
+          requiresPayment: true,
+          redirectUrl: overrideCheck.redirectUrl,
+          reason: overrideCheck.reason
+        };
+      }
+      throw new Error('Override not allowed');
+    }
+
     if (overrideCheck.cost > 0) {
       // Requires payment
       return {
         success: true,
         requiresPayment: true,
         cost: overrideCheck.cost,
-        reason: overrideCheck.reason
+        reason: overrideCheck.reason,
+        redirectUrl: `http://localhost:3000/checkout?overrides=1&domain=${domain}`
       };
     } else {
-      // Free override available
+      // Free override available (either credits or unlimited)
       try {
-        await subscriptionService.processOverride(user.uid, domain, 'User requested override');
+        await subscriptionService.processOverride(user.uid, domain, 'User requested override from content script');
         
         // Clear the daily block for this domain
         const blockKey = `dailyBlock_${domain}`;

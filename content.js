@@ -904,16 +904,25 @@
         }, (response) => {
             if (response && response.success) {
                 if (response.requiresPayment) {
-                    // Show payment modal or redirect
-                    showPaymentModal(response.cost);
+                    // Redirect to payment/checkout page
+                    if (response.redirectUrl) {
+                        window.open(response.redirectUrl, '_blank');
+                    } else {
+                        showPaymentModal(response.cost);
+                    }
                 } else {
                     // Override granted, hide modal and allow access
                     hideModal();
                     clearDailyBlock();
-                    showOverrideGrantedMessage();
+                    // No message needed - just clear the block silently
                 }
             } else {
-                showOverrideError(response ? response.error : 'Override failed');
+                if (response && response.reason === 'no_overrides' && response.redirectUrl) {
+                    // No overrides remaining, redirect to checkout
+                    window.open(response.redirectUrl, '_blank');
+                } else {
+                    showOverrideError(response ? response.error : 'Override failed');
+                }
             }
         });
     }
@@ -945,21 +954,102 @@
         });
     }
     
-    function showOverrideGrantedMessage() {
-        const message = document.createElement('div');
-        message.className = 'smart-blocker-override-message';
-        message.innerHTML = `
-            <div class="override-success">
-                ✅ Override granted! You can now access this site.
+    function showOverrideSuccessNotification(domain) {
+        // Create beautiful floating notification
+        const notification = document.createElement('div');
+        notification.className = 'smart-blocker-success-notification';
+        notification.innerHTML = `
+            <div class="notification-content">
+                <div class="success-icon">🎉</div>
+                <div class="notification-text">
+                    <div class="main-text">Access Granted!</div>
+                    <div class="sub-text">Enjoy browsing ${domain}</div>
+                </div>
             </div>
         `;
-        document.body.appendChild(message);
         
-        setTimeout(() => {
-            if (message.parentNode) {
-                message.parentNode.removeChild(message);
+        // Add styles for the notification
+        const style = document.createElement('style');
+        style.textContent = `
+            .smart-blocker-success-notification {
+                position: fixed !important;
+                top: 20px !important;
+                right: 20px !important;
+                z-index: 2147483647 !important;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+                animation: slideInNotification 0.5s ease-out !important;
             }
-        }, 3000);
+            
+            @keyframes slideInNotification {
+                from {
+                    opacity: 0;
+                    transform: translateX(100px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateX(0);
+                }
+            }
+            
+            .notification-content {
+                background: linear-gradient(135deg, #00c851, #007e33) !important;
+                color: white !important;
+                padding: 16px 20px !important;
+                border-radius: 12px !important;
+                box-shadow: 0 8px 25px rgba(0, 200, 81, 0.3) !important;
+                display: flex !important;
+                align-items: center !important;
+                gap: 12px !important;
+                min-width: 280px !important;
+                backdrop-filter: blur(10px) !important;
+            }
+            
+            .success-icon {
+                font-size: 24px !important;
+                animation: bounce 0.6s ease-out 0.3s both !important;
+            }
+            
+            @keyframes bounce {
+                0%, 20%, 50%, 80%, 100% {
+                    transform: translateY(0);
+                }
+                40% {
+                    transform: translateY(-10px);
+                }
+                60% {
+                    transform: translateY(-5px);
+                }
+            }
+            
+            .notification-text {
+                flex: 1 !important;
+            }
+            
+            .main-text {
+                font-size: 16px !important;
+                font-weight: 600 !important;
+                margin-bottom: 2px !important;
+            }
+            
+            .sub-text {
+                font-size: 13px !important;
+                opacity: 0.9 !important;
+            }
+        `;
+        
+        document.head.appendChild(style);
+        document.body.appendChild(notification);
+        
+        // Auto-remove after 3 seconds with fade out
+        setTimeout(() => {
+            notification.style.animation = 'slideInNotification 0.3s ease-out reverse';
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.remove();
+                    style.remove();
+                }
+            }, 300);
+        }, 2700);
     }
     
     function showOverrideError(error) {
@@ -1203,16 +1293,16 @@
         }
     }, true);
     
-    // Listen for messages from popup (for reset functionality)
+    // Listen for messages from popup (for override functionality)
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         console.log('Smart Tab Blocker: Message received:', message);
         
-        if (message.action === 'domainReset') {
+        if (message.action === 'overrideGranted') {
             const currentHostname = getCurrentDomain();
-            console.log(`Smart Tab Blocker: Current hostname: ${currentHostname}, Reset for: ${message.domain}`);
+            console.log(`Smart Tab Blocker: Current hostname: ${currentHostname}, Override granted for: ${message.domain}`);
             
             if (currentHostname === message.domain || currentHostname.endsWith('.' + message.domain)) {
-                console.log(`Smart Tab Blocker: Domain ${message.domain} reset received - restoring access`);
+                console.log(`Smart Tab Blocker: Override granted for ${message.domain} - allowing access`);
                 
                 // Clear state and hide any blocking UI
                 clearTimerState();
@@ -1223,11 +1313,11 @@
                 const blockKey = getDailyBlockKey();
                 if (blockKey) {
                     chrome.storage.local.remove([blockKey], () => {
-                        console.log(`Smart Tab Blocker: Daily block cleared for ${message.domain}`);
+                        console.log(`Smart Tab Blocker: Daily block cleared via override for ${message.domain}`);
                     });
                 }
                 
-                // Ensure page is visible (in case modal was blocking it)
+                // Ensure page is visible and accessible
                 if (document.documentElement) {
                     document.documentElement.style.overflow = '';
                 }
@@ -1235,32 +1325,28 @@
                     document.body.style.display = '';
                 }
                 
-                // Reset timer values
-                timeRemaining = message.timer;
-                gracePeriod = message.timer;
-                isTimerPaused = false;
-                
                 // Stop any running timer
                 if (countdownTimer) {
                     clearInterval(countdownTimer);
                     countdownTimer = null;
                 }
                 
-                // Reset initialization flags for clean restart
+                // Reset flags to allow fresh restart
                 isInitialized = false;
                 isEnabled = false;
                 
-                console.log(`Smart Tab Blocker: Starting fresh ${message.timer}s timer for ${message.domain}`);
+                console.log(`Smart Tab Blocker: Override processed for ${message.domain} - restarting timer`);
                 
-                // Re-initialize with fresh timer after ensuring daily block is cleared
+                // Restart the timer immediately with fresh duration
                 setTimeout(() => {
+                    console.log(`Smart Tab Blocker: Starting fresh ${message.timer}s timer for ${message.domain} after override`);
                     initializeWithConfig({ timer: message.timer });
                 }, 300);
                 
-                // Send response to confirm reset was processed
-                sendResponse({ success: true, message: 'Domain reset successfully' });
+                // Send response to confirm override was processed
+                sendResponse({ success: true, message: 'Override granted successfully' });
             } else {
-                console.log(`Smart Tab Blocker: Domain mismatch - current: ${currentHostname}, reset: ${message.domain}`);
+                console.log(`Smart Tab Blocker: Domain mismatch - current: ${currentHostname}, override: ${message.domain}`);
                 sendResponse({ success: false, message: 'Domain does not match' });
             }
             
@@ -1350,8 +1436,7 @@
             clearDailyBlock();
             clearTimerState();
             
-            // Show success message
-            showOverrideGrantedMessage();
+                            // Override processed - no additional message needed
             
             sendResponse({ success: true });
         }

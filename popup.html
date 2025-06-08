@@ -324,7 +324,7 @@
       font-weight: 600;
     }
     
-    .remove-btn, .reset-btn {
+    .remove-btn, .override-btn {
       border: none;
       padding: 8px 16px;
       border-radius: 8px;
@@ -349,18 +349,18 @@
       background: linear-gradient(135deg, #e53e3e, #c53030);
     }
 
-    .reset-btn {
-      background: linear-gradient(135deg, #ffa726, #ff9800);
+    .override-btn {
+      background: linear-gradient(135deg, #00d4aa, #00a3ff);
       color: white;
-      box-shadow: 0 2px 8px rgba(255, 167, 38, 0.3);
+      box-shadow: 0 2px 8px rgba(0, 212, 170, 0.3);
     }
     
-    .reset-btn:hover {
-      background: linear-gradient(135deg, #ff9800, #f57c00);
+    .override-btn:hover {
+      background: linear-gradient(135deg, #00e6c0, #00b3ff);
     }
 
-    .reset-btn:active {
-      background: linear-gradient(135deg, #f57c00, #e65100);
+    .override-btn:active {
+      background: linear-gradient(135deg, #00c4a6, #0093e6);
     }
 
     .domain-buttons {
@@ -716,7 +716,7 @@
     /* Focus accessibility */
     .add-btn:focus,
     .remove-btn:focus,
-    .reset-btn:focus,
+    .override-btn:focus,
     .logout-btn-compact:focus,
     .input-field:focus,
     .time-input:focus,
@@ -729,7 +729,7 @@
 
     /* Disabled button states */
     .add-btn:disabled,
-    .reset-btn:disabled,
+    .override-btn:disabled,
     .remove-btn:disabled,
     .auth-btn-primary:disabled,
     .auth-btn-secondary:disabled {

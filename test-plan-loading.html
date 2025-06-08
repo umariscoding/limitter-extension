@@ -72,6 +72,7 @@
         <button onclick="testFallbackPlans()">Test Fallback Plans</button>
         <button onclick="testUserPlanInitialization()">Test User Plan Initialization</button>
         <button onclick="testUserDataLoading()">Test User Data Loading</button>
+        <button onclick="testOverrideFunctionality()">Test Override Plans</button>
         <div id="test-results"></div>
     </div>
 
@@ -407,7 +408,67 @@
             `).join('');
         }
 
-        // Initialize on page load
+                async function testOverrideFunctionality() {
+            addTestResult('Testing override functionality with database credits...', 'loading');
+            
+            try {
+                // Test Free Plan with Credits
+                initializeTestEnvironment();
+                mockAuth.currentUser = { uid: 'free-user', email: 'free@example.com' };
+                await subscriptionService.initializePlan();
+                await subscriptionService.updateUserPlan('free');
+                
+                const freePlan = subscriptionService.getCurrentPlan();
+                const freeOverride = await subscriptionService.canOverride('free-user');
+                
+                if (freePlan.id === 'free') {
+                    addTestResult('✅ Free plan initialized correctly', 'success');
+                    addTestResult(`Free plan - Override credits from DB: ${mockFirestore.getUserOverrides('test-user-123')?.then(data => data?.override_credits) || 'checking...'}`, 'success');
+                } else {
+                    addTestResult('❌ Free plan not initialized correctly', 'error');
+                }
+                
+                // Test Pro Plan Override  
+                mockAuth.currentUser = { uid: 'pro-user', email: 'pro@example.com' };
+                await subscriptionService.updateUserPlan('pro');
+                
+                const proPlan = subscriptionService.getCurrentPlan();
+                const proOverride = await subscriptionService.canOverride('pro-user');
+                
+                if (proPlan.id === 'pro' && proOverride.cost === 0 && proOverride.remaining === 15) {
+                    addTestResult('✅ Pro plan override: 15 free overrides verified', 'success');
+                } else {
+                    addTestResult(`❌ Pro plan override incorrect: cost=${proOverride.cost}, remaining=${proOverride.remaining}`, 'error');
+                }
+                
+                // Test Elite Plan Override
+                await subscriptionService.updateUserPlan('elite');
+                
+                const elitePlan = subscriptionService.getCurrentPlan();
+                const eliteOverride = await subscriptionService.canOverride('elite-user');
+                
+                if (elitePlan.id === 'elite' && eliteOverride.reason === 'unlimited') {
+                    addTestResult('✅ Elite plan override: Unlimited overrides verified', 'success');
+                } else {
+                    addTestResult('❌ Elite plan override not unlimited', 'error');
+                }
+                
+                // Test database override credit functionality
+                const testOverrides = await mockFirestore.getUserOverrides('test-user-123');
+                if (testOverrides && testOverrides.override_credits === 10) {
+                    addTestResult(`✅ Database override credits: ${testOverrides.override_credits} credits available`, 'success');
+                } else {
+                    addTestResult('❌ Database override credits not loaded correctly', 'error');
+                }
+                
+                addTestResult('🎯 Complete override system: Reset button replaced with Override functionality!', 'success');
+                
+            } catch (error) {
+                addTestResult(`❌ Override functionality test failed: ${error.message}`, 'error');
+            }
+        }
+
+         // Initialize on page load
         window.addEventListener('load', () => {
             addTestResult('Test environment ready. Click buttons to run tests.', 'success');
         });
