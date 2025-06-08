@@ -5,10 +5,12 @@ let isAuthenticated = false;
 let firebaseAuth = null;
 let firestore = null;
 let subscriptionService = null;
+let firebaseSyncService = null;
 
 // Import Firebase configuration
 importScripts('firebase-config.js');
 importScripts('subscription-service.js');
+importScripts('firebase-sync-service.js');
 
 // Initialize authentication
 async function initializeAuth() {
@@ -16,13 +18,20 @@ async function initializeAuth() {
     firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
     firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
     subscriptionService = new SubscriptionService(firebaseAuth, firestore);
+    firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
     
     const storedUser = await firebaseAuth.getStoredAuthData();
     isAuthenticated = !!storedUser;
     
-    // If user is authenticated, initialize subscription service
+    // If user is authenticated, initialize subscription service and sync service
     if (isAuthenticated && subscriptionService) {
       await subscriptionService.initializePlan();
+      
+      // Initialize Firebase sync service for cross-device syncing
+      if (firebaseSyncService) {
+        firebaseSyncService.init();
+        console.log('Smart Tab Blocker Background: Firebase sync service initialized');
+      }
       
       // Load user's actual plan data if available
       try {
@@ -274,6 +283,49 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       console.log(`Smart Tab Blocker Background: Content script loaded for ${contentDomain}, shouldTrack: ${contentShouldTrack}, isAuthenticated: ${isAuthenticated}, isEnabled: ${isEnabled}, blockedDomains:`, Object.keys(blockedDomains));
       sendResponse({ shouldTrack: contentShouldTrack });
       break;
+      
+    case 'syncTimerToFirebase':
+      // Content script requesting to sync timer state to Firebase
+      if (!isAuthenticated || !firebaseSyncService) {
+        console.log('Smart Tab Blocker Background: Sync request denied - isAuthenticated:', isAuthenticated, 'syncService:', !!firebaseSyncService);
+        sendResponse({ success: false, error: 'Not authenticated or sync service not available' });
+        break;
+      }
+      
+      console.log('Smart Tab Blocker Background: Processing sync request for domain:', request.domain);
+      firebaseSyncService.syncDomainImmediately(
+        request.domain,
+        request.timeRemaining,
+        request.gracePeriod
+      ).then(() => {
+        sendResponse({ success: true });
+      }).catch(async (error) => {
+        console.error('Smart Tab Blocker Background: Error syncing timer to Firebase:', error);
+        
+        // If error contains authentication issue, debug auth status
+        if (error.message.includes('authenticated') || error.message.includes('auth')) {
+          console.log('Smart Tab Blocker Background: Authentication error detected, debugging...');
+          const authStatus = await firebaseSyncService.checkAuthStatus();
+          console.log('Smart Tab Blocker Background: Auth debug result:', authStatus);
+        }
+        
+        sendResponse({ success: false, error: error.message });
+      });
+      return true; // Keep message channel open for async response
+      
+    case 'debugFirebaseAuth':
+      // Debug Firebase authentication status
+      if (!firebaseSyncService) {
+        sendResponse({ success: false, error: 'Sync service not available' });
+        break;
+      }
+      
+      firebaseSyncService.checkAuthStatus().then(authStatus => {
+        sendResponse({ success: true, authStatus });
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true; // Keep message channel open for async response
       
     default:
       sendResponse({ success: false, error: 'Unknown action' });

@@ -1297,11 +1297,13 @@ document.addEventListener('DOMContentLoaded', function() {
       const siteId = `${user.uid}_${domain}`;
       const now = new Date();
       const todayString = getTodayString();
+      const siteData = await firestore.getBlockedSite(siteId);
       
       console.log(`Updating Firestore for ${domain} after override - resetting timer to ${timerDuration}s`);
       
       // Update the blocked site record to reflect override
       const siteUpdateData = {
+        ...siteData,
         time_remaining: timerDuration, // Reset to full timer duration
         time_spent_today: 0, // Reset daily usage
         last_reset_date: todayString, // Update reset date

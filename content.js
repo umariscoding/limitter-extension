@@ -792,6 +792,9 @@
         showTimer();
         updateTimerDisplay();
         
+        // Track seconds for Firebase sync (every 10 seconds)
+        let secondsCounter = 0;
+        
         countdownTimer = setInterval(() => {
             // Check extension context on each tick
             if (!checkExtensionContext()) {
@@ -803,10 +806,20 @@
                 timeRemaining--;
                 updateTimerDisplay();
                 
+                // Increment seconds counter for Firebase sync
+                secondsCounter++;
+                
+                // Sync to Firebase every 10 seconds
+                if (secondsCounter >= 10) {
+                    syncTimerToFirebase();
+                    secondsCounter = 0; // Reset counter
+                }
+                
                 if (timeRemaining <= 0) {
                     stopCountdownTimer();
                     clearTimerState();
                     markDomainBlockedToday(); // Mark as blocked for the day
+                    syncTimerToFirebase(); // Final sync when timer completes
                     hideTimer();
                     showModal();
                 }
@@ -824,6 +837,40 @@
             countdownTimer = null;
         }
         isTimerPaused = false;
+    }
+    
+    // Sync current timer state to Firebase via background script
+    function syncTimerToFirebase() {
+        if (!checkExtensionContext() || !currentDomain || !isEnabled) {
+            return;
+        }
+        
+        console.log(`Smart Tab Blocker: Syncing timer to Firebase for ${currentDomain} - ${timeRemaining}s remaining`);
+        
+        try {
+            chrome.runtime.sendMessage({
+                action: 'syncTimerToFirebase',
+                domain: currentDomain,
+                timeRemaining: timeRemaining,
+                gracePeriod: gracePeriod,
+                isActive: true,
+                isPaused: isTimerPaused,
+                timestamp: Date.now()
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.log('Smart Tab Blocker: Error syncing timer to Firebase:', chrome.runtime.lastError);
+                    return;
+                }
+                
+                if (response && response.success) {
+                    console.log(`Smart Tab Blocker: Timer synced to Firebase successfully for ${currentDomain}`);
+                } else {
+                    console.log('Smart Tab Blocker: Failed to sync timer to Firebase:', response?.error);
+                }
+            });
+        } catch (error) {
+            console.log('Smart Tab Blocker: Exception while syncing timer to Firebase:', error);
+        }
     }
     
     function createModal(alreadyBlocked = false) {
