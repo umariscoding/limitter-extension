@@ -26,6 +26,8 @@
                 clearInterval(countdownTimer);
                 countdownTimer = null;
             }
+            // Clean up override checker
+            stopOverrideChecker();
             // Hide any UI elements
             if (modal) {
                 hideModal();
@@ -52,6 +54,7 @@
     let lastSyncTime = 0; // Track when we last synced with shared state
     let hasLoadedFromFirebase = false; // Prevent writing to Firebase until we've loaded current state
     let isInitializing = true; // Track if we're still in initialization phase
+    let overrideCheckInterval = null; // Interval for checking override status
     
     // Get unique tab identifier
     function getTabId() {
@@ -216,8 +219,8 @@
                 
                 // Check for override_active flag first
                 if (firebaseState && firebaseState.override_active) {
-                    console.log('Smart Tab Blocker: Override active detected - resetting timer for 10 seconds');
-                    handleOverrideActive(firebaseState);
+                    console.log('Smart Tab Blocker: Override active detected - resetting timer');
+                    handleOverrideReset(firebaseState);
                     resolve();
                     return;
                 }
@@ -344,12 +347,7 @@
                             sharedTimeRemaining = Math.max(0, sharedState.timeRemaining - timeDiff);
                         }
                         
-                        // Skip minimum time logic if override is active
-                        if (window.smartBlockerOverrideActive) {
-                            console.log('Smart Tab Blocker: Override active - skipping minimum time logic in shared state sync');
-                            resolve();
-                            return;
-                        }
+
                         
                         // Always select the MINIMUM time between current and shared state to prevent time inflation
                         const currentTime = timeRemaining;
@@ -524,7 +522,7 @@
                         }
                         
                         console.log(`Smart Tab Blocker: Firebase state - was ${firebaseState.timeRemaining}s, ${timeDiff}s elapsed, now ${adjustedTimeRemaining}s`);
-                        console.log("firebaseState: ",firebaseState)
+                        console.log("Smart Tab Blocker: Complete Firebase state:", firebaseState);
                         resolve({
                             ...firebaseState,
                             timeRemaining: adjustedTimeRemaining
@@ -687,6 +685,9 @@
         isEnabled = true;
         isActiveTab = !document.hidden; // Set initial active status
         
+        // Start override checker immediately
+        startOverrideChecker();
+        
         // Set up visibility change listener
         document.addEventListener('visibilitychange', handleVisibilityChange);
         
@@ -707,6 +708,8 @@
             if (isBlocked) {
                 console.log(`Smart Tab Blocker: ${currentDomain} is already blocked for today`);
                 showModal(true); // true = already blocked
+                // Still start override checker even if blocked (in case of override)
+                startOverrideChecker();
                 return;
             }
             
@@ -720,7 +723,7 @@
                 if (firebaseState && firebaseState.override_active) {
                     console.log('Smart Tab Blocker: Override active detected during initialization');
                     isInitializing = false;
-                    handleOverrideActive(firebaseState);
+                    handleOverrideReset(firebaseState);
                     return;
                 }
                 
@@ -978,6 +981,7 @@
         
         // Clean up UI and variables
         stopCountdownTimer();
+        stopOverrideChecker();
         hideTimer();
         hideModal();
         isEnabled = false;
@@ -1222,7 +1226,7 @@
         // Much more frequent syncing for smooth experience
         let secondsCounter = 0;
         let localSyncCounter = 0; // For inactive tab syncing
-        let firebaseSyncCounter = 0; // For cross-device syncing
+        let crossDeviceCounter = 0; // For cross-device syncing
         
         countdownTimer = setInterval(() => {
             // Check extension context on each tick
@@ -1238,7 +1242,7 @@
                     updateTimerDisplay();
                     
                     secondsCounter++;
-                    firebaseSyncCounter++;
+                    crossDeviceCounter++;
                     
                     // Very frequent Firebase sync for smooth cross-device experience (every 3 seconds)
                     if (secondsCounter >= 3) {
@@ -1246,10 +1250,10 @@
                         secondsCounter = 0;
                     }
                     
-                    // More frequent check for cross-device updates to detect override faster (every 2 seconds)
-                    if (firebaseSyncCounter >= 2) {
+                    // Check for cross-device updates every 6 seconds
+                    if (crossDeviceCounter >= 6) {
                         checkForCrossDeviceUpdates();
-                        firebaseSyncCounter = 0;
+                        crossDeviceCounter = 0;
                     }
                     
                     if (timeRemaining <= 0) {
@@ -1264,7 +1268,7 @@
                 } else {
                     // Inactive tab - sync more frequently for smoother updates
                     localSyncCounter++;
-                    firebaseSyncCounter++;
+                    crossDeviceCounter++;
                     
                     // Sync from local storage every 3 seconds for inactive tabs
                     if (localSyncCounter >= 3) {
@@ -1272,10 +1276,10 @@
                         localSyncCounter = 0;
                     }
                     
-                    // Check Firebase every 2 seconds for cross-device updates on inactive tabs (faster override detection)
-                    if (firebaseSyncCounter >= 2) {
+                    // Check Firebase every 6 seconds for cross-device updates on inactive tabs
+                    if (crossDeviceCounter >= 6) {
                         checkForCrossDeviceUpdates();
-                        firebaseSyncCounter = 0;
+                        crossDeviceCounter = 0;
                     }
                 }
             } else {
@@ -1318,8 +1322,7 @@
                     gracePeriod: gracePeriod,
                     isActive: true,
                     isPaused: isTimerPaused,
-                    timestamp: Date.now(),
-                    clearOverrideActive: window.smartBlockerOverrideActive === false // Clear flag if we just finished override
+                    timestamp: Date.now()
                 }, (response) => {
                     if (chrome.runtime.lastError) {
                         console.log('Smart Tab Blocker: Error syncing timer to Firebase:', chrome.runtime.lastError);
@@ -1948,60 +1951,152 @@
         }
     });
     
-    // Handle override_active flag from Firebase
-    function handleOverrideActive(firebaseState) {
-        console.log('Smart Tab Blocker: Processing override_active - waiting 10 seconds before applying new timer');
+    // Simple function to handle override reset
+    function handleOverrideReset(firebaseState) {
+        console.log('Smart Tab Blocker: 🔄 PROCESSING OVERRIDE - Resetting timer and storage');
+        console.log('Smart Tab Blocker: Firebase state:', firebaseState);
         
-        // Stop current timer immediately
+        // Stop current timer
         if (countdownTimer) {
             clearInterval(countdownTimer);
             countdownTimer = null;
+            console.log('Smart Tab Blocker: ⏹️ Stopped existing timer');
         }
         
-        // Hide any blocking UI
+        // Hide UI
         hideModal();
         hideTimer();
+        console.log('Smart Tab Blocker: 🙈 Hidden blocking UI');
         
-        // Set a flag to prevent minimum time logic during override period
-        window.smartBlockerOverrideActive = true;
+        // Reset timer values
+        const newTimerValue = firebaseState.time_limit || gracePeriod;
+        console.log(`Smart Tab Blocker: ⏱️ Resetting timer from ${timeRemaining}s to ${newTimerValue}s`);
+        timeRemaining = newTimerValue;
+        gracePeriod = newTimerValue;
         
-        // Wait 10 seconds, then reset timer values
-        setTimeout(() => {
-            console.log('Smart Tab Blocker: Override period complete - resetting timer values');
-            
-            // Reset timer to full duration from Firebase
-            timeRemaining = firebaseState.time_limit || gracePeriod;
-            gracePeriod = firebaseState.time_limit || gracePeriod;
-            
-            // Clear override flag
-            window.smartBlockerOverrideActive = false;
-            
-            // Update both Chrome storage and Firebase with new values
-            saveTimerState();
-            
-            // Clear Firebase override_active flag by syncing
-            syncTimerToFirebase().then(() => {
-                // Start fresh timer
-                startCountdownTimer(true);
-                console.log(`Smart Tab Blocker: Timer reset complete - ${timeRemaining}s remaining`);
-            });
-            
-        }, 10000); // 10 seconds
+        // Clear Chrome storage and reset
+        console.log('Smart Tab Blocker: 🗑️ Clearing Chrome storage and daily blocks');
+        clearTimerState();
+        clearDailyBlock();
+        
+        // Start fresh timer
+        console.log('Smart Tab Blocker: ▶️ Starting fresh timer');
+        startCountdownTimer(false);
+        
+        console.log(`Smart Tab Blocker: ✅ OVERRIDE PROCESSING COMPLETE - Timer running with ${timeRemaining}s`);
     }
     
-    // Check for updates from other devices
+    // Start independent override checker
+    function startOverrideChecker() {
+        if (overrideCheckInterval) {
+            clearInterval(overrideCheckInterval);
+        }
+        
+        console.log('Smart Tab Blocker: Starting override checker (every 3 seconds)');
+        overrideCheckInterval = setInterval(checkOverrideStatus, 3000);
+        
+        // Also check immediately
+        checkOverrideStatus();
+    }
+    
+    // Stop override checker
+    function stopOverrideChecker() {
+        if (overrideCheckInterval) {
+            clearInterval(overrideCheckInterval);
+            overrideCheckInterval = null;
+            console.log('Smart Tab Blocker: Stopped override checker');
+        }
+    }
+    
+    // Simple periodic checker for override_active (every 3-4 seconds)
+    function checkOverrideStatus() {
+        if (!checkExtensionContext()) {
+            console.log('Smart Tab Blocker: Extension context invalid, stopping override checker');
+            stopOverrideChecker();
+            return;
+        }
+        
+        if (!isEnabled || !currentDomain) {
+            console.log('Smart Tab Blocker: Not enabled or no domain, skipping override check');
+            return;
+        }
+        
+        console.log(`Smart Tab Blocker: Checking override status for ${currentDomain}...`);
+        
+        loadTimerStateFromFirebase().then(firebaseState => {
+            if (firebaseState) {
+                console.log(`Smart Tab Blocker: Firebase state - override_active: ${firebaseState.override_active}`);
+                
+                if (firebaseState.override_active) {
+                    console.log('Smart Tab Blocker: 🚨 OVERRIDE ACTIVE DETECTED - RESETTING EVERYTHING');
+                    handleOverrideReset(firebaseState);
+                    
+                    // Check if this device initiated the override and should clear it after 10 seconds
+                    checkAndClearOverrideFlag(firebaseState);
+                } else {
+                    console.log('Smart Tab Blocker: No override active, continuing normal operation');
+                }
+            } else {
+                console.log('Smart Tab Blocker: No Firebase state found');
+            }
+        }).catch(error => {
+            console.log('Smart Tab Blocker: Error checking override status:', error);
+        });
+    }
+    
+    // Check if this device should clear the override_active flag after 10 seconds
+    function checkAndClearOverrideFlag(firebaseState) {
+        if (!firebaseState.override_initiated_by || !firebaseState.override_initiated_at) {
+            return;
+        }
+        
+        // Check if this device initiated the override
+        chrome.storage.local.get([`override_device_${currentDomain}`], (result) => {
+            const deviceId = result[`override_device_${currentDomain}`];
+            
+            if (deviceId === firebaseState.override_initiated_by) {
+                console.log('Smart Tab Blocker: This device initiated override - will clear flag after 10 seconds');
+                
+                // Calculate how much time has passed since override was initiated
+                const now = new Date();
+                const initiatedAt = new Date(firebaseState.override_initiated_at);
+                const timeElapsed = now - initiatedAt;
+                const timeToWait = Math.max(0, 10000 - timeElapsed); // 10 seconds minus elapsed time
+                
+                setTimeout(() => {
+                    console.log('Smart Tab Blocker: 10 seconds elapsed - clearing override_active flag');
+                    clearOverrideActiveFlag();
+                }, timeToWait);
+            } else {
+                console.log('Smart Tab Blocker: This device did not initiate override - will not clear flag');
+            }
+        });
+    }
+    
+    // Clear the override_active flag in Firebase (only called by initiating device)
+    function clearOverrideActiveFlag() {
+        if (!currentDomain) return;
+        
+        chrome.runtime.sendMessage({
+            action: 'clearOverrideActive',
+            domain: currentDomain
+        }, (response) => {
+            if (response && response.success) {
+                console.log('Smart Tab Blocker: Successfully cleared override_active flag');
+                // Clean up local device ID
+                chrome.storage.local.remove([`override_device_${currentDomain}`]);
+            } else {
+                console.log('Smart Tab Blocker: Failed to clear override_active flag');
+            }
+        });
+    }
+    
+    // Check for updates from other devices (normal sync)
     function checkForCrossDeviceUpdates() {
         if (!isEnabled || !currentDomain) return;
         
         loadTimerStateFromFirebase().then(firebaseState => {
-            if (firebaseState) {
-                // Check for override_active flag first
-                if (firebaseState.override_active) {
-                    console.log('Smart Tab Blocker: Override active detected in cross-device check');
-                    handleOverrideActive(firebaseState);
-                    return;
-                }
-                
+            if (firebaseState && !firebaseState.override_active) {
                 // Normal cross-device sync logic - use minimum time
                 const currentTime = timeRemaining;
                 const firebaseTime = firebaseState.timeRemaining;

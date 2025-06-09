@@ -1195,12 +1195,22 @@ document.addEventListener('DOMContentLoaded', function() {
       const siteId = `${user.uid}_${domain}`;
       const siteData = await firestore.getBlockedSite(siteId);
       if (siteData) {
+        // Generate unique device identifier for override initiation
+        const deviceId = Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        
         await firestore.updateBlockedSite(siteId, {
           ...siteData,
           override_active: true,
+          override_initiated_by: deviceId,
+          override_initiated_at: new Date(),
           updated_at: new Date()
         });
-        console.log(`Updated override_active to true for ${domain}`);
+        console.log(`Updated override_active to true for ${domain} by device ${deviceId}`);
+        
+        // Store device ID in browser for later clearing
+        chrome.storage.local.set({
+          [`override_device_${domain}`]: deviceId
+        });
       }
 
       // Process the override and update user data first

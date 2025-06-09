@@ -204,7 +204,7 @@ class FirebaseSyncService {
   }
 
   // Sync specific domain immediately (for event-based syncing)
-  async syncDomainImmediately(domain, timeRemaining, gracePeriod, clearOverrideActive = false) {
+  async syncDomainImmediately(domain, timeRemaining, gracePeriod) {
     try {
       // Normalize domain to ensure consistency
       const normalizedDomain = this.normalizeDomain(domain);
@@ -287,11 +287,7 @@ class FirebaseSyncService {
         updated_at: now
       };
 
-      // Clear override_active flag if requested
-      if (clearOverrideActive) {
-        updatedSiteData.override_active = false;
-        console.log(`Firebase Sync Service: Cleared override_active flag for ${normalizedDomain}`);
-      }
+
 
       // If timer has reached zero, mark as blocked
       if (timeRemaining <= 0) {

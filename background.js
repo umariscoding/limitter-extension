@@ -432,8 +432,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       firebaseSyncService.syncDomainImmediately(
         request.domain,
         request.timeRemaining,
-        request.gracePeriod,
-        request.clearOverrideActive
+        request.gracePeriod
       ).then(() => {
         sendResponse({ success: true });
       }).catch(async (error) => {
@@ -482,6 +481,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         })
         .catch(error => {
           console.error('Smart Tab Blocker Background: Error loading timer from Firebase:', error);
+          sendResponse({ success: false, error: error.message });
+        });
+      return true; // Keep message channel open for async response
+      
+    case 'clearOverrideActive':
+      // Clear override_active flag in Firebase
+      if (!isAuthenticated || !firebaseSyncService) {
+        sendResponse({ success: false, error: 'Not authenticated or sync service not available' });
+        break;
+      }
+      
+      console.log('Smart Tab Blocker Background: Clearing override_active flag for domain:', request.domain);
+      clearOverrideActiveInFirebase(request.domain)
+        .then(() => {
+          sendResponse({ success: true });
+        })
+        .catch(error => {
+          console.error('Smart Tab Blocker Background: Error clearing override_active flag:', error);
           sendResponse({ success: false, error: error.message });
         });
       return true; // Keep message channel open for async response
@@ -725,6 +742,55 @@ function getTodayString() {
   return today.getFullYear() + '-' + 
          String(today.getMonth() + 1).padStart(2, '0') + '-' + 
          String(today.getDate()).padStart(2, '0');
+}
+
+// Clear override_active flag in Firebase
+async function clearOverrideActiveInFirebase(domain) {
+  try {
+    if (!firestore || !firebaseAuth) {
+      throw new Error('Firebase services not available');
+    }
+    
+    const user = firebaseAuth.getCurrentUser();
+    if (!user) {
+      const storedUser = await firebaseAuth.getStoredAuthData();
+      if (!storedUser) {
+        throw new Error('No authenticated user');
+      }
+    }
+    
+    const userId = user?.uid || user?.id;
+    if (!userId) {
+      throw new Error('No user ID available');
+    }
+    
+    // Normalize domain for consistency
+    const normalizedDomain = domain.replace(/^www\./, '').toLowerCase();
+    const siteId = `${userId}_${normalizedDomain}`;
+    
+    console.log(`Smart Tab Blocker Background: Clearing override_active for ${normalizedDomain} (siteId: ${siteId})`);
+    
+    const siteData = await firestore.getBlockedSite(siteId);
+    
+    if (siteData) {
+      const updatedData = {
+        ...siteData,
+        override_active: false,
+        override_initiated_by: null,
+        override_initiated_at: null,
+        updated_at: new Date()
+      };
+      
+      await firestore.updateBlockedSite(siteId, updatedData);
+      console.log(`Smart Tab Blocker Background: Successfully cleared override_active for ${normalizedDomain}`);
+    } else {
+      console.log(`Smart Tab Blocker Background: No site data found for ${normalizedDomain}`);
+    }
+    
+  } catch (error) {
+    console.error('Smart Tab Blocker Background: Error clearing override_active:', error);
+    throw error;
+  }
 }
 
 // Handle override requests from content scripts
