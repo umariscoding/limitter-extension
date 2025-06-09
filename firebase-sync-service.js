@@ -122,9 +122,10 @@ class FirebaseSyncService {
   // Sync a specific timer state to Firestore
   async syncTimerStateToFirestore(userId, timerState) {
     try {
-      // Normalize domain for consistency
+      // Normalize domain for consistency - do this outside try block to ensure availability
       const normalizedDomain = this.normalizeDomain(timerState.domain);
       const siteId = `${userId}_${normalizedDomain}`;
+      
       const now = new Date();
       
       // Prevent duplicate syncs for the same site
@@ -192,7 +193,7 @@ class FirebaseSyncService {
     } catch (error) {
       console.error(`Firebase Sync Service: Error syncing ${normalizedDomain}:`, error);
     } finally {
-      this.pendingSyncs.delete(`${userId}_${normalizedDomain}`);
+      this.pendingSyncs.delete(siteId);
     }
   }
 
@@ -241,29 +242,17 @@ class FirebaseSyncService {
       
       // Get existing site data
       const existingSite = await this.firestore.getBlockedSite(siteId);
-      
+      console.log('existingSite', existingSite);
       if (!existingSite) {
         console.log(`Firebase Sync Service: Site ${normalizedDomain} not found in Firestore, creating new entry for sync`);
         // Create a new site entry if it doesn't exist
         const todayString = this.getTodayString();
         const newSiteData = {
-          user_id: userId,
-          url: normalizedDomain,
-          name: normalizedDomain,
-          time_limit: gracePeriod,
+          ...existingSite,
           time_remaining: timeRemaining,
           time_spent_today: Math.max(0, gracePeriod - timeRemaining),
-          last_reset_date: todayString,
-          is_blocked: timeRemaining <= 0,
-          is_active: true,
           blocked_until: timeRemaining <= 0 ? this.getEndOfDay() : null,
-          schedule: null,
-          daily_usage: {},
-          total_time_spent: Math.max(0, gracePeriod - timeRemaining),
-          access_count: 1,
           last_accessed: now,
-          created_at: now,
-          updated_at: now
         };
 
         await this.firestore.updateBlockedSite(siteId, newSiteData);

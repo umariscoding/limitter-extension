@@ -48,6 +48,8 @@
     let tabId = null;
     let currentDomain = null;
     let gracePeriod = 20;
+    let isActiveTab = true; // Track if this is the currently active tab
+    let lastSyncTime = 0; // Track when we last synced with shared state
     
     // Get unique tab identifier
     function getTabId() {
@@ -185,6 +187,67 @@
         console.log(`Smart Tab Blocker: ${getCurrentDomain()} blocked for the rest of the day`);
     }
     
+    // Sync timer state from shared storage (for tab switching)
+    function syncFromSharedState() {
+        return new Promise((resolve) => {
+            const storageKey = getStorageKey();
+            if (!storageKey) {
+                resolve();
+                return;
+            }
+            
+            try {
+                if (!chrome.runtime?.id) {
+                    resolve();
+                    return;
+                }
+                
+                chrome.storage.local.get([storageKey], (result) => {
+                    if (chrome.runtime.lastError) {
+                        console.log("Smart Tab Blocker: Error syncing from shared state:", chrome.runtime.lastError);
+                        resolve();
+                        return;
+                    }
+                    
+                    const sharedState = result[storageKey];
+                    if (sharedState && sharedState.date === getTodayString()) {
+                        // Calculate elapsed time since last update
+                        const now = Date.now();
+                        const timeDiff = Math.floor((now - sharedState.timestamp) / 1000);
+                        
+                        // Update our timer with shared state, accounting for elapsed time
+                        let newTimeRemaining = sharedState.timeRemaining;
+                        if (sharedState.isActive && !sharedState.isPaused) {
+                            newTimeRemaining = Math.max(0, sharedState.timeRemaining - timeDiff);
+                        }
+                        
+                        timeRemaining = newTimeRemaining;
+                        gracePeriod = sharedState.gracePeriod || gracePeriod;
+                        lastSyncTime = now;
+                        
+                        console.log(`Smart Tab Blocker: Synced from shared state - ${timeRemaining}s remaining (was ${sharedState.timeRemaining}s, ${timeDiff}s elapsed)`);
+                        
+                        updateTimerDisplay();
+                        
+                        // If timer has expired, handle blocking
+                        if (timeRemaining <= 0) {
+                            stopCountdownTimer();
+                            clearTimerState();
+                            markDomainBlockedToday();
+                            hideTimer();
+                            showModal();
+                        }
+                    }
+                    
+                    resolve();
+                });
+            } catch (e) {
+                console.log("Smart Tab Blocker: Extension context invalidated during sync");
+                resolve();
+            }
+        });
+    }
+
     // Save timer state to storage
     function saveTimerState() {
         const storageKey = getStorageKey();
@@ -192,16 +255,17 @@
         
         const state = {
             timeRemaining: timeRemaining,
-            isActive: !!countdownTimer,
+            isActive: !!countdownTimer && isActiveTab, // Only active tab should be marked as running the timer
             isPaused: isTimerPaused,
             tabId: getTabId(),
             timestamp: Date.now(),
             url: window.location.href,
             gracePeriod: gracePeriod,
-            date: getTodayString()
+            date: getTodayString(),
+            activeTabId: isActiveTab ? getTabId() : null // Track which tab is currently active
         };
         
-        console.log(`Smart Tab Blocker: Saving timer state with ${timeRemaining}s remaining`);
+        console.log(`Smart Tab Blocker: Saving timer state with ${timeRemaining}s remaining (active: ${isActiveTab})`);
         
         try {
             if (chrome.runtime?.id) {
@@ -350,9 +414,15 @@
         if (!isEnabled || !countdownTimer) return;
         
         if (document.hidden) {
+            // Tab became inactive - pause timer and mark as inactive
+            isActiveTab = false;
             pauseTimer();
         } else {
-            resumeTimer();
+            // Tab became active - sync with shared state and resume if needed
+            isActiveTab = true;
+            syncFromSharedState().then(() => {
+                resumeTimer();
+            });
         }
     }
     
@@ -369,8 +439,16 @@
     function resumeTimer() {
         if (countdownTimer && isTimerPaused) {
             isTimerPaused = false;
-            saveTimerState();
-            updateTimerDisplay();
+            // If this tab is becoming active, sync with shared state first
+            if (isActiveTab) {
+                syncFromSharedState().then(() => {
+                    saveTimerState();
+                    updateTimerDisplay();
+                });
+            } else {
+                saveTimerState();
+                updateTimerDisplay();
+            }
         }
     }
     
@@ -386,9 +464,22 @@
         
         isInitialized = true;
         isEnabled = true;
+        isActiveTab = !document.hidden; // Set initial active status
         
         // Set up visibility change listener
         document.addEventListener('visibilitychange', handleVisibilityChange);
+        
+        // Add storage change listener for cross-tab syncing
+        chrome.storage.onChanged.addListener((changes, areaName) => {
+            if (areaName === 'local') {
+                const storageKey = getStorageKey();
+                if (storageKey && changes[storageKey] && !isActiveTab) {
+                    // Another tab updated the timer state, sync from it
+                    console.log('Smart Tab Blocker: Timer state changed by another tab, syncing...');
+                    syncFromSharedState();
+                }
+            }
+        });
         
         // First check if domain is blocked for today
         isDomainBlockedToday().then(isBlocked => {
@@ -398,7 +489,7 @@
                 return;
             }
             
-            // Not blocked, try to restore timer state
+            // Not blocked, try to restore timer state or sync with shared state
             if (domainConfig.savedState) {
                 // Use the saved state that was passed in
                 console.log(`Smart Tab Blocker: Using provided saved state with ${domainConfig.savedState.timeRemaining}s remaining`);
@@ -407,18 +498,21 @@
                 isTimerPaused = domainConfig.savedState.isPaused || document.hidden;
                 startCountdownTimer(true);
             } else {
-                // No saved state provided, check storage
-                loadTimerState().then(savedState => {
-                    if (savedState && savedState.timeRemaining > 0) {
-                        console.log(`Smart Tab Blocker: Loaded timer state from storage with ${savedState.timeRemaining}s remaining`);
-                        timeRemaining = savedState.timeRemaining;
-                        gracePeriod = savedState.gracePeriod || gracePeriod;
-                        isTimerPaused = savedState.isPaused || document.hidden;
-                        startCountdownTimer(true);
-                    } else {
-                        console.log(`Smart Tab Blocker: Starting fresh timer with ${gracePeriod}s`);
-                        startCountdownTimer();
-                    }
+                // No saved state provided, sync with shared state first
+                syncFromSharedState().then(() => {
+                    // Check if we got valid shared state
+                    loadTimerState().then(savedState => {
+                        if (savedState && savedState.timeRemaining > 0) {
+                            console.log(`Smart Tab Blocker: Loaded shared timer state with ${savedState.timeRemaining}s remaining`);
+                            timeRemaining = savedState.timeRemaining;
+                            gracePeriod = savedState.gracePeriod || gracePeriod;
+                            isTimerPaused = savedState.isPaused || document.hidden;
+                            startCountdownTimer(true);
+                        } else {
+                            console.log(`Smart Tab Blocker: Starting fresh timer with ${gracePeriod}s`);
+                            startCountdownTimer();
+                        }
+                    });
                 });
             }
         });
@@ -802,12 +896,14 @@
         }
         
         isTimerPaused = document.hidden;
+        isActiveTab = !document.hidden; // Set active status based on visibility
         
         showTimer();
         updateTimerDisplay();
         
         // Track seconds for Firebase sync (every 10 seconds)
         let secondsCounter = 0;
+        let syncCounter = 0; // Counter for periodic sync from shared state
         
         countdownTimer = setInterval(() => {
             // Check extension context on each tick
@@ -817,25 +913,36 @@
             }
             
             if (!isTimerPaused) {
-                timeRemaining--;
-                updateTimerDisplay();
-                
-                // Increment seconds counter for Firebase sync
-                secondsCounter++;
-                
-                // Sync to Firebase every 10 seconds
-                if (secondsCounter >= 10) {
-                    syncTimerToFirebase();
-                    secondsCounter = 0; // Reset counter
-                }
-                
-                if (timeRemaining <= 0) {
-                    stopCountdownTimer();
-                    clearTimerState();
-                    markDomainBlockedToday(); // Mark as blocked for the day
-                    syncTimerToFirebase(); // Final sync when timer completes
-                    hideTimer();
-                    showModal();
+                // Only decrement time if this is the active tab
+                if (isActiveTab) {
+                    timeRemaining--;
+                    updateTimerDisplay();
+                    
+                    // Increment seconds counter for Firebase sync
+                    secondsCounter++;
+                    
+                    // Sync to Firebase every 10 seconds
+                    if (secondsCounter >= 10) {
+                        syncTimerToFirebase();
+                        secondsCounter = 0; // Reset counter
+                    }
+                    
+                    if (timeRemaining <= 0) {
+                        stopCountdownTimer();
+                        clearTimerState();
+                        markDomainBlockedToday(); // Mark as blocked for the day
+                        syncTimerToFirebase(); // Final sync when timer completes
+                        hideTimer();
+                        showModal();
+                        return;
+                    }
+                } else {
+                    // If this tab is not active, periodically sync from shared state
+                    syncCounter++;
+                    if (syncCounter >= 5) { // Sync every 5 seconds for inactive tabs
+                        syncFromSharedState();
+                        syncCounter = 0;
+                    }
                 }
             } else {
                 updateTimerDisplay();
