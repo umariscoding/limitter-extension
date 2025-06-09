@@ -393,11 +393,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
     case 'syncTimerToFirebase':
       // Content script requesting to sync timer state to Firebase
-      if (!isAuthenticated) {
-        console.log('Smart Tab Blocker Background: Sync request denied - user not authenticated');
-        sendResponse({ success: false, error: 'User not authenticated' });
-        break;
-      }
+      // if (!isAuthenticated) {
+      //   console.log('Smart Tab Blocker Background: Sync request denied - user not authenticated');
+      //   sendResponse({ success: false, error: 'User not authenticated' });
+      //   break;
+      // }
       
       if (!firebaseSyncService) {
         console.error('Smart Tab Blocker Background: Sync request denied - FirebaseSyncService not available');
@@ -432,7 +432,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       firebaseSyncService.syncDomainImmediately(
         request.domain,
         request.timeRemaining,
-        request.gracePeriod
+        request.gracePeriod,
+        request.clearOverrideActive
       ).then(() => {
         sendResponse({ success: true });
       }).catch(async (error) => {
@@ -627,7 +628,7 @@ function updateAllTrackedTabs() {
 // Load timer state from Firebase for cross-device syncing
 async function loadTimerStateFromFirebase(domain) {
   try {
-    if (!isAuthenticated || !firestore || !firebaseAuth) {
+    if (!firestore || !firebaseAuth) {
       console.log('Smart Tab Blocker Background: Not authenticated or services not available for Firebase load');
       return null;
     }
@@ -701,9 +702,10 @@ async function loadTimerStateFromFirebase(domain) {
           timestamp: siteData.updated_at ? siteData.updated_at.getTime() : Date.now(),
           url: siteData.url,
           date: today,
-          domain: normalizedDomain
+          domain: normalizedDomain,
+          override_active: siteData.override_active,
+          time_limit: siteData.time_limit
         };
-        
         console.log(`Smart Tab Blocker Background: Loaded active timer state from Firebase - ${timerState.timeRemaining}s remaining`);
         return timerState;
       }

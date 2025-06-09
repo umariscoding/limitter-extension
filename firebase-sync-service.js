@@ -204,7 +204,7 @@ class FirebaseSyncService {
   }
 
   // Sync specific domain immediately (for event-based syncing)
-  async syncDomainImmediately(domain, timeRemaining, gracePeriod) {
+  async syncDomainImmediately(domain, timeRemaining, gracePeriod, clearOverrideActive = false) {
     try {
       // Normalize domain to ensure consistency
       const normalizedDomain = this.normalizeDomain(domain);
@@ -248,11 +248,24 @@ class FirebaseSyncService {
         // Create a new site entry if it doesn't exist
         const todayString = this.getTodayString();
         const newSiteData = {
-          ...existingSite,
+          user_id: userId,
+          url: normalizedDomain,
+          name: normalizedDomain,
+          time_limit: gracePeriod,
           time_remaining: timeRemaining,
           time_spent_today: Math.max(0, gracePeriod - timeRemaining),
+          last_reset_date: todayString,
+          is_blocked: timeRemaining <= 0,
+          is_active: true,
           blocked_until: timeRemaining <= 0 ? this.getEndOfDay() : null,
+          schedule: null,
+          daily_usage: {},
+          total_time_spent: Math.max(0, gracePeriod - timeRemaining),
+          access_count: 1,
           last_accessed: now,
+          created_at: now,
+          updated_at: now,
+          override_active: false // Ensure new sites don't have override_active set
         };
 
         await this.firestore.updateBlockedSite(siteId, newSiteData);
@@ -273,6 +286,12 @@ class FirebaseSyncService {
         last_accessed: now,
         updated_at: now
       };
+
+      // Clear override_active flag if requested
+      if (clearOverrideActive) {
+        updatedSiteData.override_active = false;
+        console.log(`Firebase Sync Service: Cleared override_active flag for ${normalizedDomain}`);
+      }
 
       // If timer has reached zero, mark as blocked
       if (timeRemaining <= 0) {

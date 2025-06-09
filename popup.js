@@ -1121,10 +1121,10 @@ document.addEventListener('DOMContentLoaded', function() {
   // Handle override based on subscription plan
   async function handleOverride(domain) {
     // Check if user is authenticated
-    if (!isUserAuthenticated()) {
-      showError('Please log in to use overrides');
-      return;
-    }
+    // if (!isUserAuthenticated()) {
+    //   showError('Please log in to use overrides');
+    //   return;
+    // }
 
     try {
       const user = firebaseAuth.getCurrentUser();
@@ -1190,6 +1190,17 @@ document.addEventListener('DOMContentLoaded', function() {
       const user = firebaseAuth.getCurrentUser();
       if (!user) {
         throw new Error('User not authenticated');
+      }
+
+      const siteId = `${user.uid}_${domain}`;
+      const siteData = await firestore.getBlockedSite(siteId);
+      if (siteData) {
+        await firestore.updateBlockedSite(siteId, {
+          ...siteData,
+          override_active: true,
+          updated_at: new Date()
+        });
+        console.log(`Updated override_active to true for ${domain}`);
       }
 
       // Process the override and update user data first
