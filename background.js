@@ -118,7 +118,7 @@ chrome.runtime.onInstalled.addListener(async () => {
     }
     
     // Only update tabs AFTER everything is fully initialized
-    if (isAuthenticated && firebaseSyncService) {
+    if (firebaseSyncService) {
       console.log('Smart Tab Blocker: Authentication and Firebase ready - updating tracked tabs');
       setTimeout(() => {
         updateAllTrackedTabs();
@@ -136,7 +136,7 @@ chrome.runtime.onStartup.addListener(async () => {
   await loadConfiguration();
   
   // Only update tabs AFTER everything is fully initialized
-  if (isAuthenticated && firebaseSyncService) {
+  if (firebaseSyncService) {
     console.log('Smart Tab Blocker: Startup complete - updating tracked tabs');
     setTimeout(() => {
       updateAllTrackedTabs();
@@ -721,6 +721,8 @@ async function loadTimerStateFromFirebase(domain) {
           date: today,
           domain: normalizedDomain,
           override_active: siteData.override_active,
+          override_initiated_by: siteData.override_initiated_by,
+          override_initiated_at: siteData.override_initiated_at,
           time_limit: siteData.time_limit
         };
         console.log(`Smart Tab Blocker Background: Loaded active timer state from Firebase - ${timerState.timeRemaining}s remaining`);

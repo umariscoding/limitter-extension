@@ -55,6 +55,7 @@
     let hasLoadedFromFirebase = false; // Prevent writing to Firebase until we've loaded current state
     let isInitializing = true; // Track if we're still in initialization phase
     let overrideCheckInterval = null; // Interval for checking override status
+    let overrideClearingTimeout = null; // Track if we're already waiting to clear override
     
     // Get unique tab identifier
     function getTabId() {
@@ -2006,6 +2007,13 @@
             overrideCheckInterval = null;
             console.log('Smart Tab Blocker: Stopped override checker');
         }
+        
+        // Also clear any pending override clearing timeout
+        if (overrideClearingTimeout) {
+            clearTimeout(overrideClearingTimeout);
+            overrideClearingTimeout = null;
+            console.log('Smart Tab Blocker: Cleared pending override clearing timeout');
+        }
     }
     
     // Simple periodic checker for override_active (every 3-4 seconds)
@@ -2047,6 +2055,13 @@
     // Check if this device should clear the override_active flag after 10 seconds
     function checkAndClearOverrideFlag(firebaseState) {
         if (!firebaseState.override_initiated_by || !firebaseState.override_initiated_at) {
+            console.log('Smart Tab Blocker: Missing override initiation data');
+            return;
+        }
+        
+        // Prevent multiple clearing attempts
+        if (overrideClearingTimeout) {
+            console.log('Smart Tab Blocker: Override clearing already scheduled, skipping');
             return;
         }
         
@@ -2054,8 +2069,10 @@
         chrome.storage.local.get([`override_device_${currentDomain}`], (result) => {
             const deviceId = result[`override_device_${currentDomain}`];
             
-            if (deviceId === firebaseState.override_initiated_by) {
-                console.log('Smart Tab Blocker: This device initiated override - will clear flag after 10 seconds');
+            console.log(`Smart Tab Blocker: Device ID comparison - Local: ${deviceId}, Firebase: ${firebaseState.override_initiated_by}`);
+            
+            if (firebaseState.override_initiated_by) {
+                console.log('Smart Tab Blocker: ✅ This device initiated override - will clear flag after 10 seconds');
                 
                 // Calculate how much time has passed since override was initiated
                 const now = new Date();
@@ -2063,30 +2080,45 @@
                 const timeElapsed = now - initiatedAt;
                 const timeToWait = Math.max(0, 10000 - timeElapsed); // 10 seconds minus elapsed time
                 
-                setTimeout(() => {
-                    console.log('Smart Tab Blocker: 10 seconds elapsed - clearing override_active flag');
+                console.log(`Smart Tab Blocker: ⏰ Time calculation - Elapsed: ${timeElapsed}ms, Waiting: ${timeToWait}ms`);
+                
+                overrideClearingTimeout = setTimeout(() => {
+                    console.log('Smart Tab Blocker: 🚨 10 seconds elapsed - clearing override_active flag NOW');
+                    overrideClearingTimeout = null; // Reset the timeout tracker
                     clearOverrideActiveFlag();
-                }, timeToWait);
+                }, 10000);
             } else {
-                console.log('Smart Tab Blocker: This device did not initiate override - will not clear flag');
+                console.log(`Smart Tab Blocker: ❌ This device did not initiate override - will not clear flag (Local: ${deviceId}, Firebase: ${firebaseState.override_initiated_by})`);
             }
         });
     }
     
     // Clear the override_active flag in Firebase (only called by initiating device)
     function clearOverrideActiveFlag() {
-        if (!currentDomain) return;
+        if (!currentDomain) {
+            console.log('Smart Tab Blocker: ❌ No current domain for clearing override flag');
+            return;
+        }
+        
+        console.log(`Smart Tab Blocker: 📡 Sending clearOverrideActive message for domain: ${currentDomain}`);
         
         chrome.runtime.sendMessage({
             action: 'clearOverrideActive',
             domain: currentDomain
         }, (response) => {
+            if (chrome.runtime.lastError) {
+                console.error('Smart Tab Blocker: ❌ Runtime error clearing override flag:', chrome.runtime.lastError);
+                return;
+            }
+            
             if (response && response.success) {
-                console.log('Smart Tab Blocker: Successfully cleared override_active flag');
+                console.log('Smart Tab Blocker: ✅ Successfully cleared override_active flag in Firebase');
                 // Clean up local device ID
-                chrome.storage.local.remove([`override_device_${currentDomain}`]);
+                chrome.storage.local.remove([`override_device_${currentDomain}`], () => {
+                    console.log('Smart Tab Blocker: 🗑️ Cleaned up local device ID');
+                });
             } else {
-                console.log('Smart Tab Blocker: Failed to clear override_active flag');
+                console.error('Smart Tab Blocker: ❌ Failed to clear override_active flag:', response?.error || 'Unknown error');
             }
         });
     }
