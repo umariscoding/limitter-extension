@@ -299,57 +299,27 @@ document.addEventListener('DOMContentLoaded', function() {
       const now = new Date();
       const todayString = getTodayString();
       
-      // Check if site already exists in Firestore
-      const existingSite = await firestore.getBlockedSite(siteId);
+      // This function now only handles creating new sites
+      console.log(`Creating new site ${domain} in Firestore`);
       
-      let siteData;
-      if (existingSite) {
-        // Site exists (either active or inactive) - update it
-        console.log(`Updating existing site ${domain} in Firestore (was active: ${existingSite.is_active})`);
-        
-        siteData = {
-          user_id: user.uid,
-          url: domain,
-          name: domain,
-          time_limit: timer,
-          time_remaining: timer,
-          time_spent_today: 0,
-          last_reset_date: todayString,
-          is_blocked: false,
-          is_active: true, // Reactivate if it was inactive
-          blocked_until: null,
-          schedule: null,
-          // Keep original created_at if it exists
-          created_at: existingSite.created_at || now,
-          updated_at: now
-        };
-        
-        if (!existingSite.is_active) {
-          console.log(`Reactivating previously removed site: ${domain}`);
-        }
-      } else {
-        // New site - create with all fields
-        console.log(`Creating new site ${domain} in Firestore`);
-        
-        siteData = {
-          user_id: user.uid,
-          url: domain,
-          name: domain,
-          time_limit: timer,
-          time_remaining: timer,
-          time_spent_today: 0,
-          last_reset_date: todayString,
-          is_blocked: false,
-          is_active: true,
-          blocked_until: null,
-          schedule: null,
-          created_at: now,
-          updated_at: now
-        };
-      }
+      const siteData = {
+        user_id: user.uid,
+        url: domain,
+        name: domain,
+        time_limit: timer,
+        time_remaining: timer,
+        time_spent_today: 0,
+        last_reset_date: todayString,
+        is_blocked: false,
+        is_active: true,
+        blocked_until: null,
+        schedule: null,
+        created_at: now,
+        updated_at: now
+      };
 
       await firestore.updateBlockedSite(siteId, siteData);
-      console.log(`Synced domain ${domain} to Firestore`);
+      console.log(`Created new domain ${domain} in Firestore`);
 
       // Update user profile stats if we have one
       if (userProfile) {
@@ -818,7 +788,6 @@ document.addEventListener('DOMContentLoaded', function() {
     if (!input) return '';
     
     let domain = input.trim().toLowerCase();
-    console.log('Domain cleaning - Input:', input);
     
     try {
       // If it looks like a URL, parse it properly
@@ -830,16 +799,13 @@ document.addEventListener('DOMContentLoaded', function() {
         
         const url = new URL(domain);
         domain = url.hostname;
-        console.log('Domain cleaning - After URL parsing:', domain);
       }
       
       // Remove www. prefix if present
       domain = domain.replace(/^www\./, '');
-      console.log('Domain cleaning - After removing www:', domain);
       
       // Remove any remaining path, query params, or fragments
       domain = domain.split('/')[0].split('?')[0].split('#')[0];
-      console.log('Domain cleaning - Final result:', domain);
       
       return domain;
     } catch (error) {
@@ -855,7 +821,6 @@ document.addEventListener('DOMContentLoaded', function() {
       // Remove path and query parameters
       domain = domain.split('/')[0].split('?')[0].split('#')[0];
       
-      console.log('Domain cleaning - Manual cleaning result:', domain);
       return domain;
     }
   }
@@ -1021,15 +986,52 @@ document.addEventListener('DOMContentLoaded', function() {
     // Clean domain (remove everything before www, then remove www, then remove path)
     const cleanDomain = cleanDomainFromUrl(domain);
     
-    // Check if domain already exists locally
-    const isExistingDomain = domains.hasOwnProperty(cleanDomain);
+    // Check if domain already exists in Firestore
+    const user = firebaseAuth.getCurrentUser();
+    if (!user) {
+      showError('Please log in to add domains');
+      return;
+    }
+
+    const siteId = `${user.uid}_${cleanDomain}`;
+    const existingSite = await firestore.getBlockedSite(siteId);
     
-    domains[cleanDomain] = totalSeconds;
-    saveDomains();
+    if (existingSite) {
+      if (existingSite.is_active) {
+        // Site already exists and is active - show message and return
+        showWarning(`${cleanDomain} is already being tracked`);
+        return;
+      } else {
+        // Site exists but is inactive - reactivate it without changing time_limit or time_remaining
+        console.log(`Reactivating inactive site: ${cleanDomain}`);
+        const now = new Date();
+        const reactivatedSiteData = {
+          ...existingSite,
+          is_active: true,
+          updated_at: now
+          // Don't change time_limit or time_remaining
+        };
+        
+        await firestore.updateBlockedSite(siteId, reactivatedSiteData);
+        
+        // Add to local domains with existing time_limit
+        domains[cleanDomain] = existingSite.time_limit;
+        saveDomains();
+        
+        showFeedback(`Reactivated ${cleanDomain} with existing ${formatTime(existingSite.time_limit)} timer`);
+      }
+    } else {
+      // New site - add normally
+      domains[cleanDomain] = totalSeconds;
+      saveDomains();
+      
+      // Sync to Firestore (create new site)
+      await syncDomainToFirestore(cleanDomain, totalSeconds);
+      
+      showFeedback(`Added ${cleanDomain} with ${formatTime(totalSeconds)} timer. Open tabs for this site will be reloaded.`);
+    }
     
-    // Sync to Firestore (this will handle both new and existing sites)
-    await syncDomainToFirestore(cleanDomain, totalSeconds);
-    
+    // Common actions for both new and reactivated sites
     // Notify background script that a domain was added
     safeChromeCall(() => {
       chrome.runtime.sendMessage({ action: 'domainAdded', domain: cleanDomain });
@@ -1074,9 +1076,6 @@ document.addEventListener('DOMContentLoaded', function() {
       minutesInput.value = '';
       secondsInput.value = '';
     }
-    
-    const actionText = isExistingDomain ? 'Updated' : 'Added';
-    showFeedback(`${actionText} ${cleanDomain} with ${formatTime(totalSeconds)} timer. Open tabs for this site will be reloaded.`);
   }
   
   async function removeDomain(domain) {
