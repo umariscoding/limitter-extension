@@ -164,6 +164,10 @@
                         timestamp: Date.now(),
                         domain: getCurrentDomain()
                     }
+                }).then(() => {
+                    // After successfully saving to Chrome storage, also sync to Firebase
+                    // This will update the blocked site with is_blocked = true and blocked_until
+                    syncTimerToFirebase();
                 }).catch((error) => {
                     if (error.message && error.message.includes('Extension context invalidated')) {
                         console.log("Smart Tab Blocker: Extension context invalidated, cannot mark domain as blocked");
@@ -203,6 +207,9 @@
             if (chrome.runtime?.id) {
                 chrome.storage.local.set({
                     [storageKey]: state
+                }).then(() => {
+                    // After successfully saving to Chrome storage, also sync to Firebase
+                    syncTimerToFirebase();
                 }).catch((error) => {
                     if (error.message && error.message.includes('Extension context invalidated')) {
                         console.log("Smart Tab Blocker: Extension context invalidated, cannot save timer state");
@@ -488,10 +495,17 @@
                 console.log('Smart Tab Blocker: Error communicating with background script:', chrome.runtime.lastError);
                 return;
             }
+            
+            // If background responds that authentication is still initializing, wait for retry
+            if (response && response.initializing) {
+                console.log(`Smart Tab Blocker: Background script is still initializing for ${getCurrentDomain()}, waiting for retry`);
+                return; // Background will send updateConfig message when ready
+            }
+            
             // If background responds that domain should not be tracked, stop initialization
-            if (response!={} && response.shouldTrack === false) {
+            if (response && response.shouldTrack === false) {
                 console.log('Response:', response);
-                console.log(`Smart Tab Blocker: ${response} Background script says not to track ${getCurrentDomain()}`);
+                console.log(`Smart Tab Blocker: Background script says not to track ${getCurrentDomain()}`);
                 // Ensure we clean up any state for this domain
                 clearAllStateForDomain();
                 return;
@@ -939,7 +953,6 @@
                     // Override granted, hide modal and allow access
                     hideModal();
                     clearDailyBlock();
-                    // No message needed - just clear the block silently
                 }
             } else {
                 if (response && response.reason === 'no_overrides' && response.redirectUrl) {
@@ -1206,6 +1219,20 @@
     // Global initialization function for background script injection
     window.smartBlockerInitialize = initializeWithConfig;
     
+    // Global message listener for delayed initialization (when authentication is still initializing)
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request.action === 'updateConfig' && !isInitialized) {
+            // Handle delayed initialization when authentication completes
+            if (request.enabled && request.domainConfig) {
+                console.log(`Smart Tab Blocker: Received delayed initialization for ${getCurrentDomain()}`);
+                initializeWithConfig(request.domainConfig);
+                sendResponse({ success: true });
+            }
+            return true;
+        }
+        return false; // Let other handlers process the message
+    });
+
     // Check if we have injected config
     if (window.smartBlockerConfig && checkExtensionContext()) {
         initializeWithConfig(window.smartBlockerConfig);

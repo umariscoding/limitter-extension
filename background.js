@@ -63,8 +63,10 @@ async function initializeAuth() {
 chrome.runtime.onInstalled.addListener(async () => {
   console.log('Smart Tab Blocker installed');
   
-  // Initialize authentication first
+  // Initialize authentication first and wait for it to complete
   await initializeAuth();
+  await loadConfiguration();
+  
   chrome.storage.sync.get(['smartBlockerEnabled', 'blockedDomains'], async (result) => {
     if (result.smartBlockerEnabled === undefined) {
       chrome.storage.sync.set({ smartBlockerEnabled: true });
@@ -74,7 +76,11 @@ chrome.runtime.onInstalled.addListener(async () => {
         blockedDomains: {}
       });
     }
-    await loadConfiguration();
+    
+    // After initialization is complete, update all tracked tabs
+    setTimeout(() => {
+      updateAllTrackedTabs();
+    }, 1000);
   });
 });
 
@@ -82,6 +88,11 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.runtime.onStartup.addListener(async () => {
   await initializeAuth();
   await loadConfiguration();
+  
+  // After initialization is complete, update all tracked tabs
+  setTimeout(() => {
+    updateAllTrackedTabs();
+  }, 1000);
 });
 
 // Load configuration from storage
@@ -272,13 +283,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     case 'contentScriptLoaded':
       // Content script is asking if this domain should be tracked
       const contentDomain = request.domain;
+      
+      // If authentication is still initializing, wait a bit and retry
+      if (firebaseAuth === null || firebaseSyncService === null) {
+        console.log(`Smart Tab Blocker Background: Authentication still initializing, retrying for ${contentDomain}`);
+        setTimeout(() => {
+          // Reload configuration to get latest domains
+          loadConfiguration();
+          const contentShouldTrack = isAuthenticated && isEnabled && contentDomain && blockedDomains[contentDomain];
+          console.log(`Smart Tab Blocker Background: Content script loaded for ${contentDomain} (retry), shouldTrack: ${contentShouldTrack}, isAuthenticated: ${isAuthenticated}, isEnabled: ${isEnabled}, blockedDomains:`, Object.keys(blockedDomains));
+          
+          // Send message to content script to initialize if it should be tracked
+          if (contentShouldTrack && sender.tab) {
+            chrome.tabs.sendMessage(sender.tab.id, {
+              action: 'updateConfig',
+              enabled: isEnabled,
+              domainConfig: { timer: blockedDomains[contentDomain] }
+            }).catch(error => {
+              console.log('Smart Tab Blocker Background: Could not send update to content script:', error);
+            });
+          }
+        }, 1500); // Wait 1.5 seconds for auth to complete
+        
+        // Send initial response indicating we're still initializing
+        sendResponse({ shouldTrack: false, initializing: true });
+        break;
+      }
+      
       // Reload configuration to get latest domains
       loadConfiguration();
-      // console.log('blockedDomains:', blockedDomains);
-      // console.log('contentDomain:', contentDomain);
-      // console.log('isAuthenticated:', isAuthenticated);
-      // console.log('isEnabled:', isEnabled);
-      // console.log('blockedDomains[contentDomain]:', blockedDomains[contentDomain]);
       const contentShouldTrack = isAuthenticated && isEnabled && contentDomain && blockedDomains[contentDomain];
       console.log(`Smart Tab Blocker Background: Content script loaded for ${contentDomain}, shouldTrack: ${contentShouldTrack}, isAuthenticated: ${isAuthenticated}, isEnabled: ${isEnabled}, blockedDomains:`, Object.keys(blockedDomains));
       sendResponse({ shouldTrack: contentShouldTrack });
