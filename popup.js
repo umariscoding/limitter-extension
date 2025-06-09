@@ -188,7 +188,10 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Subscription event listeners
   if (subscriptionBtn) {
-    subscriptionBtn.addEventListener('click', showSubscriptionModal);
+    subscriptionBtn.addEventListener('click', () => {
+      // Redirect to localhost:3000 instead of showing modal
+      chrome.tabs.create({ url: 'http://localhost:3000' });
+    });
   }
   
   if (closeSubscriptionModal) {
@@ -1712,8 +1715,8 @@ document.addEventListener('DOMContentLoaded', function() {
     errorDiv.className = 'plan-limit-error';
     errorDiv.innerHTML = `
       <div>${message}</div>
-      <button onclick="showSubscriptionModal()" style="margin-top: 8px; padding: 8px 16px; background: #00d4aa; color: white; border: none; border-radius: 6px; cursor: pointer;">
-        View Plans
+      <button onclick="chrome.tabs.create({ url: 'http://localhost:3000' })" style="margin-top: 8px; padding: 8px 16px; background: #00d4aa; color: white; border: none; border-radius: 6px; cursor: pointer;">
+        Upgrade Plan
       </button>
     `;
     
@@ -1754,7 +1757,7 @@ document.addEventListener('DOMContentLoaded', function() {
       // Update helper text
       const helperText = document.querySelector('.input-helper');
       if (helperText) {
-        helperText.innerHTML = 'Free plan: 1-hour timer only. <button onclick="showSubscriptionModal()" style="background: none; border: none; color: #00d4aa; text-decoration: underline; cursor: pointer; font-size: inherit;">Upgrade to Pro</button> for custom timers.';
+        helperText.innerHTML = 'Free plan: 1-hour timer only. <button onclick="chrome.tabs.create({ url: \'http://localhost:3000\' })" style="background: none; border: none; color: #00d4aa; text-decoration: underline; cursor: pointer; font-size: inherit;">Upgrade to Pro</button> for custom timers.';
       }
     } else {
       // Enable timer inputs for paid plans
