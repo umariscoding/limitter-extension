@@ -291,10 +291,33 @@ class FirebaseSyncService {
     }
   }
 
-  // Normalize domain by removing www prefix
+  // Normalize domain by removing www prefix and cleaning URL
   normalizeDomain(domain) {
     if (!domain) return domain;
-    return domain.replace(/^www\./, '').toLowerCase();
+    
+    let cleanDomain = domain.toLowerCase().trim();
+    
+    // If it looks like a URL, extract just the hostname
+    try {
+      if (cleanDomain.includes('://') || cleanDomain.startsWith('www.')) {
+        if (!cleanDomain.includes('://')) {
+          cleanDomain = 'http://' + cleanDomain;
+        }
+        const url = new URL(cleanDomain);
+        cleanDomain = url.hostname;
+      }
+    } catch (error) {
+      // If URL parsing fails, do manual cleaning
+      cleanDomain = cleanDomain.replace(/^https?:\/\//, '');
+    }
+    
+    // Remove www. prefix
+    cleanDomain = cleanDomain.replace(/^www\./, '');
+    
+    // Remove any path, query params, or fragments
+    cleanDomain = cleanDomain.split('/')[0].split('?')[0].split('#')[0];
+    
+    return cleanDomain;
   }
 
   // Sync specific domain immediately (for event-based syncing) with better error handling

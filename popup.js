@@ -812,6 +812,53 @@ document.addEventListener('DOMContentLoaded', function() {
            String(today.getMonth() + 1).padStart(2, '0') + '-' + 
            String(today.getDate()).padStart(2, '0');
   }
+
+  // Clean domain from URL input
+  function cleanDomainFromUrl(input) {
+    if (!input) return '';
+    
+    let domain = input.trim().toLowerCase();
+    console.log('Domain cleaning - Input:', input);
+    
+    try {
+      // If it looks like a URL, parse it properly
+      if (domain.includes('://') || domain.startsWith('www.')) {
+        // Add protocol if missing for URL parsing
+        if (!domain.includes('://')) {
+          domain = 'http://' + domain;
+        }
+        
+        const url = new URL(domain);
+        domain = url.hostname;
+        console.log('Domain cleaning - After URL parsing:', domain);
+      }
+      
+      // Remove www. prefix if present
+      domain = domain.replace(/^www\./, '');
+      console.log('Domain cleaning - After removing www:', domain);
+      
+      // Remove any remaining path, query params, or fragments
+      domain = domain.split('/')[0].split('?')[0].split('#')[0];
+      console.log('Domain cleaning - Final result:', domain);
+      
+      return domain;
+    } catch (error) {
+      // If URL parsing fails, do manual cleaning
+      console.log('URL parsing failed, doing manual cleaning:', error);
+      
+      // Remove protocol
+      domain = domain.replace(/^https?:\/\//, '');
+      
+      // Remove www. prefix
+      domain = domain.replace(/^www\./, '');
+      
+      // Remove path and query parameters
+      domain = domain.split('/')[0].split('?')[0].split('#')[0];
+      
+      console.log('Domain cleaning - Manual cleaning result:', domain);
+      return domain;
+    }
+  }
   
   function loadDomains() {
     safeChromeCall(() => {
@@ -971,8 +1018,8 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
     
-    // Clean domain (remove protocol, www, etc.)
-    const cleanDomain = domain.replace(/^(https?:\/\/)?(www\.)?/, '').replace(/\/$/, '');
+    // Clean domain (remove everything before www, then remove www, then remove path)
+    const cleanDomain = cleanDomainFromUrl(domain);
     
     // Check if domain already exists locally
     const isExistingDomain = domains.hasOwnProperty(cleanDomain);

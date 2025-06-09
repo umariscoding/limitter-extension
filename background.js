@@ -196,9 +196,13 @@ function isTrackedDomain(url) {
   
   try {
     const hostname = new URL(url).hostname.toLowerCase();
+    // Remove www. prefix from hostname for comparison
+    const cleanHostname = hostname.replace(/^www\./, '');
     
     for (const domain of Object.keys(blockedDomains)) {
-      if (hostname === domain || hostname.endsWith('.' + domain)) {
+      // Check exact match or subdomain match
+      if (cleanHostname === domain || cleanHostname.endsWith('.' + domain) || 
+          hostname === domain || hostname.endsWith('.' + domain)) {
         return {
           domain: domain,
           timer: blockedDomains[domain]
