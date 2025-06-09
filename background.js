@@ -485,6 +485,127 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
       return true; // Keep message channel open for async response
       
+    case 'setOverrideActive':
+      // Set override_active to true in Firebase for a specific domain
+      if (!isAuthenticated || !firestore || !firebaseAuth) {
+        sendResponse({ success: false, error: 'Not authenticated or services not available' });
+        break;
+      }
+      
+      (async () => {
+        try {
+          const user = firebaseAuth.getCurrentUser();
+          if (!user) {
+            sendResponse({ success: false, error: 'No authenticated user' });
+            return;
+          }
+          
+          // Check if user can override based on their subscription plan
+          if (subscriptionService) {
+            const overrideCheck = await subscriptionService.canOverride(user.uid);
+            if (!overrideCheck.allowed) {
+              console.log(`Smart Tab Blocker Background: Override not allowed - ${overrideCheck.reason}`);
+              sendResponse({ success: false, error: 'Override not allowed for your subscription plan' });
+              return;
+            }
+            
+            // If override requires payment, don't set override_active
+            if (overrideCheck.cost > 0) {
+              console.log(`Smart Tab Blocker Background: Override requires payment ($${overrideCheck.cost}), not setting override_active`);
+              sendResponse({ success: false, error: 'Override requires payment', requiresPayment: true, cost: overrideCheck.cost });
+              return;
+            }
+          }
+          
+          const normalizedDomain = request.domain.replace(/^www\./, '').toLowerCase();
+          const siteId = `${user.uid}_${normalizedDomain}`;
+          
+          console.log(`Smart Tab Blocker Background: Setting override_active to ${request.override_active} for ${normalizedDomain}`);
+          
+          // Get existing site data
+          const existingSite = await firestore.getBlockedSite(siteId);
+          if (existingSite) {
+            // Update the site with override_active flag
+            const updatedSiteData = {
+              ...existingSite,
+              override_active: request.override_active,
+              updated_at: new Date()
+            };
+            
+            await firestore.updateBlockedSite(siteId, updatedSiteData);
+            console.log(`Smart Tab Blocker Background: Successfully set override_active to ${request.override_active} for ${normalizedDomain}`);
+            
+            // Process the override in subscription service if setting to true
+            if (request.override_active === true && subscriptionService) {
+              try {
+                await subscriptionService.processOverride(user.uid, normalizedDomain, 'User requested override via override_active');
+                console.log(`Smart Tab Blocker Background: Override processed for ${normalizedDomain}`);
+              } catch (error) {
+                console.error('Smart Tab Blocker Background: Error processing override in subscription service:', error);
+              }
+            }
+            
+            sendResponse({ success: true });
+          } else {
+            sendResponse({ success: false, error: 'Site not found in Firebase' });
+          }
+        } catch (error) {
+          console.error('Smart Tab Blocker Background: Error setting override_active:', error);
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
+      return true; // Keep message channel open for async response
+      
+    case 'resetTimerAndDisableOverride':
+      // Reset timer to time_limit and set override_active to false
+      if (!isAuthenticated || !firestore || !firebaseAuth) {
+        sendResponse({ success: false, error: 'Not authenticated or services not available' });
+        break;
+      }
+      
+      (async () => {
+        try {
+          const user = firebaseAuth.getCurrentUser();
+          if (!user) {
+            sendResponse({ success: false, error: 'No authenticated user' });
+            return;
+          }
+          
+          const normalizedDomain = request.domain.replace(/^www\./, '').toLowerCase();
+          const siteId = `${user.uid}_${normalizedDomain}`;
+          const now = new Date();
+          
+          console.log(`Smart Tab Blocker Background: Resetting timer and disabling override for ${normalizedDomain}`);
+          
+          // Get existing site data
+          const existingSite = await firestore.getBlockedSite(siteId);
+          if (existingSite) {
+            // Update the site with reset timer and disabled override
+            const updatedSiteData = {
+              ...existingSite,
+              time_remaining: request.time_remaining,
+              time_limit: request.time_limit,
+              time_spent_today: 0,
+              is_blocked: false,
+              blocked_until: null,
+              override_active: false,
+              last_reset_date: getTodayString(),
+              updated_at: now
+            };
+            
+            await firestore.updateBlockedSite(siteId, updatedSiteData);
+            console.log(`Smart Tab Blocker Background: Successfully reset timer to ${request.time_remaining}s and disabled override for ${normalizedDomain}`);
+            sendResponse({ success: true });
+          } else {
+            sendResponse({ success: false, error: 'Site not found in Firebase' });
+          }
+        } catch (error) {
+          console.error('Smart Tab Blocker Background: Error resetting timer and disabling override:', error);
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
+      return true; // Keep message channel open for async response
+      
     default:
       sendResponse({ success: false, error: 'Unknown action' });
   }
@@ -682,12 +803,14 @@ async function loadTimerStateFromFirebase(domain) {
         return {
           timeRemaining: 0,
           gracePeriod: siteData.time_limit || 20,
+          time_limit: siteData.time_limit || 20,
           isActive: false,
           isPaused: false,
           timestamp: siteData.updated_at ? siteData.updated_at.getTime() : Date.now(),
           url: siteData.url,
           date: today,
-          domain: normalizedDomain
+          domain: normalizedDomain,
+          override_active: siteData.override_active || false
         };
       }
       
@@ -696,15 +819,36 @@ async function loadTimerStateFromFirebase(domain) {
         const timerState = {
           timeRemaining: siteData.time_remaining,
           gracePeriod: siteData.time_limit || 20,
+          time_limit: siteData.time_limit || 20,
           isActive: true,
           isPaused: false, // Firebase doesn't track pause state
           timestamp: siteData.updated_at ? siteData.updated_at.getTime() : Date.now(),
           url: siteData.url,
           date: today,
-          domain: normalizedDomain
+          domain: normalizedDomain,
+          override_active: siteData.override_active || false
         };
         
-        console.log(`Smart Tab Blocker Background: Loaded active timer state from Firebase - ${timerState.timeRemaining}s remaining`);
+        console.log(`Smart Tab Blocker Background: Loaded active timer state from Firebase - ${timerState.timeRemaining}s remaining, override_active: ${timerState.override_active}`);
+        return timerState;
+      }
+      
+      // Return any timer state that has override_active set to true (for override listener)
+      if (siteData.override_active === true) {
+        const timerState = {
+          timeRemaining: siteData.time_remaining || 0,
+          gracePeriod: siteData.time_limit || 20,
+          time_limit: siteData.time_limit || 20,
+          isActive: siteData.is_active || false,
+          isPaused: false,
+          timestamp: siteData.updated_at ? siteData.updated_at.getTime() : Date.now(),
+          url: siteData.url,
+          date: today,
+          domain: normalizedDomain,
+          override_active: true
+        };
+        
+        console.log(`Smart Tab Blocker Background: Loaded timer state with override_active=true from Firebase`);
         return timerState;
       }
     }

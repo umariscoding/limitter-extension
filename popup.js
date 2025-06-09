@@ -1172,6 +1172,7 @@ document.addEventListener('DOMContentLoaded', function() {
       }
 
       if (proceedWithOverride) {
+
         // Process the override (for free overrides, credits, or unlimited)
         await processOverride(domain, currentPlan, overrideCheck);
       }
@@ -1190,6 +1191,17 @@ document.addEventListener('DOMContentLoaded', function() {
       const user = firebaseAuth.getCurrentUser();
       if (!user) {
         throw new Error('User not authenticated');
+      }
+      const normalizedDomain = domain.replace(/^www\./, '').toLowerCase();
+      const siteId = `${user.uid}_${normalizedDomain}`;
+      const siteData = await firestore.getBlockedSite(siteId);
+      if (siteData) {
+        await firestore.updateBlockedSite(siteId, {
+          ...siteData,
+          override_active: true,
+          updated_at: new Date()
+        });
+        console.log(`Updated override_active to true for ${domain}`);
       }
 
       // Process the override and update user data first

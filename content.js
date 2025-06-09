@@ -261,7 +261,7 @@
                             // Update Firebase with the lower Chrome storage time
                             setTimeout(() => {
                                 syncTimerToFirebase();
-                            }, 500); // Small delay to avoid race conditions
+                            }, 500);
                         }
                     } else if (firebaseState && firebaseState.timeRemaining >= 0) {
                         // Only Firebase has data
@@ -498,6 +498,15 @@
                     if (response && response.success && response.timerState) {
                         const firebaseState = response.timerState;
                         
+                        // Check if override_active is true
+                        if (firebaseState.override_active === true) {
+                            console.log('Smart Tab Blocker: Override active detected, pausing timer for 7 seconds');
+                            console.log('Smart Tab Blocker: Firebase state with override_active:', firebaseState);
+                            handleOverrideActive(firebaseState);
+                            resolve(null);
+                            return;
+                        }
+                        
                         // Calculate elapsed time since last Firebase update
                         const now = Date.now();
                         const timeDiff = Math.floor((now - firebaseState.timestamp) / 1000);
@@ -508,7 +517,7 @@
                             adjustedTimeRemaining = Math.max(0, firebaseState.timeRemaining - timeDiff);
                         }
                         
-                        console.log(`Smart Tab Blocker: Firebase state - was ${firebaseState.timeRemaining}s, ${timeDiff}s elapsed, now ${adjustedTimeRemaining}s`);
+                        console.log(`Smart Tab Blocker: Firebase state - was ${firebaseState.timeRemaining}s, ${timeDiff}s elapsed, now ${adjustedTimeRemaining}s, override_active: ${firebaseState.override_active}`);
                         
                         resolve({
                             ...firebaseState,
@@ -524,6 +533,81 @@
                 resolve(null);
             }
         });
+    }
+    
+    // Handle override active state - pause timer for 7 seconds and reset timer
+    function handleOverrideActive(firebaseState) {
+        console.log('Smart Tab Blocker: Handling override active - pausing timer for 7 seconds');
+        
+        // Pause the current timer
+        if (countdownTimer) {
+            clearInterval(countdownTimer);
+            countdownTimer = null;
+        }
+        isTimerPaused = true;
+        
+        // Update UI to show paused state
+        updateTimerDisplay();
+        
+        // Wait 7 seconds then reset timer
+        setTimeout(() => {
+            console.log('Smart Tab Blocker: 7 seconds elapsed, resetting timer');
+            
+            // Reset time remaining to time limit
+            timeRemaining = firebaseState.time_limit || gracePeriod;
+            
+            // Clear daily block as part of override
+            clearDailyBlock();
+            
+            // Update local storage
+            const storageKey = getStorageKey();
+            if (storageKey) {
+                const state = {
+                    timeRemaining: timeRemaining,
+                    isActive: false,
+                    isPaused: false,
+                    tabId: getTabId(),
+                    timestamp: Date.now(),
+                    url: window.location.href,
+                    gracePeriod: gracePeriod,
+                    date: getTodayString(),
+                    activeTabId: null
+                };
+                
+                if (chrome.runtime?.id) {
+                    chrome.storage.local.set({
+                        [storageKey]: state
+                    }).then(() => {
+                        console.log('Smart Tab Blocker: Local storage updated with reset timer');
+                        
+                        // Update Firebase with reset timer and set override_active to false
+                        chrome.runtime.sendMessage({
+                            action: 'resetTimerAndDisableOverride',
+                            domain: currentDomain,
+                            time_remaining: timeRemaining,
+                            time_limit: firebaseState.time_limit || gracePeriod
+                        }, (resetResponse) => {
+                            if (resetResponse && resetResponse.success) {
+                                console.log('Smart Tab Blocker: Firebase updated with reset timer and override_active set to false');
+                            } else {
+                                console.log('Smart Tab Blocker: Failed to update Firebase with reset timer');
+                            }
+                            
+                            // Resume normal timer operation
+                            isTimerPaused = false;
+                            updateTimerDisplay();
+                            
+                            // Start fresh timer if this is the active tab
+                            if (isActiveTab && isEnabled) {
+                                startCountdownTimer();
+                            }
+                        });
+                    }).catch((error) => {
+                        console.log('Smart Tab Blocker: Error updating local storage:', error);
+                    });
+                }
+            }
+        }, 7000); // 7 seconds
     }
     
     // Save timer state to storage
@@ -1360,7 +1444,32 @@
     }
     
     function handleOverrideRequest() {
-        // Send message to background script to handle override
+        // First, set override_active to true immediately when button is clicked
+        console.log('Smart Tab Blocker: Override button clicked, setting override_active to true');
+        chrome.runtime.sendMessage({
+            action: 'setOverrideActive',
+            domain: currentDomain,
+            override_active: true
+        }, (setResponse) => {
+            if (setResponse && setResponse.success) {
+                console.log('Smart Tab Blocker: Override active set to true in Firebase');
+                // Hide modal immediately since the override process will handle the rest
+                hideModal();
+            } else if (setResponse && setResponse.requiresPayment) {
+                console.log('Smart Tab Blocker: Override requires payment, redirecting to payment');
+                // Handle payment case
+                const redirectUrl = `http://localhost:3000/checkout?overrides=1&domain=${currentDomain}`;
+                window.open(redirectUrl, '_blank');
+            } else {
+                console.log('Smart Tab Blocker: Failed to set override active in Firebase, falling back to normal override');
+                // Fallback to normal override flow if setting override_active fails
+                performNormalOverride();
+            }
+        });
+    }
+    
+    // Fallback function for normal override processing
+    function performNormalOverride() {
         chrome.runtime.sendMessage({
             action: 'requestOverride',
             domain: currentDomain,
@@ -1375,7 +1484,7 @@
                         showPaymentModal(response.cost);
                     }
                 } else {
-                    // Override granted, hide modal and allow access
+                    // Override granted
                     hideModal();
                     clearDailyBlock();
                 }
