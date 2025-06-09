@@ -75,6 +75,117 @@ document.addEventListener('DOMContentLoaded', function() {
   // Initialize authentication on startup
   initializeAuth();
   
+  // Listen for notification messages from background script
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === 'displayNotification') {
+      console.log('Smart Tab Blocker Popup: Received notification:', message);
+      
+             if (message.isError) {
+         showError(message.message);
+         
+         // If it's a Firebase sync error suggesting reinstall, show reinstall instructions
+         if (message.message.includes('reinstall')) {
+           showReinstallInstructions();
+         }
+       } else if (message.message.includes('experiencing issues') || message.message.includes('temporarily unavailable')) {
+         // Show warnings for sync issues
+         showWarning(message.message);
+       } else {
+         showFeedback(message.message);
+       }
+      
+      sendResponse({ displayed: true });
+    }
+  });
+  
+  // Function to show reinstall instructions
+  function showReinstallInstructions() {
+    const reinstallModal = document.createElement('div');
+    reinstallModal.id = 'reinstallModal';
+    reinstallModal.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      backdrop-filter: blur(5px);
+    `;
+    
+    const reinstallContent = document.createElement('div');
+    reinstallContent.style.cssText = `
+      background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+      padding: 24px;
+      border-radius: 16px;
+      color: white;
+      max-width: 380px;
+      text-align: center;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    `;
+    
+    reinstallContent.innerHTML = `
+      <h3 style="margin: 0 0 16px 0; color: #ff6b6b;">⚠️ Extension Reinstall Required</h3>
+      <p style="margin: 0 0 16px 0; line-height: 1.5;">
+        Firebase sync has failed multiple times. To fix this issue, please:
+      </p>
+      <ol style="text-align: left; margin: 0 0 20px 0; padding-left: 20px;">
+        <li>Close this popup</li>
+        <li>Go to chrome://extensions/</li>
+        <li>Find "Smart Tab Blocker" and click "Remove"</li>
+        <li>Reinstall the extension from the Chrome Web Store</li>
+        <li>Sign in again with your account</li>
+      </ol>
+      <p style="margin: 0 0 20px 0; font-size: 14px; opacity: 0.8;">
+        Your data will be restored from the cloud after reinstalling.
+      </p>
+      <button id="closeReinstallModal" style="
+        background: rgba(255, 255, 255, 0.2);
+        color: white;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        padding: 8px 16px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+        margin-right: 8px;
+      ">I Understand</button>
+      <button id="openExtensionsPage" style="
+        background: #ff6b6b;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+      ">Open Extensions Page</button>
+    `;
+    
+    reinstallModal.appendChild(reinstallContent);
+    document.body.appendChild(reinstallModal);
+    
+    // Add event listeners
+    document.getElementById('closeReinstallModal').addEventListener('click', () => {
+      document.body.removeChild(reinstallModal);
+    });
+    
+    document.getElementById('openExtensionsPage').addEventListener('click', () => {
+      chrome.tabs.create({ url: 'chrome://extensions/' });
+      document.body.removeChild(reinstallModal);
+      window.close();
+    });
+    
+    // Close on outside click
+    reinstallModal.addEventListener('click', (e) => {
+      if (e.target === reinstallModal) {
+        document.body.removeChild(reinstallModal);
+      }
+    });
+  }
+  
   // Subscription event listeners
   if (subscriptionBtn) {
     subscriptionBtn.addEventListener('click', showSubscriptionModal);
@@ -1034,27 +1145,46 @@ document.addEventListener('DOMContentLoaded', function() {
   }
   
   function showFeedback(message) {
-    const originalText = stats.textContent;
-    stats.textContent = message;
-    stats.style.fontWeight = 'bold';
-    
-    setTimeout(() => {
-      updateStats();
-      stats.style.fontWeight = 'normal';
-    }, 2000);
+    showGlobalNotification(message, 'success', 3000);
   }
   
   function showError(message) {
-    const originalText = stats.textContent;
-    stats.textContent = message;
-    stats.style.color = '#ffcccc';
-    stats.style.fontWeight = 'bold';
-    
+    showGlobalNotification(message, 'error', 5000);
+  }
+
+  function showWarning(message) {
+    showGlobalNotification(message, 'warning', 4000);
+  }
+
+  function showGlobalNotification(message, type = 'success', duration = 3000) {
+    const notification = document.getElementById('globalNotification');
+    if (!notification) {
+      // Fallback to old method if global notification not available
+      if (stats) {
+        const originalText = stats.textContent;
+        stats.textContent = message;
+        stats.style.color = type === 'error' ? '#ffcccc' : '#00d4aa';
+        stats.style.fontWeight = 'bold';
+        
+        setTimeout(() => {
+          stats.textContent = originalText;
+          stats.style.color = '';
+          stats.style.fontWeight = 'normal';
+        }, 2000);
+      }
+      return;
+    }
+
+    // Clear existing classes
+    notification.className = 'global-notification';
+    notification.classList.add(type);
+    notification.textContent = message;
+    notification.style.display = 'block';
+
+    // Auto-hide after duration
     setTimeout(() => {
-      stats.textContent = originalText;
-      stats.style.color = '';
-      stats.style.fontWeight = 'normal';
-    }, 2000);
+      notification.style.display = 'none';
+    }, duration);
   }
 
 

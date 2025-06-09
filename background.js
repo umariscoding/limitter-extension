@@ -20,29 +20,56 @@ console.log('Smart Tab Blocker Background: Checking class availability:', {
   FirebaseSyncService: typeof FirebaseSyncService
 });
 
-// Initialize authentication
+// Initialize authentication with better error handling
 async function initializeAuth() {
   try {
     console.log('Smart Tab Blocker Background: Starting authentication initialization...');
     
-    firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
-    console.log('Smart Tab Blocker Background: FirebaseAuth created');
-    
-    firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
-    console.log('Smart Tab Blocker Background: FirebaseFirestore created');
-    
-    subscriptionService = new SubscriptionService(firebaseAuth, firestore);
-    console.log('Smart Tab Blocker Background: SubscriptionService created');
+    try {
+      firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
+      console.log('Smart Tab Blocker Background: FirebaseAuth created');
+    } catch (authError) {
+      console.warn('Smart Tab Blocker Background: FirebaseAuth creation failed, working in offline mode:', authError);
+      firebaseAuth = null;
+    }
     
     try {
-      firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
-      console.log('Smart Tab Blocker Background: FirebaseSyncService created successfully');
+      firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
+      console.log('Smart Tab Blocker Background: FirebaseFirestore created');
+    } catch (firestoreError) {
+      console.warn('Smart Tab Blocker Background: FirebaseFirestore creation failed, working in offline mode:', firestoreError);
+      firestore = null;
+    }
+    
+    try {
+      subscriptionService = new SubscriptionService(firebaseAuth, firestore);
+      console.log('Smart Tab Blocker Background: SubscriptionService created');
+    } catch (subError) {
+      console.warn('Smart Tab Blocker Background: SubscriptionService creation failed:', subError);
+      subscriptionService = null;
+    }
+    
+    try {
+      if (firestore && firebaseAuth) {
+        firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
+        console.log('Smart Tab Blocker Background: FirebaseSyncService created successfully');
+      } else {
+        console.log('Smart Tab Blocker Background: Skipping FirebaseSyncService creation - dependencies not available');
+        firebaseSyncService = null;
+      }
     } catch (syncServiceError) {
-      console.error('Smart Tab Blocker Background: Error creating FirebaseSyncService:', syncServiceError);
+      console.warn('Smart Tab Blocker Background: Error creating FirebaseSyncService, continuing without sync:', syncServiceError);
       firebaseSyncService = null;
     }
     
-    const storedUser = await firebaseAuth.getStoredAuthData();
+    let storedUser = null;
+    if (firebaseAuth) {
+      try {
+        storedUser = await firebaseAuth.getStoredAuthData();
+      } catch (error) {
+        console.warn('Smart Tab Blocker Background: Error checking stored auth data:', error);
+      }
+    }
     isAuthenticated = !!storedUser;
     console.log('Smart Tab Blocker Background: Auth check completed, isAuthenticated:', isAuthenticated);
     
@@ -54,7 +81,7 @@ async function initializeAuth() {
         await subscriptionService.initializePlan();
         console.log('Smart Tab Blocker Background: SubscriptionService initialized');
       } catch (subError) {
-        console.error('Smart Tab Blocker Background: Error initializing subscription service:', subError);
+        console.warn('Smart Tab Blocker Background: Error initializing subscription service, continuing without subscription features:', subError);
       }
       
       // Initialize Firebase sync service for cross-device syncing
@@ -63,29 +90,31 @@ async function initializeAuth() {
           firebaseSyncService.init();
           console.log('Smart Tab Blocker Background: Firebase sync service initialized successfully');
         } catch (initError) {
-          console.error('Smart Tab Blocker Background: Error initializing Firebase sync service:', initError);
+          console.warn('Smart Tab Blocker Background: Error initializing Firebase sync service, continuing without sync:', initError);
           firebaseSyncService = null;
         }
       } else {
-        console.error('Smart Tab Blocker Background: FirebaseSyncService is null, cannot initialize');
+        console.log('Smart Tab Blocker Background: FirebaseSyncService not available, extension will work in offline mode');
       }
       
       // Load user's actual plan data if available
       try {
-        const user = firebaseAuth.getCurrentUser();
-        if (user) {
-          const userProfile = await firestore.getUserProfile(user.uid);
-          if (userProfile && userProfile.plan) {
-            await subscriptionService.updateUserPlan(userProfile.plan);
-          }
-          
-          const subscriptionData = await firestore.getDocument(`subscriptions/${user.uid}`);
-          if (subscriptionData) {
-            await subscriptionService.updateUserSubscription(subscriptionData);
+        if (firebaseAuth && firestore && subscriptionService) {
+          const user = firebaseAuth.getCurrentUser();
+          if (user) {
+            const userProfile = await firestore.getUserProfile(user.uid);
+            if (userProfile && userProfile.plan) {
+              await subscriptionService.updateUserPlan(userProfile.plan);
+            }
+            
+            const subscriptionData = await firestore.getDocument(`subscriptions/${user.uid}`);
+            if (subscriptionData) {
+              await subscriptionService.updateUserSubscription(subscriptionData);
+            }
           }
         }
       } catch (error) {
-        console.error('Error loading user plan data in background:', error);
+        console.warn('Error loading user plan data in background, continuing with default plan:', error);
       }
     } else {
       console.log('Smart Tab Blocker Background: User not authenticated or subscription service not available');
@@ -93,9 +122,12 @@ async function initializeAuth() {
     
     console.log('Smart Tab Blocker Background: Authentication initialized, isAuthenticated:', isAuthenticated, 'syncService available:', !!firebaseSyncService);
   } catch (error) {
-    console.error('Smart Tab Blocker Background: Auth initialization failed:', error);
+    console.warn('Smart Tab Blocker Background: Auth initialization failed, extension will work in offline mode:', error);
     isAuthenticated = false;
     firebaseSyncService = null;
+    firebaseAuth = null;
+    firestore = null;
+    subscriptionService = null;
   }
 }
 
@@ -241,6 +273,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('Smart Tab Blocker: Background received message:', request);
   
   switch (request.action) {
+    case 'showNotification':
+      console.log('Smart Tab Blocker Background: Forwarding notification to popup:', request);
+      // Forward the notification to any open popup windows
+      chrome.runtime.sendMessage({
+        action: 'displayNotification',
+        message: request.message,
+        isError: request.isError,
+        source: request.source
+      }).catch(() => {
+        // Ignore if no popup is listening
+        console.log('Smart Tab Blocker Background: No popup available for notification');
+      });
+      sendResponse({ received: true });
+      break;
+      
     case 'checkEnabled':
       sendResponse({ 
         enabled: isEnabled && isAuthenticated,

@@ -9,18 +9,63 @@ class FirebaseSyncService {
     this.pendingSyncs = new Map(); // Track pending sync operations
     this.lastSyncTime = 0;
     this.syncIntervalMs = 10000; // 10 seconds
+    this.consecutiveErrors = 0; // Track consecutive errors
+    this.maxConsecutiveErrors = 5; // Show reinstall message after 5 consecutive errors
+    this.isInitializationFailed = false;
   }
 
-  // Initialize the sync service
+  // Initialize the sync service with better error handling
   init() {
-    console.log('Firebase Sync Service: Initializing...');
-    this.startPeriodicSync();
+    try {
+      console.log('Firebase Sync Service: Initializing...');
+      this.consecutiveErrors = 0; // Reset error count on init
+      this.isInitializationFailed = false;
+      this.startPeriodicSync();
+    } catch (error) {
+      console.error('Firebase Sync Service: Initialization failed:', error);
+      this.isInitializationFailed = true;
+      this.handleInitializationError(error);
+    }
   }
 
-  // Start periodic sync every 10 seconds
+  // Handle initialization errors
+  handleInitializationError(error) {
+    console.warn('Firebase Sync Service: Working in degraded mode due to initialization failure');
+    // Don't throw error, just log and continue without sync
+    this.showUserNotification('Firebase sync is temporarily unavailable. Your data will be saved locally.');
+  }
+
+  // Show user notification (this will be called from background or popup)
+  showUserNotification(message, isError = false) {
+    try {
+      // Try to send message to popup if available
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({
+          action: 'showNotification',
+          message: message,
+          isError: isError,
+          source: 'firebase-sync'
+        }).catch(() => {
+          // Ignore if popup is not available
+          console.log('Firebase Sync Service: Popup not available for notification');
+        });
+      }
+    } catch (error) {
+      // Silently handle notification errors
+      console.log('Firebase Sync Service: Unable to show notification:', message);
+    }
+  }
+
+  // Start periodic sync every 10 seconds with improved error handling
   startPeriodicSync() {
     if (this.syncInterval) {
       clearInterval(this.syncInterval);
+    }
+
+    // Don't start sync if initialization failed
+    if (this.isInitializationFailed) {
+      console.log('Firebase Sync Service: Not starting periodic sync due to initialization failure');
+      return;
     }
 
     this.syncInterval = setInterval(() => {
@@ -39,22 +84,38 @@ class FirebaseSyncService {
     }
   }
 
-  // Perform periodic sync of all timer states
+  // Perform periodic sync of all timer states with better error recovery
   async performPeriodicSync() {
     try {
-      // Try multiple ways to get the authenticated user
-      let user = this.auth.getCurrentUser();
+      // Skip sync if too many consecutive errors
+      if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
+        console.log('Firebase Sync Service: Skipping sync due to too many consecutive errors');
+        return;
+      }
+
+      // Try multiple ways to get the authenticated user (be more lenient)
+      let user = null;
+      try {
+        user = this.auth.getCurrentUser();
+      } catch (error) {
+        console.log('Firebase Sync Service: getCurrentUser failed, trying stored auth data');
+      }
       
       // If getCurrentUser doesn't work, try getting stored auth data
       if (!user) {
-        const storedUser = await this.auth.getStoredAuthData();
-        if (storedUser) {
-          user = storedUser;
+        try {
+          const storedUser = await this.auth.getStoredAuthData();
+          if (storedUser) {
+            user = storedUser;
+          }
+        } catch (error) {
+          console.log('Firebase Sync Service: getStoredAuthData failed, continuing without sync');
         }
       }
       
       if (!user) {
         console.log('Firebase Sync Service: No authenticated user, skipping periodic sync');
+        this.consecutiveErrors = 0; // Reset error count if just no user
         return;
       }
 
@@ -63,23 +124,56 @@ class FirebaseSyncService {
       
       if (timerStates.length === 0) {
         console.log('Firebase Sync Service: No active timer states to sync');
+        this.consecutiveErrors = 0; // Reset error count for successful operations
         return;
       }
 
       console.log(`Firebase Sync Service: Syncing ${timerStates.length} timer states...`);
 
-      // Sync each timer state to Firestore
+      // Sync each timer state to Firestore (use Promise.allSettled to continue even if some fail)
       const syncPromises = timerStates.map(state => 
         this.syncTimerStateToFirestore(user.uid, state)
       );
 
-      await Promise.allSettled(syncPromises);
+      const results = await Promise.allSettled(syncPromises);
+      
+      // Check if all syncs failed
+      const failures = results.filter(result => result.status === 'rejected');
+      if (failures.length === results.length && results.length > 0) {
+        throw new Error(`All ${failures.length} sync operations failed`);
+      }
       
       this.lastSyncTime = Date.now();
+      this.consecutiveErrors = 0; // Reset error count on successful sync
       console.log('Firebase Sync Service: Periodic sync completed');
 
     } catch (error) {
       console.error('Firebase Sync Service: Error during periodic sync:', error);
+      this.handleSyncError(error);
+    }
+  }
+
+  // Handle sync errors with progressive response
+  handleSyncError(error) {
+    this.consecutiveErrors++;
+    
+    console.warn(`Firebase Sync Service: Consecutive error count: ${this.consecutiveErrors}/${this.maxConsecutiveErrors}`);
+    
+    if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
+      console.error('Firebase Sync Service: Too many consecutive errors, recommending extension reinstall');
+      this.showUserNotification(
+        'Firebase sync has failed multiple times. Please try reinstalling the extension to fix sync issues.',
+        true
+      );
+      
+      // Stop trying to sync to prevent further errors
+      this.stopPeriodicSync();
+    } else if (this.consecutiveErrors >= 3) {
+      // Show warning after 3 consecutive errors
+      this.showUserNotification(
+        'Firebase sync is experiencing issues. Your data is saved locally and will sync when connection is restored.',
+        false
+      );
     }
   }
 
@@ -203,38 +297,51 @@ class FirebaseSyncService {
     return domain.replace(/^www\./, '').toLowerCase();
   }
 
-  // Sync specific domain immediately (for event-based syncing)
+  // Sync specific domain immediately (for event-based syncing) with better error handling
   async syncDomainImmediately(domain, timeRemaining, gracePeriod) {
     try {
+      // Skip if too many consecutive errors
+      if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
+        console.log('Firebase Sync Service: Skipping immediate sync due to too many consecutive errors');
+        return false;
+      }
+
       // Normalize domain to ensure consistency
       const normalizedDomain = this.normalizeDomain(domain);
       console.log(`Firebase Sync Service: Normalized domain from "${domain}" to "${normalizedDomain}"`);
       
-      // Try multiple ways to get the authenticated user
-      let user = this.auth.getCurrentUser();
+      // Try multiple ways to get the authenticated user (be more lenient)
+      let user = null;
+      try {
+        user = this.auth.getCurrentUser();
+      } catch (error) {
+        console.log('Firebase Sync Service: getCurrentUser failed for immediate sync, trying stored auth data');
+      }
       
       // If getCurrentUser doesn't work, try getting stored auth data
       if (!user) {
-        const storedUser = await this.auth.getStoredAuthData();
-        if (storedUser) {
-          user = storedUser;
-          console.log('Firebase Sync Service: Using stored auth data for sync');
+        try {
+          const storedUser = await this.auth.getStoredAuthData();
+          if (storedUser) {
+            user = storedUser;
+            console.log('Firebase Sync Service: Using stored auth data for immediate sync');
+          }
+        } catch (error) {
+          console.log('Firebase Sync Service: getStoredAuthData failed for immediate sync');
         }
       }
       
       if (!user) {
-        console.log('Firebase Sync Service: No authenticated user for immediate sync');
-        console.log('Firebase Sync Service: Auth instance:', this.auth);
-        console.log('Firebase Sync Service: Stored auth check failed');
-        return;
+        console.log('Firebase Sync Service: No authenticated user for immediate sync - working offline');
+        return false;
       }
       
-      console.log('Firebase Sync Service: User authenticated for sync:', user.uid || user.id);
+      console.log('Firebase Sync Service: User authenticated for immediate sync:', user.uid || user.id);
 
       const userId = user.uid || user.id;
       if (!userId) {
-        console.error('Firebase Sync Service: User object has no uid or id field:', user);
-        return;
+        console.warn('Firebase Sync Service: User object has no uid or id field, but continuing');
+        return false;
       }
 
       const siteId = `${userId}_${normalizedDomain}`;
@@ -270,7 +377,10 @@ class FirebaseSyncService {
 
         await this.firestore.updateBlockedSite(siteId, newSiteData);
         console.log(`Firebase Sync Service: Created new site entry for ${normalizedDomain} - ${timeRemaining}s remaining`);
-        return;
+        
+        // Reset error count on successful sync
+        this.consecutiveErrors = 0;
+        return true;
       }
 
       // Calculate time spent today
@@ -287,8 +397,6 @@ class FirebaseSyncService {
         updated_at: now
       };
 
-
-
       // If timer has reached zero, mark as blocked
       if (timeRemaining <= 0) {
         updatedSiteData.is_blocked = true;
@@ -298,9 +406,15 @@ class FirebaseSyncService {
       await this.firestore.updateBlockedSite(siteId, updatedSiteData);
       
       console.log(`Firebase Sync Service: Immediate sync completed for ${normalizedDomain} - ${timeRemaining}s remaining`);
+      
+      // Reset error count on successful sync
+      this.consecutiveErrors = 0;
+      return true;
 
     } catch (error) {
       console.error(`Firebase Sync Service: Error in immediate sync for ${normalizedDomain}:`, error);
+      this.handleSyncError(error);
+      return false;
     }
   }
 

@@ -25,7 +25,7 @@ class FirebaseAuth {
     this.currentUser = null;
   }
 
-  // Authenticate user with email and password
+  // Authenticate user with email and password with better error handling
   async signInWithEmailAndPassword(email, password) {
     const url = `${FIREBASE_AUTH_BASE_URL}:signInWithPassword?key=${this.apiKey}`;
     
@@ -45,6 +45,7 @@ class FirebaseAuth {
       const data = await response.json();
       
       if (!response.ok) {
+        console.warn('Firebase sign in failed:', data.error?.message);
         throw new Error(data.error?.message || 'Login failed');
       }
 
@@ -56,11 +57,15 @@ class FirebaseAuth {
         expiresIn: data.expiresIn
       };
 
-      await this.storeAuthData(this.currentUser);
+      try {
+        await this.storeAuthData(this.currentUser);
+      } catch (storageError) {
+        console.warn('Firebase auth: Failed to store auth data, but continuing:', storageError);
+      }
       
       return this.currentUser;
     } catch (error) {
-      console.error('Firebase sign in error:', error);
+      console.warn('Firebase sign in error:', error);
       throw error;
     }
   }
@@ -160,17 +165,23 @@ class FirebaseFirestore {
     this.baseUrl = FIREBASE_FIRESTORE_BASE_URL;
   }
 
-  // Generate authorization headers for API requests
+  // Generate authorization headers for API requests with better error handling
   getAuthHeaders() {
-    const user = this.auth.getCurrentUser();
-    if (!user || !user.idToken) {
-      throw new Error('User not authenticated');
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user || !user.idToken) {
+        console.warn('Firestore: User not authenticated for API request');
+        throw new Error('User not authenticated');
+      }
+      
+      return {
+        'Authorization': `Bearer ${user.idToken}`,
+        'Content-Type': 'application/json'
+      };
+    } catch (error) {
+      console.warn('Firestore: Error generating auth headers:', error);
+      throw error;
     }
-    
-    return {
-      'Authorization': `Bearer ${user.idToken}`,
-      'Content-Type': 'application/json'
-    };
   }
 
   // Convert Firestore document format to plain JavaScript object
