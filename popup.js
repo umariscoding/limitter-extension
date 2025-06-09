@@ -783,6 +783,49 @@ document.addEventListener('DOMContentLoaded', function() {
            String(today.getDate()).padStart(2, '0');
   }
 
+  // Validate domain format - must have proper TLD structure
+  function isValidDomainFormat(domain) {
+    if (!domain) return false;
+    
+    // Check if domain has at least one dot
+    if (!domain.includes('.')) {
+      return false;
+    }
+    
+    // Split domain into parts
+    const parts = domain.split('.');
+    
+    // Must have at least 2 parts (domain.tld)
+    if (parts.length < 2) {
+      return false;
+    }
+    
+    // Check each part is valid (no empty parts, no special characters except hyphens)
+    for (const part of parts) {
+      if (!part || part.length === 0) {
+        return false;
+      }
+      
+      // Check for valid characters (letters, numbers, hyphens, but not starting/ending with hyphen)
+      if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/i.test(part)) {
+        return false;
+      }
+    }
+    
+    // Last part (TLD) should be at least 2 characters and only letters
+    const tld = parts[parts.length - 1];
+    if (tld.length < 2 || !/^[a-z]+$/i.test(tld)) {
+      return false;
+    }
+    
+    // Domain name part (before TLD) should not be empty
+    if (parts[0].length === 0) {
+      return false;
+    }
+    
+    return true;
+  }
+
   // Clean domain from URL input
   function cleanDomainFromUrl(input) {
     if (!input) return '';
@@ -985,6 +1028,12 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Clean domain (remove everything before www, then remove www, then remove path)
     const cleanDomain = cleanDomainFromUrl(domain);
+    
+    // Validate the cleaned domain format
+    if (!isValidDomainFormat(cleanDomain)) {
+      showError('Please enter a valid domain (e.g., google.com, facebook.net, amazon.co.uk)');
+      return;
+    }
     
     // Check if domain already exists in Firestore
     const user = firebaseAuth.getCurrentUser();
