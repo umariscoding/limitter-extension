@@ -12,25 +12,62 @@ importScripts('firebase-config.js');
 importScripts('subscription-service.js');
 importScripts('firebase-sync-service.js');
 
+// Check if all required classes are loaded
+console.log('Smart Tab Blocker Background: Checking class availability:', {
+  FirebaseAuth: typeof FirebaseAuth,
+  FirebaseFirestore: typeof FirebaseFirestore,
+  SubscriptionService: typeof SubscriptionService,
+  FirebaseSyncService: typeof FirebaseSyncService
+});
+
 // Initialize authentication
 async function initializeAuth() {
   try {
+    console.log('Smart Tab Blocker Background: Starting authentication initialization...');
+    
     firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
+    console.log('Smart Tab Blocker Background: FirebaseAuth created');
+    
     firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
+    console.log('Smart Tab Blocker Background: FirebaseFirestore created');
+    
     subscriptionService = new SubscriptionService(firebaseAuth, firestore);
-    firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
+    console.log('Smart Tab Blocker Background: SubscriptionService created');
+    
+    try {
+      firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
+      console.log('Smart Tab Blocker Background: FirebaseSyncService created successfully');
+    } catch (syncServiceError) {
+      console.error('Smart Tab Blocker Background: Error creating FirebaseSyncService:', syncServiceError);
+      firebaseSyncService = null;
+    }
     
     const storedUser = await firebaseAuth.getStoredAuthData();
     isAuthenticated = !!storedUser;
+    console.log('Smart Tab Blocker Background: Auth check completed, isAuthenticated:', isAuthenticated);
     
     // If user is authenticated, initialize subscription service and sync service
     if (isAuthenticated && subscriptionService) {
-      await subscriptionService.initializePlan();
+      console.log('Smart Tab Blocker Background: User is authenticated, initializing services...');
+      
+      try {
+        await subscriptionService.initializePlan();
+        console.log('Smart Tab Blocker Background: SubscriptionService initialized');
+      } catch (subError) {
+        console.error('Smart Tab Blocker Background: Error initializing subscription service:', subError);
+      }
       
       // Initialize Firebase sync service for cross-device syncing
       if (firebaseSyncService) {
-        firebaseSyncService.init();
-        console.log('Smart Tab Blocker Background: Firebase sync service initialized');
+        try {
+          firebaseSyncService.init();
+          console.log('Smart Tab Blocker Background: Firebase sync service initialized successfully');
+        } catch (initError) {
+          console.error('Smart Tab Blocker Background: Error initializing Firebase sync service:', initError);
+          firebaseSyncService = null;
+        }
+      } else {
+        console.error('Smart Tab Blocker Background: FirebaseSyncService is null, cannot initialize');
       }
       
       // Load user's actual plan data if available
@@ -50,12 +87,15 @@ async function initializeAuth() {
       } catch (error) {
         console.error('Error loading user plan data in background:', error);
       }
+    } else {
+      console.log('Smart Tab Blocker Background: User not authenticated or subscription service not available');
     }
     
-    console.log('Smart Tab Blocker Background: Authentication initialized, isAuthenticated:', isAuthenticated);
+    console.log('Smart Tab Blocker Background: Authentication initialized, isAuthenticated:', isAuthenticated, 'syncService available:', !!firebaseSyncService);
   } catch (error) {
     console.error('Smart Tab Blocker Background: Auth initialization failed:', error);
     isAuthenticated = false;
+    firebaseSyncService = null;
   }
 }
 
@@ -63,7 +103,7 @@ async function initializeAuth() {
 chrome.runtime.onInstalled.addListener(async () => {
   console.log('Smart Tab Blocker installed');
   
-  // Initialize authentication first and wait for it to complete
+  // Wait for complete initialization before doing anything else
   await initializeAuth();
   await loadConfiguration();
   
@@ -77,22 +117,33 @@ chrome.runtime.onInstalled.addListener(async () => {
       });
     }
     
-    // After initialization is complete, update all tracked tabs
-    setTimeout(() => {
-      updateAllTrackedTabs();
-    }, 1000);
+    // Only update tabs AFTER everything is fully initialized
+    if (isAuthenticated && firebaseSyncService) {
+      console.log('Smart Tab Blocker: Authentication and Firebase ready - updating tracked tabs');
+      setTimeout(() => {
+        updateAllTrackedTabs();
+      }, 2000); // Extra delay to ensure everything is ready
+    } else {
+      console.log('Smart Tab Blocker: Authentication or Firebase not ready - skipping tab updates');
+    }
   });
 });
 
 // Initialize on startup
 chrome.runtime.onStartup.addListener(async () => {
+  console.log('Smart Tab Blocker startup - initializing...');
   await initializeAuth();
   await loadConfiguration();
   
-  // After initialization is complete, update all tracked tabs
-  setTimeout(() => {
-    updateAllTrackedTabs();
-  }, 1000);
+  // Only update tabs AFTER everything is fully initialized
+  if (isAuthenticated && firebaseSyncService) {
+    console.log('Smart Tab Blocker: Startup complete - updating tracked tabs');
+    setTimeout(() => {
+      updateAllTrackedTabs();
+    }, 2000);
+  } else {
+    console.log('Smart Tab Blocker: Startup - authentication or Firebase not ready');
+  }
 });
 
 // Load configuration from storage
@@ -140,9 +191,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'loading' && tab.url) {
     const domainInfo = isTrackedDomain(tab.url);
     
-    // Only inject timers if user is authenticated, extension is enabled, and domain is tracked
-    if (domainInfo && isEnabled && isAuthenticated) {
-      console.log(`Smart Tab Blocker: Tracked domain detected - ${domainInfo.domain} (${domainInfo.timer}s)`);
+    // Only inject timers if user is authenticated, extension is enabled, domain is tracked, AND Firebase is ready
+    if (domainInfo && isEnabled && isAuthenticated && firebaseSyncService) {
+      console.log(`Smart Tab Blocker: Tracked domain detected - ${domainInfo.domain} (${domainInfo.timer}s) - Firebase ready`);
       
       // Inject content script with domain configuration
       chrome.scripting.executeScript({
@@ -156,9 +207,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         }
         console.log('Smart Tab Blocker: Could not inject script:', error);
       });
-    } else if (domainInfo && (!isAuthenticated || !isEnabled)) {
-      // Send message to stop tracking if not authenticated or disabled
-      console.log('stopTracking Domain Info' + domainInfo + "isAuthenticated: " + isAuthenticated + "isEnabled: " + isEnabled );
+    } else if (domainInfo && (!isAuthenticated || !isEnabled || !firebaseSyncService)) {
+      // Log why we're not tracking
+      console.log(`Smart Tab Blocker: Not tracking ${domainInfo.domain} - isAuthenticated: ${isAuthenticated}, isEnabled: ${isEnabled}, firebaseSyncService: ${!!firebaseSyncService}`);
+      
+      // Send message to stop tracking if not authenticated, disabled, or Firebase not ready
       chrome.tabs.sendMessage(tabId, {
         action: 'stopTracking'
       }).catch((error) => {
@@ -232,21 +285,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
     case 'userLoggedIn':
       isAuthenticated = true;
-      console.log('Smart Tab Blocker Background: User logged in, initializing subscription service and updating tabs');
+      console.log('Smart Tab Blocker Background: User logged in, initializing services...');
     
-      // Re-initialize subscription service for the new user
-      if (subscriptionService) {
-        subscriptionService.initializePlan().catch(error => {
-          console.error('Error initializing subscription service after login:', error);
-        });
-      }
+      // Re-initialize all services for the new user
+      (async () => {
+        try {
+          if (subscriptionService) {
+            await subscriptionService.initializePlan();
+            console.log('Smart Tab Blocker Background: Subscription service reinitialized');
+          }
+          
+          // Ensure Firebase sync service is initialized
+          if (!firebaseSyncService && firebaseAuth && firestore) {
+            console.log('Smart Tab Blocker Background: Creating Firebase sync service after login...');
+            firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
+            firebaseSyncService.init();
+            console.log('Smart Tab Blocker Background: Firebase sync service initialized after login');
+          }
+          
+          // Only proceed with tab updates if everything is ready
+          if (firebaseSyncService) {
+            console.log('Smart Tab Blocker Background: All services ready - updating tabs');
+            updateAllTrackedTabs();
+            
+            // Reload tabs after a delay to ensure everything is synced
+            setTimeout(() => {
+              reloadAllTabs();
+            }, 2000);
+          } else {
+            console.error('Smart Tab Blocker Background: Firebase sync service still not available after login');
+          }
+          
+        } catch (error) {
+          console.error('Smart Tab Blocker Background: Error during login initialization:', error);
+        }
+      })();
       
-      updateAllTrackedTabs();
-  
-      // Also update tracked tabs after reload
-      setTimeout(() => {
-        reloadAllTabs();
-      }, 1000); // Give tabs time to reload before updating
       sendResponse({ success: true });
       break;
       
@@ -319,10 +393,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
     case 'syncTimerToFirebase':
       // Content script requesting to sync timer state to Firebase
-      if (!isAuthenticated || !firebaseSyncService) {
-        console.log('Smart Tab Blocker Background: Sync request denied - isAuthenticated:', isAuthenticated, 'syncService:', !!firebaseSyncService);
-        sendResponse({ success: false, error: 'Not authenticated or sync service not available' });
+      if (!isAuthenticated) {
+        console.log('Smart Tab Blocker Background: Sync request denied - user not authenticated');
+        sendResponse({ success: false, error: 'User not authenticated' });
         break;
+      }
+      
+      if (!firebaseSyncService) {
+        console.error('Smart Tab Blocker Background: Sync request denied - FirebaseSyncService not available');
+        console.error('Smart Tab Blocker Background: Debug info:', {
+          isAuthenticated,
+          hasFirebaseAuth: !!firebaseAuth,
+          hasFirestore: !!firestore,
+          hasSubscriptionService: !!subscriptionService,
+          hasSyncService: !!firebaseSyncService
+        });
+        
+        // Try to reinitialize the sync service
+        console.log('Smart Tab Blocker Background: Attempting to reinitialize sync service...');
+        try {
+          if (firebaseAuth && firestore) {
+            firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
+            firebaseSyncService.init();
+            console.log('Smart Tab Blocker Background: Sync service reinitialized successfully');
+          } else {
+            console.error('Smart Tab Blocker Background: Cannot reinitialize - missing dependencies');
+            sendResponse({ success: false, error: 'Sync service not available and cannot reinitialize' });
+            break;
+          }
+        } catch (reinitError) {
+          console.error('Smart Tab Blocker Background: Failed to reinitialize sync service:', reinitError);
+          sendResponse({ success: false, error: 'Sync service not available and reinitialize failed' });
+          break;
+        }
       }
       
       console.log('Smart Tab Blocker Background: Processing sync request for domain:', request.domain);
@@ -531,37 +634,83 @@ async function loadTimerStateFromFirebase(domain) {
     
     const user = firebaseAuth.getCurrentUser();
     if (!user) {
-      console.log('Smart Tab Blocker Background: No current user for Firebase load');
+      // Try stored auth data as fallback
+      const storedUser = await firebaseAuth.getStoredAuthData();
+      if (!storedUser) {
+        console.log('Smart Tab Blocker Background: No current user for Firebase load');
+        return null;
+      }
+      console.log('Smart Tab Blocker Background: Using stored auth for Firebase load');
+    }
+    
+    const userId = user?.uid || user?.id;
+    if (!userId) {
+      console.log('Smart Tab Blocker Background: No user ID available for Firebase load');
       return null;
     }
     
     // Normalize domain for consistency
     const normalizedDomain = domain.replace(/^www\./, '').toLowerCase();
-    const siteId = `${user.uid}_${normalizedDomain}`;
+    const siteId = `${userId}_${normalizedDomain}`;
     
-    console.log(`Smart Tab Blocker Background: Loading timer state for ${normalizedDomain} from Firebase`);
+    console.log(`Smart Tab Blocker Background: Loading timer state for ${normalizedDomain} from Firebase (siteId: ${siteId})`);
     
     const siteData = await firestore.getBlockedSite(siteId);
     
-    if (siteData && siteData.is_active && !siteData.is_blocked) {
-      // Convert Firestore data back to timer state format
-      const timerState = {
-        timeRemaining: siteData.time_remaining || 0,
-        gracePeriod: siteData.time_limit || 20,
-        isActive: !siteData.is_blocked,
-        isPaused: false, // Firebase doesn't track pause state
-        timestamp: siteData.updated_at ? siteData.updated_at.getTime() : Date.now(),
-        url: siteData.url,
-        date: getTodayString(),
-        domain: normalizedDomain
-      };
+    if (siteData) {
+      console.log('Smart Tab Blocker Background: Firebase site data:', {
+        time_remaining: siteData.time_remaining,
+        is_active: siteData.is_active,
+        is_blocked: siteData.is_blocked,
+        time_limit: siteData.time_limit,
+        updated_at: siteData.updated_at
+      });
       
-      console.log(`Smart Tab Blocker Background: Loaded timer state from Firebase - ${timerState.timeRemaining}s remaining`);
-      return timerState;
-    } else {
-      console.log(`Smart Tab Blocker Background: No active timer state found in Firebase for ${normalizedDomain}`);
-      return null;
+      // Check if site is blocked for today
+      const today = getTodayString();
+      const lastResetDate = siteData.last_reset_date;
+      
+      // If it's a new day, reset the timer
+      if (lastResetDate !== today) {
+        console.log(`Smart Tab Blocker Background: New day detected (${today} vs ${lastResetDate}), timer should reset`);
+        return null; // Let the timer start fresh for the new day
+      }
+      
+      // Check if site is currently blocked
+      if (siteData.is_blocked && siteData.time_remaining <= 0) {
+        console.log(`Smart Tab Blocker Background: Site is blocked in Firebase with ${siteData.time_remaining}s remaining`);
+        return {
+          timeRemaining: 0,
+          gracePeriod: siteData.time_limit || 20,
+          isActive: false,
+          isPaused: false,
+          timestamp: siteData.updated_at ? siteData.updated_at.getTime() : Date.now(),
+          url: siteData.url,
+          date: today,
+          domain: normalizedDomain
+        };
+      }
+      
+      // Return active timer state if available
+      if (siteData.is_active && siteData.time_remaining > 0) {
+        const timerState = {
+          timeRemaining: siteData.time_remaining,
+          gracePeriod: siteData.time_limit || 20,
+          isActive: true,
+          isPaused: false, // Firebase doesn't track pause state
+          timestamp: siteData.updated_at ? siteData.updated_at.getTime() : Date.now(),
+          url: siteData.url,
+          date: today,
+          domain: normalizedDomain
+        };
+        
+        console.log(`Smart Tab Blocker Background: Loaded active timer state from Firebase - ${timerState.timeRemaining}s remaining`);
+        return timerState;
+      }
     }
+    
+    console.log(`Smart Tab Blocker Background: No active timer state found in Firebase for ${normalizedDomain}`);
+    return null;
   } catch (error) {
     console.error('Smart Tab Blocker Background: Error loading timer state from Firebase:', error);
     return null;
