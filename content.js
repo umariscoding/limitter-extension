@@ -857,10 +857,10 @@
             }
             
             // If background responds that authentication is still initializing, wait for retry
-            if (response && response.initializing) {
-                console.log(`Smart Tab Blocker: Background script is still initializing for ${getCurrentDomain()}, waiting for retry`);
-                return; // Background will send updateConfig message when ready
-            }
+            // if (response && response.initializing) {
+            //     console.log(`Smart Tab Blocker: Background script is still initializing for ${getCurrentDomain()}, waiting for retry`);
+            //     return; // Background will send updateConfig message when ready
+            // }
             
             // If background responds that domain should not be tracked, stop initialization
             if (response && response.shouldTrack === false) {
