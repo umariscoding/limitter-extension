@@ -917,7 +917,37 @@ async function handleOverrideRequest(domain, tabId) {
       throw new Error('User not authenticated');
     }
     
-    // Check user's override balance directly from user_overrides collection
+    // Check user's plan first
+    const userProfile = await firestore.getUserProfile(user.uid);
+    const isElitePlan = userProfile && userProfile.plan === 'elite';
+    
+    if (isElitePlan) {
+      console.log('Smart Tab Blocker Background: Elite plan user - granting unlimited override');
+      
+      // Elite plan users get unlimited overrides - skip all balance checks
+      // Clear the daily block for this domain
+      const blockKey = `dailyBlock_${domain}`;
+      chrome.storage.local.remove([blockKey]);
+      
+      // Send message to content script to hide modal and allow access
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          action: 'overrideGranted',
+          domain: domain
+        }).catch(error => {
+          console.log('Could not send override granted message:', error);
+        });
+      }
+      
+      return {
+        success: true,
+        requiresPayment: false,
+        reason: 'elite_unlimited',
+        remaining: 'unlimited'
+      };
+    }
+    
+    // For non-elite users, check override balance
     const userOverrides = await firestore.getUserOverrides(user.uid);
     
     if (!userOverrides) {

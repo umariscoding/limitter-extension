@@ -752,6 +752,11 @@ document.addEventListener('DOMContentLoaded', function() {
       return 'title="Loading override data..."';
     }
     
+    // Elite plans get unlimited overrides
+    if (userProfile.plan === 'elite') {
+      return 'title="Override block and access site (unlimited)"';
+    }
+    
     const availableOverrides = userProfile.overrides || userProfile.total_overrides || 0;
     
     if (availableOverrides <= 0) {
@@ -1369,7 +1374,16 @@ document.addEventListener('DOMContentLoaded', function() {
         showError('Please log in to use override functionality');
         return;
       }
-
+    // Check if user has elite plan first
+    const userProfile = await firestore.getUserProfile(user.uid);
+    const isElitePlan = userProfile && userProfile.plan === 'elite';
+        
+      if (isElitePlan) {
+        console.log('Elite plan user - granting unlimited override');
+        await handleOverride(domain);
+        return;
+      }
+      
       // Check user's override balance directly from user_overrides collection
       const userOverrides = await firestore.getUserOverrides(user.uid);
       
@@ -1380,6 +1394,8 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
+  
+      // For non-elite users, check override balance
       const availableOverrides = userOverrides.overrides || 0;
       
       if (availableOverrides <= 0 ) {
@@ -1595,16 +1611,21 @@ document.addEventListener('DOMContentLoaded', function() {
         })
       );
       
-      // 2. Update user_overrides to decrement override count
-      operations.push(
-        processUserOverrideDecrement(user.uid, domain)
-          .then(() => {
-            console.log(`User override count decremented for ${domain}`);
-          })
-          .catch(error => {
-            console.error('Error updating user override count:', error);
-          })
-      );
+      // 2. Update user_overrides to decrement override count (skip for elite plans)
+      const isElitePlan = userProfile && userProfile.plan === 'elite';
+      if (!isElitePlan) {
+        operations.push(
+          processUserOverrideDecrement(user.uid, domain)
+            .then(() => {
+              console.log(`User override count decremented for ${domain}`);
+            })
+            .catch(error => {
+              console.error('Error updating user override count:', error);
+            })
+        );
+      } else {
+        console.log('Elite plan user - skipping override count decrement');
+      }
       
       // 3. Update user profile
       operations.push(
