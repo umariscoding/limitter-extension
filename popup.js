@@ -1382,7 +1382,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
       const availableOverrides = userOverrides.overrides || 0;
       
-      if (availableOverrides <= 0) {
+      if (availableOverrides <= 0 ) {
         // No overrides remaining
         showWarning('No overrides remaining. Redirecting to purchase page...');
         chrome.tabs.create({ url: 'http://localhost:3000/checkout?overrides=1' });
@@ -1404,7 +1404,6 @@ document.addEventListener('DOMContentLoaded', function() {
     try {
       // Immediate local override - no blocking operations
       console.log(`Starting immediate override for ${domain}`);
-      
       // 1. Clear local blocks immediately
       clearDailyBlock(domain);
       

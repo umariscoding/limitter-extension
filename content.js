@@ -2036,19 +2036,44 @@
                 console.log(`Smart Tab Blocker: Firebase state - override_active: ${firebaseState.override_active}`);
                 
                 if (firebaseState.override_active) {
-                    console.log('Smart Tab Blocker: 🚨 OVERRIDE ACTIVE DETECTED - RESETTING EVERYTHING');
+                    console.log('Smart Tab Blocker: 🚨 OVERRIDE ACTIVE DETECTED - KEEPING TIMER PAUSED');
+                    
+                    // Ensure timer is paused during override
+                    if (countdownTimer && !isTimerPaused) {
+                        console.log('Smart Tab Blocker: 🚫 Pausing timer due to active override');
+                        pauseTimer();
+                    }
+                    
                     handleOverrideReset(firebaseState);
                     
                     // Check if this device initiated the override and should clear it after 10 seconds
                     checkAndClearOverrideFlag(firebaseState);
                 } else {
-                    console.log('Smart Tab Blocker: No override active, continuing normal operation');
+                    console.log('Smart Tab Blocker: ✅ No override active - timer can resume normal operation');
+                    
+                    // Override is no longer active, resume timer if it was paused due to override
+                    if (countdownTimer && isTimerPaused && isActiveTab) {
+                        console.log('Smart Tab Blocker: ▶️ Override cleared - resuming timer');
+                        resumeTimer();
+                    }
                 }
             } else {
                 console.log('Smart Tab Blocker: No Firebase state found');
+                
+                // If no Firebase state and timer is paused, assume it's safe to resume
+                if (countdownTimer && isTimerPaused && isActiveTab) {
+                    console.log('Smart Tab Blocker: ▶️ No Firebase state - resuming timer');
+                    resumeTimer();
+                }
             }
         }).catch(error => {
             console.log('Smart Tab Blocker: Error checking override status:', error);
+            
+            // On error, resume timer if it was paused (fail-safe)
+            if (countdownTimer && isTimerPaused && isActiveTab) {
+                console.log('Smart Tab Blocker: ▶️ Error checking override - resuming timer as fail-safe');
+                resumeTimer();
+            }
         });
     }
     
@@ -2086,7 +2111,7 @@
                     console.log('Smart Tab Blocker: 🚨 10 seconds elapsed - clearing override_active flag NOW');
                     overrideClearingTimeout = null; // Reset the timeout tracker
                     clearOverrideActiveFlag();
-                }, 10000);
+                }, 5000);
             } else {
                 console.log(`Smart Tab Blocker: ❌ This device did not initiate override - will not clear flag (Local: ${deviceId}, Firebase: ${firebaseState.override_initiated_by})`);
             }
@@ -2101,7 +2126,6 @@
         }
         
         console.log(`Smart Tab Blocker: 📡 Sending clearOverrideActive message for domain: ${currentDomain}`);
-        
         chrome.runtime.sendMessage({
             action: 'clearOverrideActive',
             domain: currentDomain
@@ -2128,7 +2152,14 @@
         if (!isEnabled || !currentDomain) return;
         
         loadTimerStateFromFirebase().then(firebaseState => {
-            if (firebaseState && !firebaseState.override_active) {
+            if (firebaseState) {
+                // If override is active, don't do cross-device sync, just pause
+                if (firebaseState.override_active) {
+                    console.log('Smart Tab Blocker: Override active during cross-device check - timer will remain paused');
+                    return;
+                }
+                
+                // Normal cross-device sync when no override is active
                 // Normal cross-device sync logic - use minimum time
                 const currentTime = timeRemaining;
                 const firebaseTime = firebaseState.timeRemaining;

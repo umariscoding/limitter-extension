@@ -280,7 +280,7 @@ class FirebaseSyncService {
         updatedSiteData.blocked_until = this.getEndOfDay();
       }
 
-      await this.firestore.updateBlockedSite(siteId, updatedSiteData);
+      await this.firestore.updateBlockedSite(siteId, updatedSiteData, ['override_active']);
       
       console.log(`Firebase Sync Service: Synced ${normalizedDomain} - ${timerState.actualTimeRemaining}s remaining`);
 
@@ -426,7 +426,7 @@ class FirebaseSyncService {
         updatedSiteData.blocked_until = this.getEndOfDay();
       }
 
-      await this.firestore.updateBlockedSite(siteId, updatedSiteData);
+      await this.firestore.updateBlockedSite(siteId, updatedSiteData, ['override_active']);
       
       console.log(`Firebase Sync Service: Immediate sync completed for ${normalizedDomain} - ${timeRemaining}s remaining`);
       
