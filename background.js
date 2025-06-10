@@ -376,7 +376,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break;
       
     case 'requestOverride':
-      if (!isAuthenticated || !subscriptionService) {
+      if (!subscriptionService) {
         sendResponse({ success: false, error: 'Not authenticated' });
         break;
       }
@@ -415,7 +415,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         setTimeout(() => {
           // Reload configuration to get latest domains
           loadConfiguration();
-          const contentShouldTrack = isAuthenticated && isEnabled && contentDomain && blockedDomains[contentDomain];
+          const contentShouldTrack = isEnabled && contentDomain && blockedDomains[contentDomain];
           console.log(`Smart Tab Blocker Background: Content script loaded for ${contentDomain} (retry), shouldTrack: ${contentShouldTrack}, isAuthenticated: ${isAuthenticated}, isEnabled: ${isEnabled}, blockedDomains:`, Object.keys(blockedDomains));
           
           // Send message to content script to initialize if it should be tracked
@@ -846,11 +846,70 @@ async function clearOverrideActiveInFirebase(domain) {
   }
 }
 
+// Decrement user's override count in background script
+async function processBackgroundOverrideDecrement(userId, domain, userOverrides) {
+  try {
+    if (userOverrides.overrides <= 0) {
+      throw new Error('No overrides remaining to decrement');
+    }
+    
+    // Get current month for monthly stats
+    const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM format
+    
+    // Update override data
+    const updatedOverrides = {
+      ...userOverrides,
+      overrides: Math.max(0, userOverrides.overrides - 1), // Decrement override count
+      overrides_used_total: (userOverrides.overrides_used_total || 0) + 1, // Increment total used
+      updated_at: new Date(),
+      // Update monthly stats
+      monthly_stats: {
+        ...userOverrides.monthly_stats,
+        [currentMonth]: {
+          ...userOverrides.monthly_stats?.[currentMonth],
+          overrides_used: ((userOverrides.monthly_stats?.[currentMonth]?.overrides_used) || 0) + 1,
+          credit_overrides_used: ((userOverrides.monthly_stats?.[currentMonth]?.credit_overrides_used) || 0) + 1
+        }
+      }
+    };
+    
+    // Update in Firebase
+    await firestore.updateUserOverrides(userId, updatedOverrides);
+    
+    // Also record in override history
+    const historyRecord = {
+      user_id: userId,
+      site_url: domain,
+      timestamp: new Date(),
+      amount: 0, // Free override
+      override_type: 'credit',
+      month: currentMonth,
+      plan: 'unknown', // We don't have user profile in background
+      reason: 'User requested override from content script',
+      created_at: new Date()
+    };
+    
+    // Create override history entry (if the method exists)
+    try {
+      await firestore.createOverrideHistory(`${userId}_${Date.now()}`, historyRecord);
+      console.log('Smart Tab Blocker Background: Override history recorded');
+    } catch (error) {
+      console.log('Smart Tab Blocker Background: Override history recording failed (non-critical):', error);
+    }
+    
+    console.log(`Smart Tab Blocker Background: Override decremented: ${userOverrides.overrides} -> ${updatedOverrides.overrides}`);
+    
+  } catch (error) {
+    console.error('Smart Tab Blocker Background: Error processing override decrement:', error);
+    throw error;
+  }
+}
+
 // Handle override requests from content scripts
 async function handleOverrideRequest(domain, tabId) {
   try {
-    if (!subscriptionService || !firebaseAuth) {
-      throw new Error('Services not initialized');
+    if (!firestore || !firebaseAuth) {
+      throw new Error('Firebase services not initialized');
     }
     
     const user = firebaseAuth.getCurrentUser();
@@ -858,63 +917,58 @@ async function handleOverrideRequest(domain, tabId) {
       throw new Error('User not authenticated');
     }
     
-    // Check if user can override based on their subscription plan
-    const overrideCheck = await subscriptionService.canOverride(user.uid);
+    // Check user's override balance directly from user_overrides collection
+    const userOverrides = await firestore.getUserOverrides(user.uid);
     
-    if (!overrideCheck.allowed) {
-      throw new Error('Override not allowed for your subscription plan');
-    }
-    
-    if (!overrideCheck.allowed) {
-      if (overrideCheck.reason === 'no_overrides') {
-        // No overrides remaining, redirect to checkout
-        return {
-          success: false,
-          requiresPayment: true,
-          redirectUrl: overrideCheck.redirectUrl,
-          reason: overrideCheck.reason
-        };
-      }
-      throw new Error('Override not allowed');
+    if (!userOverrides) {
+      // No override record found - user has no overrides
+      return {
+        success: false,
+        requiresPayment: true,
+        redirectUrl: 'http://localhost:3000/checkout?overrides=1',
+        reason: 'no_overrides'
+      };
     }
 
-    if (overrideCheck.cost > 0) {
-      // Requires payment
+    const availableOverrides = userOverrides.overrides || 0;
+    
+    if (availableOverrides <= 0) {
+      // No overrides remaining
+      return {
+        success: false,
+        requiresPayment: true,
+        redirectUrl: 'http://localhost:3000/checkout?overrides=1',
+        reason: 'no_overrides'
+      };
+    }
+
+    // User has overrides available - proceed with override
+    try {
+      // Decrement override count and update user_overrides
+      await processBackgroundOverrideDecrement(user.uid, domain, userOverrides);
+      
+      // Clear the daily block for this domain
+      const blockKey = `dailyBlock_${domain}`;
+      chrome.storage.local.remove([blockKey]);
+      
+      // Send message to content script to hide modal and allow access
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          action: 'overrideGranted',
+          domain: domain
+        }).catch(error => {
+          console.log('Could not send override granted message:', error);
+        });
+      }
+      
       return {
         success: true,
-        requiresPayment: true,
-        cost: overrideCheck.cost,
-        reason: overrideCheck.reason,
-        redirectUrl: `http://localhost:3000/checkout?overrides=1&domain=${domain}`
+        requiresPayment: false,
+        reason: 'credit_override',
+        remaining: availableOverrides - 1
       };
-    } else {
-      // Free override available (either credits or unlimited)
-      try {
-        await subscriptionService.processOverride(user.uid, domain, 'User requested override from content script');
-        
-        // Clear the daily block for this domain
-        const blockKey = `dailyBlock_${domain}`;
-        chrome.storage.local.remove([blockKey]);
-        
-        // Send message to content script to hide modal and allow access
-        if (tabId) {
-          chrome.tabs.sendMessage(tabId, {
-            action: 'overrideGranted',
-            domain: domain
-          }).catch(error => {
-            console.log('Could not send override granted message:', error);
-          });
-        }
-        
-        return {
-          success: true,
-          requiresPayment: false,
-          reason: overrideCheck.reason,
-          remaining: overrideCheck.remaining
-        };
-      } catch (error) {
-        throw new Error('Failed to process override: ' + error.message);
-      }
+    } catch (error) {
+      throw new Error('Failed to process override: ' + error.message);
     }
   } catch (error) {
     console.error('Override request failed:', error);

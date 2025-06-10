@@ -606,7 +606,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (e.target.classList.contains('remove-btn')) {
       await removeDomain(domain);
     } else if (e.target.classList.contains('override-btn')) {
-      await handleOverride(domain);
+      await handleOverrideClick(domain);
     }
   });
   
@@ -746,6 +746,21 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
   
+  // Get override button state based on available overrides
+  function getOverrideButtonState() {
+    if (!userProfile) {
+      return 'title="Loading override data..."';
+    }
+    
+    const availableOverrides = userProfile.overrides || userProfile.total_overrides || 0;
+    
+    if (availableOverrides <= 0) {
+      return 'title="Click to purchase overrides"';
+    }
+    
+    return `title="Override block and access site (${availableOverrides} remaining)"`;
+  }
+
   // Format seconds into hours, minutes, and seconds
   function formatTime(seconds) {
     if (seconds <= 0) return '0s';
@@ -1213,7 +1228,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="domain-timer ${statusClass}">${statusText}</div>
           </div>
           <div class="domain-buttons">
-            <button class="override-btn" data-domain="${domain}" title="Override block and access site">Override</button>
+            <button class="override-btn" data-domain="${domain}" title="Override block and access site" ${getOverrideButtonState()}>Override</button>
             <button class="remove-btn" data-domain="${domain}" title="Remove domain">Remove</button>
           </div>
         </div>
@@ -1346,6 +1361,44 @@ document.addEventListener('DOMContentLoaded', function() {
     return true;
   }
   
+  // Handle override button click - checks user_overrides collection directly
+  async function handleOverrideClick(domain) {
+    try {
+      const user = firebaseAuth.getCurrentUser();
+      if (!user) {
+        showError('Please log in to use override functionality');
+        return;
+      }
+
+      // Check user's override balance directly from user_overrides collection
+      const userOverrides = await firestore.getUserOverrides(user.uid);
+      
+      if (!userOverrides) {
+        // No override record found - user has no overrides
+        showWarning('No overrides available. Redirecting to purchase page...');
+        chrome.tabs.create({ url: 'http://localhost:3000/checkout?overrides=1' });
+        return;
+      }
+
+      const availableOverrides = userOverrides.overrides || 0;
+      
+      if (availableOverrides <= 0) {
+        // No overrides remaining
+        showWarning('No overrides remaining. Redirecting to purchase page...');
+        chrome.tabs.create({ url: 'http://localhost:3000/checkout?overrides=1' });
+        return;
+      }
+
+      // User has overrides available - proceed with override
+      console.log(`User has ${availableOverrides} overrides remaining, proceeding with override for ${domain}`);
+      await handleOverride(domain);
+      
+    } catch (error) {
+      console.error('Error checking override eligibility:', error);
+      showError('Failed to check override availability. Please try again.');
+    }
+  }
+  
   // Handle override based on subscription plan
   async function handleOverride(domain) {
     try {
@@ -1429,8 +1482,74 @@ document.addEventListener('DOMContentLoaded', function() {
       console.error('Backend override processing failed:', error);
       // Don't show error to user - override already granted locally
     }
+    }
+  
+  // Decrement user's override count in user_overrides collection
+  async function processUserOverrideDecrement(userId, domain) {
+    try {
+      // Get current user overrides
+      const userOverrides = await firestore.getUserOverrides(userId);
+      
+      if (!userOverrides) {
+        throw new Error('No user override record found');
+      }
+      
+      if (userOverrides.overrides <= 0) {
+        throw new Error('No overrides remaining to decrement');
+      }
+      
+      // Get current month for monthly stats
+      const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM format
+      
+      // Update override data
+      const updatedOverrides = {
+        ...userOverrides,
+        overrides: Math.max(0, userOverrides.overrides - 1), // Decrement override count
+        overrides_used_total: (userOverrides.overrides_used_total || 0) + 1, // Increment total used
+        updated_at: new Date(),
+        // Update monthly stats
+        monthly_stats: {
+          ...userOverrides.monthly_stats,
+          [currentMonth]: {
+            ...userOverrides.monthly_stats?.[currentMonth],
+            overrides_used: ((userOverrides.monthly_stats?.[currentMonth]?.overrides_used) || 0) + 1,
+            credit_overrides_used: ((userOverrides.monthly_stats?.[currentMonth]?.credit_overrides_used) || 0) + 1
+          }
+        }
+      };
+      
+      // Update in Firebase
+      await firestore.updateUserOverrides(userId, updatedOverrides);
+      
+      // Also record in override history
+      const historyRecord = {
+        user_id: userId,
+        site_url: domain,
+        timestamp: new Date(),
+        amount: 0, // Free override
+        override_type: 'credit',
+        month: currentMonth,
+        plan: userProfile?.plan || 'free',
+        reason: 'User requested override from popup',
+        created_at: new Date()
+      };
+      
+      // Create override history entry (if the method exists)
+      try {
+        await firestore.createOverrideHistory(`${userId}_${Date.now()}`, historyRecord);
+        console.log('Override history recorded');
+      } catch (error) {
+        console.log('Override history recording failed (non-critical):', error);
+      }
+      
+      console.log(`Override decremented: ${userOverrides.overrides} -> ${updatedOverrides.overrides}`);
+      
+    } catch (error) {
+      console.error('Error processing user override decrement:', error);
+      throw error;
+    }
   }
-
+  
   // Process the actual override (backend operations)
   async function processOverride(domain, plan, overrideCheck) {
     try {
@@ -1477,14 +1596,14 @@ document.addEventListener('DOMContentLoaded', function() {
         })
       );
       
-      // 2. Process subscription override tracking
+      // 2. Update user_overrides to decrement override count
       operations.push(
-        subscriptionService.processOverride(user.uid, domain, 'User requested override from popup')
+        processUserOverrideDecrement(user.uid, domain)
           .then(() => {
-            console.log(`Subscription override processed for ${domain}`);
+            console.log(`User override count decremented for ${domain}`);
           })
           .catch(error => {
-            console.error('Error processing subscription override:', error);
+            console.error('Error updating user override count:', error);
           })
       );
       
