@@ -508,7 +508,7 @@ document.addEventListener('DOMContentLoaded', function() {
   
   function handleRegister() {
     // Open the website for registration
-    chrome.tabs.create({ url: 'http://localhost:3000/register' });
+    chrome.tabs.create({ url: 'http://localhost:3000/signup' });
   }
   
   async function handleLogout() {
