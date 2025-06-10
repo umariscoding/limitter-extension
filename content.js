@@ -513,20 +513,20 @@
                         const firebaseState = response.timerState;
                         
                         // Calculate elapsed time since last Firebase update
-                        const now = Date.now();
-                        const timeDiff = Math.floor((now - firebaseState.timestamp) / 1000);
+                        // const now = Date.now();
+                        // const timeDiff = Math.floor((now - firebaseState.timestamp) / 1000);
                         
-                        // Adjust time remaining based on elapsed time
-                        let adjustedTimeRemaining = firebaseState.timeRemaining;
-                        if (firebaseState.isActive && !firebaseState.isPaused) {
-                            adjustedTimeRemaining = Math.max(0, firebaseState.timeRemaining - timeDiff);
-                        }
+                        // // Adjust time remaining based on elapsed time
+                        // let adjustedTimeRemaining = firebaseState.timeRemaining;
+                        // if (firebaseState.isActive && !firebaseState.isPaused) {
+                        //     adjustedTimeRemaining = Math.max(0, firebaseState.timeRemaining - timeDiff);
+                        // }
                         
                         // console.log(`Smart Tab Blocker: Firebase state - was ${firebaseState.timeRemaining}s, ${timeDiff}s elapsed, now ${adjustedTimeRemaining}s`);
                         // console.log("Smart Tab Blocker: Complete Firebase state:", firebaseState);
                         resolve({
                             ...firebaseState,
-                            timeRemaining: adjustedTimeRemaining
+                            timeRemaining:  firebaseState.timeRemaining 
                         });
                     } else {
                         console.log('Smart Tab Blocker: No timer state found in Firebase');
