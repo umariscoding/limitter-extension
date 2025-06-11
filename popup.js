@@ -322,6 +322,7 @@ document.addEventListener('DOMContentLoaded', function() {
         time_spent_today: 0,
         last_reset_date: todayString,
         is_blocked: false,
+        override_active: false,
         is_active: true,
         blocked_until: null,
         schedule: null,
@@ -658,9 +659,10 @@ document.addEventListener('DOMContentLoaded', function() {
           if (tabs[0] && tabs[0].url) {
             try {
               const hostname = new URL(tabs[0].url).hostname.toLowerCase();
-              // Check if this hostname matches any of our tracked domains
+              // Check if this hostname matches any of our tracked domains (exact match only)
               for (const domain of Object.keys(domains)) {
-                if (hostname === domain || hostname.endsWith('.' + domain)) {
+                const cleanHostname = hostname.replace(/^www\./, '');
+                if (cleanHostname === domain || hostname === domain) {
                   resolve(domain);
                   return;
                 }
@@ -952,11 +954,50 @@ document.addEventListener('DOMContentLoaded', function() {
       // Save to local storage to sync with background script
       saveDomains();
       
+      // Clean up leftover storage entries from auto-added domains
+      await cleanupLeftoverStorageEntries();
+      
     } catch (error) {
       console.error('Error loading domains from Firestore:', error);
       // Fallback to local storage
       console.log('Falling back to local storage due to error');
       loadDomains();
+    }
+  }
+
+  // Clean up leftover storage entries from domains that were auto-added but aren't in legitimate domains list
+  async function cleanupLeftoverStorageEntries() {
+    try {
+      const legitimateDomains = Object.keys(domains);
+      
+      // Get all storage keys
+      safeChromeCall(() => {
+        chrome.storage.local.get(null, (allStorage) => {
+          const keysToRemove = [];
+          
+          // Find timer and block keys for domains not in legitimate list
+          Object.keys(allStorage).forEach(key => {
+            if (key.startsWith('timerState_') || key.startsWith('dailyBlock_')) {
+              const domain = key.replace(/^(timerState_|dailyBlock_)/, '');
+              
+              // If this domain is not in our legitimate domains list, mark for removal
+              if (!legitimateDomains.includes(domain)) {
+                keysToRemove.push(key);
+                console.log(`Smart Tab Blocker: Marking leftover storage key for removal: ${key}`);
+              }
+            }
+          });
+          
+          // Remove leftover keys
+          if (keysToRemove.length > 0) {
+            chrome.storage.local.remove(keysToRemove, () => {
+              console.log(`Smart Tab Blocker: Cleaned up ${keysToRemove.length} leftover storage entries`);
+            });
+          }
+        });
+      });
+    } catch (error) {
+      console.error('Error cleaning up leftover storage entries:', error);
     }
   }
 
@@ -966,16 +1007,21 @@ document.addEventListener('DOMContentLoaded', function() {
         if (tab.url) {
           try {
             const hostname = new URL(tab.url).hostname.toLowerCase();
-            if (hostname === domain || hostname.endsWith('.' + domain)) {
+            const cleanHostname = hostname.replace(/^www\./, '');
+            if (cleanHostname === domain || hostname === domain) {
               console.log(`Smart Tab Blocker: Sending stop tracking for removed domain ${domain} to tab ${tab.id}`);
               
               // Send explicit stopTracking message
               chrome.tabs.sendMessage(tab.id, {
                 action: 'stopTracking',
                 domain: domain
-              }).catch(() => {
+              }).catch((error) => {
                 // Tab might not have content script loaded, which is fine
                 console.log(`Could not send stop tracking to tab ${tab.id} - content script may not be loaded`);
+                if (error.message && (error.message.includes('Could not establish connection') || 
+                    error.message.includes('Receiving end does not exist'))) {
+                  showContentScriptError('domain removal');
+                }
               });
             }
           } catch (error) {
@@ -1126,7 +1172,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
           try {
             const hostname = new URL(tab.url).hostname.toLowerCase();
-            if (hostname === cleanDomain || hostname.endsWith('.' + cleanDomain)) {
+            const cleanHostname = hostname.replace(/^www\./, '');
+            if (cleanHostname === cleanDomain || hostname === cleanDomain) {
               // Reload the tab so the extension can start tracking immediately
               chrome.tabs.reload(tab.id).catch((error) => {
                 console.log(`Could not reload tab ${tab.id}:`, error);
@@ -1169,14 +1216,24 @@ document.addEventListener('DOMContentLoaded', function() {
     delete domainStates[domain];
     saveDomains();
     
-    // Sync to Firestore
+    // Sync to Firestore (marks domain as inactive)
     await removeDomainFromFirestore(domain);
     
     clearDailyBlock(domain);
     stopTrackingDomain(domain);
+    
+    // Notify background script to reload tabs for this domain across all devices
+    // This ensures inactive tabs also stop tracking the removed domain
+    safeChromeCall(() => {
+      chrome.runtime.sendMessage({ 
+        action: 'domainRemoved', 
+        domain: domain 
+      });
+    });
+    
     renderDomainsList();
     updateStats();
-    showFeedback(`Removed ${domain}`);
+    showFeedback(`Removed ${domain} - all tabs will be refreshed`);
   }
   
   async function renderDomainsList() {
@@ -1223,6 +1280,10 @@ document.addEventListener('DOMContentLoaded', function() {
         case 'paused':
           statusText = `⏸️ ${formatTime(state.timeRemaining)} (paused)`;
           statusClass = 'status-paused';
+          break;
+        case 'resetting':
+          statusText = '🔄 Resetting Timer...';
+          statusClass = 'status-resetting';
           break;
         default:
           // console.log(state);
@@ -1280,6 +1341,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
   function showWarning(message) {
     showGlobalNotification(message, 'warning', 4000);
+  }
+
+  // Show content script error with instructions to reload extension and page
+  function showContentScriptError(operation = 'operation') {
+    const message = `⚠️ Extension communication error during ${operation}. Please:\n1. Reload this page (Ctrl+R)\n2. If issue persists, disable and re-enable the extension`;
+    showGlobalNotification(message, 'error', 8000);
   }
 
   function showGlobalNotification(message, type = 'success', duration = 3000) {
@@ -1447,14 +1514,19 @@ document.addEventListener('DOMContentLoaded', function() {
           if (tab.url) {
             try {
               const hostname = new URL(tab.url).hostname.toLowerCase();
-              if (hostname === domain || hostname.endsWith('.' + domain)) {
+              const cleanHostname = hostname.replace(/^www\./, '');
+              if (cleanHostname === domain || hostname === domain) {
                 // Send override immediately, don't wait for response
                 chrome.tabs.sendMessage(tab.id, { 
                   action: 'overrideGranted',
                   domain: domain,
                   timer: domains[domain]
-                }).catch(() => {
+                }).catch((error) => {
                   // Ignore errors - tab may not have content script
+                  if (error.message && (error.message.includes('Could not establish connection') || 
+                      error.message.includes('Receiving end does not exist'))) {
+                    showContentScriptError('override');
+                  }
                 });
               }
             } catch (error) {
@@ -1882,19 +1954,38 @@ function updateActiveTimerDisplay(timerData) {
   }
   
   // Update status and styling based on timer state
-  if (timerData.isPaused) {
+  if (timerData.isResetting) {
+    activeTimerCard.classList.add('resetting');
+    activeTimerCard.classList.remove('paused');
+    if (timerIcon) {
+      timerIcon.classList.add('resetting');
+      timerIcon.classList.remove('paused');
+    }
+    if (timerStatus) {
+      timerStatus.innerHTML = `🔄 <span class="resetting-text">Resetting Timer...</span>`;
+      timerStatus.classList.remove('paused');
+      timerStatus.classList.add('resetting');
+    }
+  } else if (timerData.isPaused) {
     activeTimerCard.classList.add('paused');
-    if (timerIcon) timerIcon.classList.add('paused');
+    activeTimerCard.classList.remove('resetting');
+    if (timerIcon) {
+      timerIcon.classList.add('paused');
+      timerIcon.classList.remove('resetting');
+    }
     if (timerStatus) {
       timerStatus.textContent = `⏸️ Paused - ${formatTime(timerData.timeRemaining)} remaining`;
       timerStatus.classList.add('paused');
+      timerStatus.classList.remove('resetting');
     }
   } else {
-    activeTimerCard.classList.remove('paused');
-    if (timerIcon) timerIcon.classList.remove('paused');
+    activeTimerCard.classList.remove('paused', 'resetting');
+    if (timerIcon) {
+      timerIcon.classList.remove('paused', 'resetting');
+    }
     if (timerStatus) {
       timerStatus.innerHTML = `Blocking in <span class="countdown">${formatTime(timerData.timeRemaining)}</span>`;
-      timerStatus.classList.remove('paused');
+      timerStatus.classList.remove('paused', 'resetting');
     }
   }
   
@@ -1940,8 +2031,12 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   setTimeout(() => {
     chrome.tabs.sendMessage(activeInfo.tabId, {
       action: 'requestTimerUpdate'
-    }).catch(() => {
+    }).catch((error) => {
       // Content script might not be loaded or no timer running, which is fine
+      if (error.message && (error.message.includes('Could not establish connection') || 
+          error.message.includes('Receiving end does not exist'))) {
+        showContentScriptError('timer update');
+      }
     });
   }, 100);
 });
@@ -1955,8 +2050,12 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
         setTimeout(() => {
           chrome.tabs.sendMessage(tabs[0].id, {
             action: 'requestTimerUpdate'
-          }).catch(() => {
+          }).catch((error) => {
             // Content script might not be loaded, which is fine
+            if (error.message && (error.message.includes('Could not establish connection') || 
+                error.message.includes('Receiving end does not exist'))) {
+              showContentScriptError('timer update');
+            }
           });
         }, 100);
       }
@@ -1976,8 +2075,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tabs.length > 0) {
       chrome.tabs.sendMessage(tabs[0].id, {
         action: 'requestTimerUpdate'
-      }).catch(() => {
+      }).catch((error) => {
         // Content script might not be loaded or no timer running, which is fine
+        if (error.message && (error.message.includes('Could not establish connection') || 
+            error.message.includes('Receiving end does not exist'))) {
+          showContentScriptError('timer update');
+        }
       });
     }
   });

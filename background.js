@@ -200,9 +200,8 @@ function isTrackedDomain(url) {
     const cleanHostname = hostname.replace(/^www\./, '');
     
     for (const domain of Object.keys(blockedDomains)) {
-      // Check exact match or subdomain match
-      if (cleanHostname === domain || cleanHostname.endsWith('.' + domain) || 
-          hostname === domain || hostname.endsWith('.' + domain)) {
+      // Check exact match only (including www. handling)
+      if (cleanHostname === domain || hostname === domain) {
         return {
           domain: domain,
           timer: blockedDomains[domain]
@@ -414,6 +413,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       // Popup notifies background that a new domain was added
       // console.log('Smart Tab Blocker Background: Domain added, reloading configuration');
       loadConfiguration();
+      sendResponse({ success: true });
+      break;
+      
+    case 'domainRemoved':
+      // Popup notifies background that a domain was removed
+      // Reload all tabs for this domain to ensure inactive tabs stop tracking
+      console.log('Smart Tab Blocker Background: Domain removed, reloading tabs for:', request.domain);
+      loadConfiguration(); // Refresh configuration
+      reloadTabsForDomain(request.domain);
       sendResponse({ success: true });
       break;
       
@@ -642,6 +650,48 @@ function stopAllTimers() {
   });
 }
 
+// Reload tabs for a specific domain (used when domain is removed)
+function reloadTabsForDomain(domain) {
+  // Check if extension context is still valid
+  if (!chrome.runtime?.id) {
+    console.log('Smart Tab Blocker: Extension context invalidated, skipping tab reload for domain');
+    return;
+  }
+
+  chrome.tabs.query({}, (tabs) => {
+    let reloadedCount = 0;
+    tabs.forEach(tab => {
+      if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+        try {
+          const hostname = new URL(tab.url).hostname.toLowerCase();
+          const cleanHostname = hostname.replace(/^www\./, '');
+          
+          // Check if this tab matches the removed domain (exact match only)
+          if (cleanHostname === domain || hostname === domain) {
+            console.log(`Smart Tab Blocker: Reloading tab ${tab.id} for removed domain ${domain}`);
+            chrome.tabs.reload(tab.id).catch((error) => {
+              if (error.message && error.message.includes('Extension context invalidated')) {
+                console.log('Smart Tab Blocker: Extension context invalidated during tab reload');
+                return;
+              }
+              console.log(`Smart Tab Blocker: Could not reload tab ${tab.id}:`, error);
+            });
+            reloadedCount++;
+          }
+        } catch (error) {
+          // Invalid URL, ignore
+        }
+      }
+    });
+    
+    if (reloadedCount > 0) {
+      console.log(`Smart Tab Blocker: Reloaded ${reloadedCount} tabs for removed domain: ${domain}`);
+    } else {
+      console.log(`Smart Tab Blocker: No tabs found to reload for domain: ${domain}`);
+    }
+  });
+}
+
 // Reload all tabs (used when user logs in)
 function reloadAllTabs() {
   // Check if extension context is still valid
@@ -699,7 +749,7 @@ function updateAllTrackedTabs() {
           } else {
             // Either domain is no longer tracked, extension is disabled, or user is not authenticated
             // First try to send a message to stop tracking
-            console.log('stopTracking tab.id', tab.id);
+            console.log('Smart Tab Blocker: Sending stop tracking to tab', tab.id, 'for hostname:', hostname);
             chrome.tabs.sendMessage(tab.id, {
               action: 'stopTracking'
             }).catch((error) => {

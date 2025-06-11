@@ -319,6 +319,12 @@
       font-weight: 600;
     }
 
+    .domain-timer.status-resetting {
+      color: #00d4aa;
+      font-weight: 600;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
     .domain-timer.status-blocked {
       color: #ff6b6b;
       font-weight: 600;
@@ -391,17 +397,17 @@
       width: 48px;
       height: 48px;
       margin: 0 auto 16px;
-      background: linear-gradient(135deg, #00d4aa, #00a3ff);
+      background-image: url('icons/icon48.png');
+      background-size: 70%;
+      background-repeat: no-repeat;
+      background-position: center;
       border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
       box-shadow: 0 8px 24px rgba(0, 168, 255, 0.3);
-    }
-
-    .icon::before {
-      content: '🛡️';
-      font-size: 20px;
+      padding: 8px;
+      background-color: white;
     }
     
     .empty-domains {
@@ -1178,9 +1184,18 @@
       opacity: 0.6;
     }
 
+    .timer-icon.resetting {
+      animation: resetRotate 1.5s linear infinite;
+    }
+
     @keyframes timerPulse {
       0%, 100% { transform: scale(1); }
       50% { transform: scale(1.1); }
+    }
+
+    @keyframes resetRotate {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
     }
 
     .timer-info {
@@ -1203,6 +1218,15 @@
     .timer-status.paused {
       color: #ffd700;
       font-weight: 600;
+    }
+
+    .timer-status.resetting {
+      color: #00d4aa;
+      font-weight: 600;
+    }
+
+    .resetting-text {
+      animation: pulse 1.5s ease-in-out infinite;
     }
 
     .countdown {
@@ -1250,9 +1274,24 @@
       animation: timerPaused 2s ease-in-out infinite;
     }
 
+    #activeTimerCard.resetting {
+      background: linear-gradient(135deg, rgba(0, 212, 170, 0.1), rgba(0, 163, 255, 0.1));
+      animation: timerResetting 1.5s ease-in-out infinite;
+    }
+
     @keyframes timerPaused {
       0%, 100% { opacity: 0.7; }
       50% { opacity: 1; }
+    }
+
+    @keyframes timerResetting {
+      0%, 100% { opacity: 0.8; }
+      50% { opacity: 1; }
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
     }
   </style>
 </head>

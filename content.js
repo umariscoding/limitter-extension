@@ -56,6 +56,7 @@
     let isInitializing = true; // Track if we're still in initialization phase
     let overrideCheckInterval = null; // Interval for checking override status
     let overrideClearingTimeout = null; // Track if we're already waiting to clear override
+    let isResetting = false; // Track if timer is in resetting state due to override
     
     // Get unique tab identifier
     function getTabId() {
@@ -220,7 +221,15 @@
                 
                 // Check for override_active flag first
                 if (firebaseState && firebaseState.override_active) {
-                    console.log('Smart Tab Blocker: Override active detected - resetting timer');
+                    console.log('Smart Tab Blocker: Override active detected - setting resetting state');
+                    
+                    // Set resetting state for better UX
+                    if (!isResetting) {
+                        isResetting = true;
+                        updateTimerDisplay();
+                        console.log('Smart Tab Blocker: 🔄 Set resetting state during tab switch');
+                    }
+                    
                     handleOverrideReset(firebaseState);
                     resolve();
                     return;
@@ -448,14 +457,7 @@
                                 
                                 if (response && response.shouldTrack === false) {
                                     console.log("Smart Tab Blocker: Domain no longer tracked, clearing all state");
-                                    if (chrome.runtime?.id) {
-                                        chrome.storage.local.remove([storageKey]);
-                                        // Also clear any daily blocks for this domain
-                                        const blockKey = getDailyBlockKey();
-                                        if (blockKey) {
-                                            chrome.storage.local.remove([blockKey]);
-                                        }
-                                    }
+                                    clearAllStateForDomain();
                                 }
                             });
                         }
@@ -724,7 +726,15 @@
                 
                 // Check for override_active flag during initialization
                 if (firebaseState && firebaseState.override_active) {
-                    // console.log('Smart Tab Blocker: Override active detected during initialization');
+                    console.log('Smart Tab Blocker: Override active detected during initialization');
+                    
+                    // Set resetting state for better UX
+                    if (!isResetting) {
+                        isResetting = true;
+                        updateTimerDisplay();
+                        console.log('Smart Tab Blocker: 🔄 Set resetting state during initialization');
+                    }
+                    
                     isInitializing = false;
                     handleOverrideReset(firebaseState);
                     return;
@@ -1177,7 +1187,8 @@
             domain: currentDomain,
             timeRemaining: timeRemaining,
             gracePeriod: gracePeriod,
-            isPaused: isTimerPaused
+            isPaused: isTimerPaused,
+            isResetting: isResetting
         };
         
         chrome.runtime.sendMessage({
@@ -1813,7 +1824,9 @@
             const currentHostname = getCurrentDomain();
             console.log(`Smart Tab Blocker: Current hostname: ${currentHostname}, Override granted for: ${message.domain}`);
             
-            if (currentHostname === message.domain || currentHostname.endsWith('.' + message.domain)) {
+            const cleanCurrentHostname = currentHostname.replace(/^www\./, '');
+            const cleanMessageDomain = message.domain.replace(/^www\./, '');
+            if (cleanCurrentHostname === cleanMessageDomain || currentHostname === message.domain) {
                 console.log(`Smart Tab Blocker: Override granted for ${message.domain} - allowing access`);
                 
                 // Clear state and hide any blocking UI
@@ -1869,7 +1882,9 @@
             const currentHostname = getCurrentDomain();
             console.log(`Smart Tab Blocker: Start tracking request - Current: ${currentHostname}, Tracking: ${message.domain}`);
             
-            if (currentHostname === message.domain || currentHostname.endsWith('.' + message.domain)) {
+            const cleanCurrentHostname = currentHostname.replace(/^www\./, '');
+            const cleanMessageDomain = message.domain.replace(/^www\./, '');
+            if (cleanCurrentHostname === cleanMessageDomain || currentHostname === message.domain) {
                 console.log(`Smart Tab Blocker: Starting tracking for ${message.domain} with ${message.timer}s timer`);
                 
                 // Clear any existing state first
@@ -1899,6 +1914,18 @@
             }
             
             return true; // Indicates we will send a response asynchronously
+        }
+        
+        // Handle timer update requests from popup
+        if (message.action === 'requestTimerUpdate') {
+            console.log('Smart Tab Blocker: Timer update requested by popup');
+            if (isEnabled && currentDomain) {
+                updateTimerDisplay();
+                sendResponse({ success: true, message: 'Timer update sent' });
+            } else {
+                sendResponse({ success: false, message: 'No active timer' });
+            }
+            return true;
         }
     });
     
@@ -2050,7 +2077,14 @@
                 console.log(`Smart Tab Blocker: Firebase state - override_active: ${firebaseState.override_active}`);
                 
                 if (firebaseState.override_active) {
-                    console.log('Smart Tab Blocker: 🚨 OVERRIDE ACTIVE DETECTED - KEEPING TIMER PAUSED');
+                    console.log('Smart Tab Blocker: 🚨 OVERRIDE ACTIVE DETECTED - SETTING RESETTING STATE');
+                    
+                    // Set resetting state to show user-friendly message
+                    if (!isResetting) {
+                        isResetting = true;
+                        updateTimerDisplay(); // Update UI to show "resetting timer" message
+                        console.log('Smart Tab Blocker: 🔄 Timer is now in resetting state');
+                    }
                     
                     // Ensure timer is paused during override
                     if (countdownTimer && !isTimerPaused) {
@@ -2064,6 +2098,13 @@
                     checkAndClearOverrideFlag(firebaseState);
                 } else {
                     console.log('Smart Tab Blocker: ✅ No override active - timer can resume normal operation');
+                    
+                    // Clear resetting state if it was set
+                    if (isResetting) {
+                        isResetting = false;
+                        updateTimerDisplay(); // Update UI to show normal timer again
+                        console.log('Smart Tab Blocker: ▶️ Cleared resetting state - timer back to normal');
+                    }
                     
                     // Override is no longer active, resume timer if it was paused due to override
                     if (countdownTimer && isTimerPaused && isActiveTab) {
@@ -2184,6 +2225,14 @@
             
             if (response && response.success) {
                 console.log('Smart Tab Blocker: ✅ Successfully cleared override_active flag in Firebase');
+                
+                // Clear resetting state and update display
+                if (isResetting) {
+                    isResetting = false;
+                    updateTimerDisplay();
+                    console.log('Smart Tab Blocker: ✅ Cleared resetting state after override flag removal');
+                }
+                
                 // Clean up local device ID
                 chrome.storage.local.remove([`override_device_${currentDomain}`], () => {
                     console.log('Smart Tab Blocker: 🗑️ Cleaned up local device ID');
