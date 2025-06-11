@@ -1212,14 +1212,24 @@ document.addEventListener('DOMContentLoaded', function() {
     delete domainStates[domain];
     saveDomains();
     
-    // Sync to Firestore
+    // Sync to Firestore (marks domain as inactive)
     await removeDomainFromFirestore(domain);
     
     clearDailyBlock(domain);
     stopTrackingDomain(domain);
+    
+    // Notify background script to reload tabs for this domain across all devices
+    // This ensures inactive tabs also stop tracking the removed domain
+    safeChromeCall(() => {
+      chrome.runtime.sendMessage({ 
+        action: 'domainRemoved', 
+        domain: domain 
+      });
+    });
+    
     renderDomainsList();
     updateStats();
-    showFeedback(`Removed ${domain}`);
+    showFeedback(`Removed ${domain} - all tabs will be refreshed`);
   }
   
   async function renderDomainsList() {
