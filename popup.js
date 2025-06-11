@@ -1224,6 +1224,10 @@ document.addEventListener('DOMContentLoaded', function() {
           statusText = `⏸️ ${formatTime(state.timeRemaining)} (paused)`;
           statusClass = 'status-paused';
           break;
+        case 'resetting':
+          statusText = '🔄 Resetting Timer...';
+          statusClass = 'status-resetting';
+          break;
         default:
           // console.log(state);
           // For ready state, show the remaining time (which could be full limit or partial if previously used)
@@ -1882,19 +1886,38 @@ function updateActiveTimerDisplay(timerData) {
   }
   
   // Update status and styling based on timer state
-  if (timerData.isPaused) {
+  if (timerData.isResetting) {
+    activeTimerCard.classList.add('resetting');
+    activeTimerCard.classList.remove('paused');
+    if (timerIcon) {
+      timerIcon.classList.add('resetting');
+      timerIcon.classList.remove('paused');
+    }
+    if (timerStatus) {
+      timerStatus.innerHTML = `🔄 <span class="resetting-text">Resetting Timer...</span>`;
+      timerStatus.classList.remove('paused');
+      timerStatus.classList.add('resetting');
+    }
+  } else if (timerData.isPaused) {
     activeTimerCard.classList.add('paused');
-    if (timerIcon) timerIcon.classList.add('paused');
+    activeTimerCard.classList.remove('resetting');
+    if (timerIcon) {
+      timerIcon.classList.add('paused');
+      timerIcon.classList.remove('resetting');
+    }
     if (timerStatus) {
       timerStatus.textContent = `⏸️ Paused - ${formatTime(timerData.timeRemaining)} remaining`;
       timerStatus.classList.add('paused');
+      timerStatus.classList.remove('resetting');
     }
   } else {
-    activeTimerCard.classList.remove('paused');
-    if (timerIcon) timerIcon.classList.remove('paused');
+    activeTimerCard.classList.remove('paused', 'resetting');
+    if (timerIcon) {
+      timerIcon.classList.remove('paused', 'resetting');
+    }
     if (timerStatus) {
       timerStatus.innerHTML = `Blocking in <span class="countdown">${formatTime(timerData.timeRemaining)}</span>`;
-      timerStatus.classList.remove('paused');
+      timerStatus.classList.remove('paused', 'resetting');
     }
   }
   
