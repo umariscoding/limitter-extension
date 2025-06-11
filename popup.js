@@ -1015,9 +1015,13 @@ document.addEventListener('DOMContentLoaded', function() {
               chrome.tabs.sendMessage(tab.id, {
                 action: 'stopTracking',
                 domain: domain
-              }).catch(() => {
+              }).catch((error) => {
                 // Tab might not have content script loaded, which is fine
                 console.log(`Could not send stop tracking to tab ${tab.id} - content script may not be loaded`);
+                if (error.message && (error.message.includes('Could not establish connection') || 
+                    error.message.includes('Receiving end does not exist'))) {
+                  showContentScriptError('domain removal');
+                }
               });
             }
           } catch (error) {
@@ -1339,6 +1343,12 @@ document.addEventListener('DOMContentLoaded', function() {
     showGlobalNotification(message, 'warning', 4000);
   }
 
+  // Show content script error with instructions to reload extension and page
+  function showContentScriptError(operation = 'operation') {
+    const message = `⚠️ Extension communication error during ${operation}. Please:\n1. Reload this page (Ctrl+R)\n2. If issue persists, disable and re-enable the extension`;
+    showGlobalNotification(message, 'error', 8000);
+  }
+
   function showGlobalNotification(message, type = 'success', duration = 3000) {
     const notification = document.getElementById('globalNotification');
     if (!notification) {
@@ -1511,8 +1521,12 @@ document.addEventListener('DOMContentLoaded', function() {
                   action: 'overrideGranted',
                   domain: domain,
                   timer: domains[domain]
-                }).catch(() => {
+                }).catch((error) => {
                   // Ignore errors - tab may not have content script
+                  if (error.message && (error.message.includes('Could not establish connection') || 
+                      error.message.includes('Receiving end does not exist'))) {
+                    showContentScriptError('override');
+                  }
                 });
               }
             } catch (error) {
@@ -2017,8 +2031,12 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   setTimeout(() => {
     chrome.tabs.sendMessage(activeInfo.tabId, {
       action: 'requestTimerUpdate'
-    }).catch(() => {
+    }).catch((error) => {
       // Content script might not be loaded or no timer running, which is fine
+      if (error.message && (error.message.includes('Could not establish connection') || 
+          error.message.includes('Receiving end does not exist'))) {
+        showContentScriptError('timer update');
+      }
     });
   }, 100);
 });
@@ -2032,8 +2050,12 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
         setTimeout(() => {
           chrome.tabs.sendMessage(tabs[0].id, {
             action: 'requestTimerUpdate'
-          }).catch(() => {
+          }).catch((error) => {
             // Content script might not be loaded, which is fine
+            if (error.message && (error.message.includes('Could not establish connection') || 
+                error.message.includes('Receiving end does not exist'))) {
+              showContentScriptError('timer update');
+            }
           });
         }, 100);
       }
@@ -2053,8 +2075,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tabs.length > 0) {
       chrome.tabs.sendMessage(tabs[0].id, {
         action: 'requestTimerUpdate'
-      }).catch(() => {
+      }).catch((error) => {
         // Content script might not be loaded or no timer running, which is fine
+        if (error.message && (error.message.includes('Could not establish connection') || 
+            error.message.includes('Receiving end does not exist'))) {
+          showContentScriptError('timer update');
+        }
       });
     }
   });
