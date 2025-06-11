@@ -1986,6 +1986,18 @@
         // console.log('Smart Tab Blocker: ▶️ Starting fresh timer');
         startCountdownTimer(false);
         
+        // Immediately sync the reset timer to Firebase with override flag
+        console.log('Smart Tab Blocker: 🔄 Syncing override reset to Firebase');
+        chrome.runtime.sendMessage({
+            action: 'syncTimerToFirebase',
+            domain: currentDomain,
+            timeRemaining: timeRemaining,
+            gracePeriod: gracePeriod,
+            isOverride: true
+        }).catch(() => {
+            console.log('Smart Tab Blocker: Could not sync override reset to Firebase');
+        });
+        
         console.log(`Smart Tab Blocker: ✅ OVERRIDE PROCESSING COMPLETE - Timer running with ${timeRemaining}s`);
     }
     

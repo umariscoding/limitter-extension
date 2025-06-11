@@ -519,7 +519,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       firebaseSyncService.syncDomainImmediately(
         request.domain,
         request.timeRemaining,
-        request.gracePeriod
+        request.gracePeriod,
+        request.isOverride || false
       ).then(() => {
         sendResponse({ success: true });
       }).catch(async (error) => {

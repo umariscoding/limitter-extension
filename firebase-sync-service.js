@@ -262,20 +262,47 @@ class FirebaseSyncService {
         return;
       }
 
-      // Calculate time spent today
-      const timeSpentToday = Math.max(0, timerState.gracePeriod - timerState.actualTimeRemaining);
+      // Implement "minimum time wins" policy to prevent race conditions between devices
+      const firebaseTimeRemaining = existingSite.time_remaining || 0;
+      const localTimeRemaining = timerState.actualTimeRemaining;
       
-      // Update site data with current timer state
+      // Smart conflict resolution: consider both time difference and recency
+      const timeDifference = Math.abs(firebaseTimeRemaining - localTimeRemaining);
+      const firebaseAge = existingSite.updated_at ? (now - new Date(existingSite.updated_at)) / 1000 : Infinity;
+      
+      console.log(`Firebase Sync Service: Regular sync analysis - Firebase: ${firebaseTimeRemaining}s (${Math.round(firebaseAge)}s old), Local: ${localTimeRemaining}s, Difference: ${timeDifference}s`);
+      
+      // Allow update if:
+      // 1. Local time is significantly lower (more than 5s progress), OR
+      // 2. Time difference is small (within 10s) AND Firebase data is old (more than 30s), OR  
+      // 3. Local time is lower and Firebase data is old (more than 60s)
+      const significantProgress = localTimeRemaining < firebaseTimeRemaining - 5;
+      const smallDifferenceButOld = timeDifference <= 10 && firebaseAge > 30;
+      const lowerTimeAndOld = localTimeRemaining < firebaseTimeRemaining && firebaseAge > 60;
+      
+      let finalTimeRemaining;
+      if (significantProgress || smallDifferenceButOld || lowerTimeAndOld) {
+        finalTimeRemaining = localTimeRemaining;
+        console.log(`Firebase Sync Service: Allowing regular update - Significant progress: ${significantProgress}, Small diff but old: ${smallDifferenceButOld}, Lower and old: ${lowerTimeAndOld}`);
+      } else {
+        console.log(`Firebase Sync Service: Skipping regular sync - no significant progress or recent Firebase data`);
+        return;
+      }
+      
+      // Calculate time spent based on the final time remaining
+      const timeSpentToday = Math.max(0, timerState.gracePeriod - finalTimeRemaining);
+      
+      // Update site data with minimum timer state
       const updatedSiteData = {
         ...existingSite,
-        time_remaining: timerState.actualTimeRemaining,
+        time_remaining: finalTimeRemaining,
         time_spent_today: timeSpentToday,
         last_accessed: now,
         updated_at: now
       };
 
       // If timer has reached zero, mark as blocked
-      if (timerState.actualTimeRemaining <= 0) {
+      if (finalTimeRemaining <= 0) {
         updatedSiteData.is_blocked = true;
         updatedSiteData.blocked_until = this.getEndOfDay();
       }
@@ -321,7 +348,7 @@ class FirebaseSyncService {
   }
 
   // Sync specific domain immediately (for event-based syncing) with better error handling
-  async syncDomainImmediately(domain, timeRemaining, gracePeriod) {
+  async syncDomainImmediately(domain, timeRemaining, gracePeriod, isOverride = false) {
     try {
       // Skip if too many consecutive errors
       if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
@@ -406,22 +433,66 @@ class FirebaseSyncService {
         return true;
       }
 
-      // Calculate time spent today
-      const timeSpentToday = Math.max(0, gracePeriod - timeRemaining);
+      // Implement "minimum time wins" policy to prevent race conditions between devices
+      const firebaseTimeRemaining = existingSite.time_remaining || 0;
+      const localTimeRemaining = timeRemaining;
+      
+      let finalTimeRemaining;
+      let shouldSkipSync = false;
+      
+      if (isOverride) {
+        // Override case: always use the full grace period to ensure clean reset
+        finalTimeRemaining = gracePeriod;
+        console.log(`Firebase Sync Service: Override sync - resetting timer from ${firebaseTimeRemaining}s to full ${gracePeriod}s`);
+      } else {
+        // Smart conflict resolution: consider both time difference and recency
+        const timeDifference = Math.abs(firebaseTimeRemaining - localTimeRemaining);
+        const firebaseAge = existingSite.updated_at ? (now - new Date(existingSite.updated_at)) / 1000 : Infinity;
+        
+        console.log(`Firebase Sync Service: Conflict analysis - Firebase: ${firebaseTimeRemaining}s (${Math.round(firebaseAge)}s old), Local: ${localTimeRemaining}s, Difference: ${timeDifference}s`);
+        
+        // Allow update if:
+        // 1. Local time is significantly lower (more than 5s progress), OR
+        // 2. Time difference is small (within 10s) AND Firebase data is old (more than 30s), OR  
+        // 3. Local time is lower and Firebase data is old (more than 60s)
+        const significantProgress = localTimeRemaining < firebaseTimeRemaining - 5;
+        const smallDifferenceButOld = timeDifference <= 10 && firebaseAge > 30;
+        const lowerTimeAndOld = localTimeRemaining < firebaseTimeRemaining && firebaseAge > 60;
+        
+        if (significantProgress || smallDifferenceButOld || lowerTimeAndOld) {
+          finalTimeRemaining = localTimeRemaining;
+          console.log(`Firebase Sync Service: Allowing update - Significant progress: ${significantProgress}, Small diff but old: ${smallDifferenceButOld}, Lower and old: ${lowerTimeAndOld}`);
+        } else {
+          console.log(`Firebase Sync Service: Skipping sync - no significant progress or recent Firebase data`);
+          shouldSkipSync = true;
+        }
+      }
+      
+      if (shouldSkipSync) {
+        this.consecutiveErrors = 0;
+        return true;
+      }
+      
+      console.log(`Firebase Sync Service: Multi-device conflict resolution - Firebase: ${firebaseTimeRemaining}s, Local: ${localTimeRemaining}s, Using: ${finalTimeRemaining}s`);
+      
+      
+      // Calculate time spent based on the final time remaining
+      const timeSpentToday = Math.max(0, gracePeriod - finalTimeRemaining);
       console.log('timeSpentToday', timeSpentToday);
-      console.log('timeRemaining', timeRemaining);
+      console.log('finalTimeRemaining', finalTimeRemaining);
       console.log('gracePeriod', gracePeriod);
-      // Update site data
+      
+      // Update site data with minimum time
       const updatedSiteData = {
         ...existingSite,
-        time_remaining: timeRemaining,
+        time_remaining: finalTimeRemaining,
         time_spent_today: timeSpentToday,
         last_accessed: now,
         updated_at: now
       };
 
       // If timer has reached zero, mark as blocked
-      if (timeRemaining <= 0) {
+      if (finalTimeRemaining <= 0) {
         updatedSiteData.is_blocked = true;
         updatedSiteData.blocked_until = this.getEndOfDay();
       }
