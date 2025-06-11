@@ -95,6 +95,14 @@ document.addEventListener('DOMContentLoaded', function() {
        }
       
       sendResponse({ displayed: true });
+    } else if (message.action === 'triggerDomainListRefresh') {
+      console.log('Smart Tab Blocker Popup: Refreshing domain list due to deactivation');
+      loadDomainsFromFirestore().then(() => {
+        renderDomainsList();
+      }).catch(error => {
+        console.log('Error refreshing domain list:', error);
+      });
+      sendResponse({ refreshed: true });
     }
   });
   

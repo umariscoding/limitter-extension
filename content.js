@@ -521,9 +521,11 @@
                         // if (firebaseState.isActive && !firebaseState.isPaused) {
                         //     adjustedTimeRemaining = Math.max(0, firebaseState.timeRemaining - timeDiff);
                         // }
-                        
+                    
                         // console.log(`Smart Tab Blocker: Firebase state - was ${firebaseState.timeRemaining}s, ${timeDiff}s elapsed, now ${adjustedTimeRemaining}s`);
                         // console.log("Smart Tab Blocker: Complete Firebase state:", firebaseState);
+                        console.log(firebaseState)
+                        
                         resolve({
                             ...firebaseState,
                             timeRemaining:  firebaseState.timeRemaining 
@@ -2058,13 +2060,46 @@
                     }
                 }
             } else {
-                console.log('Smart Tab Blocker: No Firebase state found');
+                console.log('Smart Tab Blocker: No Firebase state found - checking if domain is still active');
                 
-                // If no Firebase state and timer is paused, assume it's safe to resume
-                if (countdownTimer && isTimerPaused && isActiveTab) {
-                    console.log('Smart Tab Blocker: ▶️ No Firebase state - resuming timer');
-                    resumeTimer();
-                }
+                // Check if domain is really deactivated vs network error
+                chrome.runtime.sendMessage({
+                    action: 'checkDomainActive',
+                    domain: currentDomain
+                }, (response) => {
+                    if (response && response.isActive === false) {
+                        console.log('Smart Tab Blocker: 🚫 Domain confirmed deactivated - stopping timer completely');
+                        
+                        // Stop all timers and intervals
+                        if (countdownTimer) {
+                            clearInterval(countdownTimer);
+                            countdownTimer = null;
+                        }
+                        stopOverrideChecker();
+                        clearTimerState();
+                        clearDailyBlock();
+                        hideTimer();
+                        hideModal();
+                        
+                        // Notify background to reload configuration (removes domain from all devices)
+                        chrome.runtime.sendMessage({
+                            action: 'domainAdded' // Reuse existing action that triggers loadConfiguration
+                        }).catch(() => {});
+                        
+                        // Notify popup to refresh domain list
+                        chrome.runtime.sendMessage({
+                            action: 'triggerDomainListRefresh'
+                        }).catch(() => {});
+                    } else {
+                        console.log('Smart Tab Blocker: Domain still active - probably network error, resuming timer');
+                        
+                        // If no Firebase state but domain is still active, assume network error and resume
+                        if (countdownTimer && isTimerPaused && isActiveTab) {
+                            console.log('Smart Tab Blocker: ▶️ Network error likely - resuming timer');
+                            resumeTimer();
+                        }
+                    }
+                });
             }
         }).catch(error => {
             console.log('Smart Tab Blocker: Error checking override status:', error);

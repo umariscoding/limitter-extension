@@ -405,6 +405,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
       
+    case 'checkDomainActive':
+     
+      const userId = firebaseAuth?.getCurrentUser()?.uid;
+      if (!userId) {
+        sendResponse({ isActive: false });
+        break;
+      }
+      
+      const normalizedDomain = request.domain.replace(/^www\./, '').toLowerCase();
+      const siteId = `${userId}_${normalizedDomain}`;
+      
+      firestore.getBlockedSite(siteId)
+        .then(siteData => {
+          const isActive = siteData && (siteData.is_active);
+          console.log(`Smart Tab Blocker Background: checkDomainActive for ${request.domain}, isActive: ${isActive}`);
+          sendResponse({ isActive: isActive });
+        })
+        .catch(error => {
+          console.log('Smart Tab Blocker Background: Error checking domain active status:', error);
+          sendResponse({ isActive: false });
+        });
+        
+      return true; // Keep message channel open for async response
+      
     case 'contentScriptLoaded':
       // Content script is asking if this domain should be tracked
       const contentDomain = request.domain;
