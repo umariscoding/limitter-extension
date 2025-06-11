@@ -263,12 +263,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 // Function to inject into pages
 function initializeTimer(domainInfo) {
+  console.log('Smart Tab Blocker: Initializing timer for domain:', domainInfo);
+  
   // Set domain configuration for the content script
   window.smartBlockerConfig = domainInfo;
   
   // Trigger initialization if content script is already loaded
   if (window.smartBlockerInitialize) {
+    console.log('Smart Tab Blocker: Content script found, initializing...');
     window.smartBlockerInitialize(domainInfo);
+  } else {
+    console.log('Smart Tab Blocker: Content script not found, config set for when it loads');
   }
 }
 
@@ -356,13 +361,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           
           // Only proceed with tab updates if everything is ready
           if (firebaseSyncService) {
-            console.log('Smart Tab Blocker Background: All services ready - updating tabs');
+            console.log('Smart Tab Blocker Background: All services ready - loading configuration and updating tabs');
+            
+            // Load configuration first, then update tabs
+            await loadConfiguration();
+            console.log('Smart Tab Blocker Background: Configuration loaded, blocked domains:', Object.keys(blockedDomains));
+            
+            // Update tabs immediately
             updateAllTrackedTabs();
             
-            // Reload tabs after a delay to ensure everything is synced
+            // Also reload tabs after a delay to ensure everything is synced
             setTimeout(() => {
+              console.log('Smart Tab Blocker Background: Reloading all tabs for fresh start');
               reloadAllTabs();
-            }, 2000);
+            }, 3000);
           } else {
             console.error('Smart Tab Blocker Background: Firebase sync service still not available after login');
           }
@@ -668,32 +680,20 @@ function updateAllTrackedTabs() {
           const domainInfo = isTrackedDomain(tab.url);
           
           if (domainInfo && isEnabled && isAuthenticated) {
-            // Domain is still tracked, extension is enabled, and user is authenticated
-            const message = {
-              action: 'updateConfig',
-              enabled: true,
-              domainConfig: domainInfo
-            };
+            // Domain is tracked, extension is enabled, and user is authenticated
+            console.log(`Smart Tab Blocker: Initializing tracked domain - ${domainInfo.domain} on tab ${tab.id}`);
             
-            chrome.tabs.sendMessage(tab.id, message).catch((error) => {
-              // Check if it's a context invalidation error
-              if (error.message && error.message.includes('Extension context invalidated')) {
-                console.log('Smart Tab Blocker: Extension context invalidated during message send');
+            // Always inject the content script (it will check if already loaded)
+            chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: initializeTimer,
+              args: [domainInfo]
+            }).catch((injectionError) => {
+              if (injectionError.message && injectionError.message.includes('Extension context invalidated')) {
+                console.log('Smart Tab Blocker: Extension context invalidated during script injection');
                 return;
               }
-              
-              // If content script not loaded, inject it
-              chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                func: initializeTimer,
-                args: [domainInfo]
-              }).catch((injectionError) => {
-                if (injectionError.message && injectionError.message.includes('Extension context invalidated')) {
-                  console.log('Smart Tab Blocker: Extension context invalidated during script injection');
-                  return;
-                }
-                // Ignore other injection errors
-              });
+              console.log(`Smart Tab Blocker: Could not inject script into tab ${tab.id}:`, injectionError);
             });
           } else {
             // Either domain is no longer tracked, extension is disabled, or user is not authenticated
