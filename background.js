@@ -200,9 +200,8 @@ function isTrackedDomain(url) {
     const cleanHostname = hostname.replace(/^www\./, '');
     
     for (const domain of Object.keys(blockedDomains)) {
-      // Check exact match or subdomain match
-      if (cleanHostname === domain || cleanHostname.endsWith('.' + domain) || 
-          hostname === domain || hostname.endsWith('.' + domain)) {
+      // Check exact match only (including www. handling)
+      if (cleanHostname === domain || hostname === domain) {
         return {
           domain: domain,
           timer: blockedDomains[domain]
@@ -699,7 +698,7 @@ function updateAllTrackedTabs() {
           } else {
             // Either domain is no longer tracked, extension is disabled, or user is not authenticated
             // First try to send a message to stop tracking
-            console.log('stopTracking tab.id', tab.id);
+            console.log('Smart Tab Blocker: Sending stop tracking to tab', tab.id, 'for hostname:', hostname);
             chrome.tabs.sendMessage(tab.id, {
               action: 'stopTracking'
             }).catch((error) => {

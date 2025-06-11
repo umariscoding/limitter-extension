@@ -234,31 +234,9 @@ class FirebaseSyncService {
       const existingSite = await this.firestore.getBlockedSite(siteId);
       
       if (!existingSite) {
-        console.log(`Firebase Sync Service: Site ${normalizedDomain} not found in Firestore, creating new entry`);
-        // Create a new site entry if it doesn't exist
-        const todayString = this.getTodayString();
-        const newSiteData = {
-          user_id: userId,
-          url: normalizedDomain,
-          name: normalizedDomain,
-          time_limit: timerState.gracePeriod,
-          time_remaining: timerState.actualTimeRemaining,
-          time_spent_today: Math.max(0, timerState.gracePeriod - timerState.actualTimeRemaining),
-          last_reset_date: todayString,
-          is_blocked: timerState.actualTimeRemaining <= 0,
-          is_active: true,
-          blocked_until: timerState.actualTimeRemaining <= 0 ? this.getEndOfDay() : null,
-          schedule: null,
-          daily_usage: {},
-          total_time_spent: Math.max(0, timerState.gracePeriod - timerState.actualTimeRemaining),
-          access_count: 1,
-          last_accessed: now,
-          created_at: now,
-          updated_at: now
-        };
-
-        await this.firestore.updateBlockedSite(siteId, newSiteData);
-        console.log(`Firebase Sync Service: Created new site entry for ${normalizedDomain} - ${timerState.actualTimeRemaining}s remaining`);
+        console.log(`Firebase Sync Service: Site ${normalizedDomain} not found in Firestore - skipping automatic creation to prevent unwanted domains`);
+        // Don't automatically create new sites - only sync existing ones
+        // Sites should only be created through the popup's addDomain() function
         return;
       }
 
@@ -401,36 +379,10 @@ class FirebaseSyncService {
       const existingSite = await this.firestore.getBlockedSite(siteId);
       console.log('existingSite', existingSite);
       if (!existingSite) {
-        console.log(`Firebase Sync Service: Site ${normalizedDomain} not found in Firestore, creating new entry for sync`);
-        // Create a new site entry if it doesn't exist
-        const todayString = this.getTodayString();
-        const newSiteData = {
-          user_id: userId,
-          url: normalizedDomain,
-          name: normalizedDomain,
-          time_limit: gracePeriod,
-          time_remaining: timeRemaining,
-          time_spent_today: Math.max(0, gracePeriod - timeRemaining),
-          last_reset_date: todayString,
-          is_blocked: timeRemaining <= 0,
-          is_active: true,
-          blocked_until: timeRemaining <= 0 ? this.getEndOfDay() : null,
-          schedule: null,
-          daily_usage: {},
-          total_time_spent: Math.max(0, gracePeriod - timeRemaining),
-          access_count: 1,
-          last_accessed: now,
-          created_at: now,
-          updated_at: now,
-          override_active: false // Ensure new sites don't have override_active set
-        };
-
-        await this.firestore.updateBlockedSite(siteId, newSiteData);
-        console.log(`Firebase Sync Service: Created new site entry for ${normalizedDomain} - ${timeRemaining}s remaining`);
-        
-        // Reset error count on successful sync
-        this.consecutiveErrors = 0;
-        return true;
+        console.log(`Firebase Sync Service: Site ${normalizedDomain} not found in Firestore for immediate sync - skipping automatic creation to prevent unwanted domains`);
+        // Don't automatically create new sites - only sync existing ones
+        // Sites should only be created through the popup's addDomain() function
+        return false;
       }
 
       // Implement "minimum time wins" policy to prevent race conditions between devices

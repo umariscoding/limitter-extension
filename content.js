@@ -457,14 +457,7 @@
                                 
                                 if (response && response.shouldTrack === false) {
                                     console.log("Smart Tab Blocker: Domain no longer tracked, clearing all state");
-                                    if (chrome.runtime?.id) {
-                                        chrome.storage.local.remove([storageKey]);
-                                        // Also clear any daily blocks for this domain
-                                        const blockKey = getDailyBlockKey();
-                                        if (blockKey) {
-                                            chrome.storage.local.remove([blockKey]);
-                                        }
-                                    }
+                                    clearAllStateForDomain();
                                 }
                             });
                         }
@@ -1831,7 +1824,9 @@
             const currentHostname = getCurrentDomain();
             console.log(`Smart Tab Blocker: Current hostname: ${currentHostname}, Override granted for: ${message.domain}`);
             
-            if (currentHostname === message.domain || currentHostname.endsWith('.' + message.domain)) {
+            const cleanCurrentHostname = currentHostname.replace(/^www\./, '');
+            const cleanMessageDomain = message.domain.replace(/^www\./, '');
+            if (cleanCurrentHostname === cleanMessageDomain || currentHostname === message.domain) {
                 console.log(`Smart Tab Blocker: Override granted for ${message.domain} - allowing access`);
                 
                 // Clear state and hide any blocking UI
@@ -1887,7 +1882,9 @@
             const currentHostname = getCurrentDomain();
             console.log(`Smart Tab Blocker: Start tracking request - Current: ${currentHostname}, Tracking: ${message.domain}`);
             
-            if (currentHostname === message.domain || currentHostname.endsWith('.' + message.domain)) {
+            const cleanCurrentHostname = currentHostname.replace(/^www\./, '');
+            const cleanMessageDomain = message.domain.replace(/^www\./, '');
+            if (cleanCurrentHostname === cleanMessageDomain || currentHostname === message.domain) {
                 console.log(`Smart Tab Blocker: Starting tracking for ${message.domain} with ${message.timer}s timer`);
                 
                 // Clear any existing state first

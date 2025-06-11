@@ -322,6 +322,7 @@ document.addEventListener('DOMContentLoaded', function() {
         time_spent_today: 0,
         last_reset_date: todayString,
         is_blocked: false,
+        override_active: false,
         is_active: true,
         blocked_until: null,
         schedule: null,
@@ -658,9 +659,10 @@ document.addEventListener('DOMContentLoaded', function() {
           if (tabs[0] && tabs[0].url) {
             try {
               const hostname = new URL(tabs[0].url).hostname.toLowerCase();
-              // Check if this hostname matches any of our tracked domains
+              // Check if this hostname matches any of our tracked domains (exact match only)
               for (const domain of Object.keys(domains)) {
-                if (hostname === domain || hostname.endsWith('.' + domain)) {
+                const cleanHostname = hostname.replace(/^www\./, '');
+                if (cleanHostname === domain || hostname === domain) {
                   resolve(domain);
                   return;
                 }
@@ -952,11 +954,50 @@ document.addEventListener('DOMContentLoaded', function() {
       // Save to local storage to sync with background script
       saveDomains();
       
+      // Clean up leftover storage entries from auto-added domains
+      await cleanupLeftoverStorageEntries();
+      
     } catch (error) {
       console.error('Error loading domains from Firestore:', error);
       // Fallback to local storage
       console.log('Falling back to local storage due to error');
       loadDomains();
+    }
+  }
+
+  // Clean up leftover storage entries from domains that were auto-added but aren't in legitimate domains list
+  async function cleanupLeftoverStorageEntries() {
+    try {
+      const legitimateDomains = Object.keys(domains);
+      
+      // Get all storage keys
+      safeChromeCall(() => {
+        chrome.storage.local.get(null, (allStorage) => {
+          const keysToRemove = [];
+          
+          // Find timer and block keys for domains not in legitimate list
+          Object.keys(allStorage).forEach(key => {
+            if (key.startsWith('timerState_') || key.startsWith('dailyBlock_')) {
+              const domain = key.replace(/^(timerState_|dailyBlock_)/, '');
+              
+              // If this domain is not in our legitimate domains list, mark for removal
+              if (!legitimateDomains.includes(domain)) {
+                keysToRemove.push(key);
+                console.log(`Smart Tab Blocker: Marking leftover storage key for removal: ${key}`);
+              }
+            }
+          });
+          
+          // Remove leftover keys
+          if (keysToRemove.length > 0) {
+            chrome.storage.local.remove(keysToRemove, () => {
+              console.log(`Smart Tab Blocker: Cleaned up ${keysToRemove.length} leftover storage entries`);
+            });
+          }
+        });
+      });
+    } catch (error) {
+      console.error('Error cleaning up leftover storage entries:', error);
     }
   }
 
@@ -966,7 +1007,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (tab.url) {
           try {
             const hostname = new URL(tab.url).hostname.toLowerCase();
-            if (hostname === domain || hostname.endsWith('.' + domain)) {
+            const cleanHostname = hostname.replace(/^www\./, '');
+            if (cleanHostname === domain || hostname === domain) {
               console.log(`Smart Tab Blocker: Sending stop tracking for removed domain ${domain} to tab ${tab.id}`);
               
               // Send explicit stopTracking message
@@ -1126,7 +1168,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
           try {
             const hostname = new URL(tab.url).hostname.toLowerCase();
-            if (hostname === cleanDomain || hostname.endsWith('.' + cleanDomain)) {
+            const cleanHostname = hostname.replace(/^www\./, '');
+            if (cleanHostname === cleanDomain || hostname === cleanDomain) {
               // Reload the tab so the extension can start tracking immediately
               chrome.tabs.reload(tab.id).catch((error) => {
                 console.log(`Could not reload tab ${tab.id}:`, error);
@@ -1451,7 +1494,8 @@ document.addEventListener('DOMContentLoaded', function() {
           if (tab.url) {
             try {
               const hostname = new URL(tab.url).hostname.toLowerCase();
-              if (hostname === domain || hostname.endsWith('.' + domain)) {
+              const cleanHostname = hostname.replace(/^www\./, '');
+              if (cleanHostname === domain || hostname === domain) {
                 // Send override immediately, don't wait for response
                 chrome.tabs.sendMessage(tab.id, { 
                   action: 'overrideGranted',
