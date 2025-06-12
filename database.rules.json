@@ -1,0 +1,19 @@
+{
+  "rules": {
+    "blocked_sites": {
+      "$userId": {
+        ".read": "auth != null && auth.uid == $userId",
+        ".write": "auth != null && auth.uid == $userId",
+        "$site": {
+          ".validate": "newData.hasChildren(['user_id', 'url'])",
+          "user_id": {
+            ".validate": "newData.val() == $userId"
+          },
+          "url": {
+            ".validate": "newData.isString() && newData.val().length > 0"
+          }
+        }
+      }
+    }
+  }
+} 
