@@ -8,6 +8,7 @@ const firebaseConfig = {
   messagingSenderId: "642984588666",
   appId: "1:642984588666:web:dd1fcd739567df3a4d92c3",
   measurementId: "G-B0MC8CDXCK",
+  databaseURL: "https://test-ext-ad0b2-default-rtdb.firebaseio.com"
 };
 
 // Initialize Firebase (will be done in the popup script)
@@ -633,7 +634,107 @@ class FirebaseFirestore {
   }
 }
 
+// Firebase Realtime Database class
+class FirebaseRTDB {
+  constructor(config, authInstance) {
+    this.config = config;
+    this.auth = authInstance;
+    this.databaseURL = config.databaseURL;
+  }
+
+  // Utility functions for domain handling
+  normalizeDomain(url) {
+    let domain = url.replace(/^(https?:\/\/)?(www\.)?/, '');
+    domain = domain.split('/')[0].toLowerCase();
+    return domain;
+  }
+
+  encodeDomainForPath(domain) {
+    return domain.replace(/\./g, '_');
+  }
+
+  // Get auth token for requests
+  async getAuthToken() {
+    const user = this.auth.getCurrentUser();
+    if (!user || !user.idToken) {
+      throw new Error('User not authenticated');
+    }
+    return user.idToken;
+  }
+
+  // Add a blocked site to RTDB
+  async addBlockedSite(userId, siteData) {
+    try {
+      const domain = this.normalizeDomain(siteData.url);
+      const encodedDomain = this.encodeDomainForPath(domain);
+      const token = await this.getAuthToken();
+
+      // Prepare the data
+      const now = Date.now();
+      const data = {
+        user_id: userId,
+        url: domain,
+        name: siteData.name || domain,
+        time_limit: siteData.time_limit || 3600,
+        time_remaining: siteData.time_remaining || siteData.time_limit || 3600,
+        time_spent_today: 0,
+        last_reset_date: new Date().toISOString().split('T')[0],
+        is_blocked: false,
+        is_active: true,
+        blocked_until: null,
+        schedule: null,
+        access_count: 0,
+        total_time_spent: 0,
+        override_active: false,
+        override_initiated_by: null,
+        override_initiated_at: null,
+        created_at: now,
+        updated_at: now
+      };
+
+      // Make the request
+      const response = await fetch(`${this.databaseURL}/blocked_sites/${userId}/${encodedDomain}.json?auth=${token}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+      });
+
+      if (!response.ok) {
+        throw new Error(`RTDB addBlockedSite failed: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log(`RTDB: Added blocked site ${domain} for user ${userId}`, result);
+      return result;
+
+    } catch (error) {
+      console.error('RTDB addBlockedSite error:', error);
+      throw error;
+    }
+  }
+
+  // Get all blocked sites for a user
+  async getUserBlockedSites(userId) {
+    try {
+      const token = await this.getAuthToken();
+      const response = await fetch(`${this.databaseURL}/blocked_sites/${userId}.json?auth=${token}`);
+      
+      if (!response.ok) {
+        throw new Error(`RTDB get blocked sites failed: ${response.statusText}`);
+      }
+
+      const sites = await response.json();
+      return sites || {};
+    } catch (error) {
+      console.error('RTDB getUserBlockedSites error:', error);
+      throw error;
+    }
+  }
+}
+
 // Export for use in other scripts
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { FirebaseAuth, FirebaseFirestore, FIREBASE_CONFIG };
+  module.exports = { FirebaseAuth, FirebaseFirestore, FirebaseRTDB, FIREBASE_CONFIG };
 }

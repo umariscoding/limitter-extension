@@ -25,9 +25,10 @@ function safeChromeCall(apiCall, errorCallback) {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-  // Initialize Firebase Auth and Firestore
+  // Initialize Firebase Auth, Firestore, and RTDB
   const firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
   const firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
+  const rtdb = new FirebaseRTDB(FIREBASE_CONFIG, firebaseAuth);
   
   // Initialize Subscription Service
   const subscriptionService = new SubscriptionService(firebaseAuth, firestore);
@@ -923,32 +924,29 @@ document.addEventListener('DOMContentLoaded', function() {
     try {
       const user = firebaseAuth.getCurrentUser();
       if (!user) {
-        // console.log('No authenticated user, falling back to local storage');
-        loadDomains();
+        console.log('No authenticated user for loading domains');
         return;
       }
 
-      // console.log('Loading blocked sites from Firestore for user:', user.uid);
-      
-      // Get user's blocked sites from Firestore
-      const blockedSites = await firestore.getUserBlockedSites(user.uid);
+      // Get user's blocked sites from RTDB
+      const blockedSites = await rtdb.getUserBlockedSites(user.uid);
       
       // Clear existing domains object
       domains = {};
       
-      if (blockedSites && blockedSites.length > 0) {
-        // Convert Firestore sites to local domains format
-        blockedSites.forEach(site => {
-          // Only load active sites
-          if (site.is_active) {
-            domains[site.url] = site.time_limit;
-            // console.log(`Loaded site from Firestore: ${site.url} with ${site.time_limit}s timer`);
+      if (blockedSites && Object.keys(blockedSites).length > 0) {
+        // Convert RTDB sites to local domains format
+        Object.entries(blockedSites).forEach(([encodedDomain, site]) => {
+          if (site && site.time_limit) {
+            // Decode domain from RTDB path format
+            const domain = decodeURIComponent(encodedDomain.replace(/%2E/g, '.'));
+            domains[domain] = site.time_limit;
           }
         });
         
-        // console.log(`Loaded ${Object.keys(domains).length} active sites from Firestore:`, Object.keys(domains));
+        console.log(`Loaded ${Object.keys(domains).length} sites from RTDB:`, Object.keys(domains));
       } else {
-        // console.log('No blocked sites found in Firestore');
+        console.log('No blocked sites found in RTDB');
       }
       
       // Save to local storage to sync with background script
@@ -958,7 +956,7 @@ document.addEventListener('DOMContentLoaded', function() {
       await cleanupLeftoverStorageEntries();
       
     } catch (error) {
-      console.error('Error loading domains from Firestore:', error);
+      console.error('Error loading domains from RTDB:', error);
       // Fallback to local storage
       console.log('Falling back to local storage due to error');
       loadDomains();
@@ -1052,156 +1050,82 @@ document.addEventListener('DOMContentLoaded', function() {
   }
   
   async function addDomain() {
-    // Check if user is authenticated
-    if (!isUserAuthenticated()) {
-      showError('Please log in to add domains');
-      return;
-    }
+    try {
+      // Get and validate inputs
+      const domainInput = document.getElementById('domainInput');
+      const hoursInput = document.getElementById('hoursInput');
+      const minutesInput = document.getElementById('minutesInput');
+      const secondsInput = document.getElementById('secondsInput');
 
-    const domain = domainInput.value.trim().toLowerCase();
-    const userPlan = subscriptionService.getCurrentPlan();
-    
-    let hours, minutes, seconds, totalSeconds;
-    
-    if (userPlan.id === 'free') {
-      // Free plan: force 1 hour timer
-      hours = 1;
-      minutes = 0;
-      seconds = 0;
-      totalSeconds = 3600; // 1 hour
-    } else {
-      // Pro/Elite plans: use user input
-      hours = parseInt(hoursInput.value) || 0;
-      minutes = parseInt(minutesInput.value) || 0;
-      seconds = parseInt(secondsInput.value) || 0;
-      totalSeconds = hours * 3600 + minutes * 60 + seconds;
-      
-      // Validate time input for non-free plans
-      if (totalSeconds < 1) {
-        showError('Please enter a time greater than 0');
+      if (!domainInput || !hoursInput || !minutesInput || !secondsInput) {
+        console.error('Required input elements not found');
         return;
       }
-      
-      if (totalSeconds > 86400) { // 24 hours max
-        showError('Timer cannot exceed 24 hours');
-        return;
-      }
-    }
-    
-    if (!domain) {
-      showError('Please enter a domain');
-      return;
-    }
-    
-    // Check subscription limits for domain count
-    const currentDomainCount = Object.keys(domains).length;
-    const canAdd = await subscriptionService.canAddDomain(currentDomainCount);
-    
-    if (!canAdd) {
-      const maxDomains = subscriptionService.getMaxDomains();
-      showPlanLimitError(`You've reached your limit of ${maxDomains} domains. Upgrade to Pro for unlimited domains.`, 'pro');
-      return;
-    }
-    
-    // Clean domain (remove everything before www, then remove www, then remove path)
-    const cleanDomain = cleanDomainFromUrl(domain);
-    
-    // Validate the cleaned domain format
-    if (!isValidDomainFormat(cleanDomain)) {
-      showError('Please enter a valid domain (e.g., google.com, facebook.net, amazon.co.uk)');
-      return;
-    }
-    
-    // Check if domain already exists in Firestore
-    const user = firebaseAuth.getCurrentUser();
-    if (!user) {
-      showError('Please log in to add domains');
-      return;
-    }
 
-    const siteId = `${user.uid}_${cleanDomain}`;
-    const existingSite = await firestore.getBlockedSite(siteId);
-    
-    if (existingSite) {
-      if (existingSite.is_active) {
-        // Site already exists and is active - show message and return
-        showWarning(`${cleanDomain} is already being tracked`);
+      const domain = cleanDomainFromUrl(domainInput.value);
+      if (!domain) {
+        showError('Please enter a valid domain');
         return;
-      } else {
-        // Site exists but is inactive - reactivate it without changing time_limit or time_remaining
-        console.log(`Reactivating inactive site: ${cleanDomain}`);
-        const now = new Date();
-        const reactivatedSiteData = {
-          ...existingSite,
-          is_active: true,
-          updated_at: now
-          // Don't change time_limit or time_remaining
-        };
-        
-        await firestore.updateBlockedSite(siteId, reactivatedSiteData);
-        
-        // Add to local domains with existing time_limit
-        domains[cleanDomain] = existingSite.time_limit;
-        saveDomains();
-        
-        showFeedback(`Reactivated ${cleanDomain} with existing ${formatTime(existingSite.time_limit)} timer`);
       }
-    } else {
-      // New site - add normally
-      domains[cleanDomain] = totalSeconds;
-      saveDomains();
-      
-      // Sync to Firestore (create new site)
-      await syncDomainToFirestore(cleanDomain, totalSeconds);
-      
-      showFeedback(`Added ${cleanDomain} with ${formatTime(totalSeconds)} timer. Open tabs for this site will be reloaded.`);
-    }
-    
-    // Common actions for both new and reactivated sites
-    // Notify background script that a domain was added
-    safeChromeCall(() => {
-      chrome.runtime.sendMessage({ action: 'domainAdded', domain: cleanDomain });
-    });
-    
-    // Clear any existing daily block for this domain to allow fresh timer
-    clearDailyBlock(cleanDomain);
-    
-    // Reload existing tabs that match the new domain
-    chrome.tabs.query({}, (tabs) => {
-      tabs.forEach(tab => {
-        if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
-          try {
-            const hostname = new URL(tab.url).hostname.toLowerCase();
-            const cleanHostname = hostname.replace(/^www\./, '');
-            if (cleanHostname === cleanDomain || hostname === cleanDomain) {
-              // Reload the tab so the extension can start tracking immediately
-              chrome.tabs.reload(tab.id).catch((error) => {
-                console.log(`Could not reload tab ${tab.id}:`, error);
-              });
-              // console.log(`Reloaded tab ${tab.id} for domain ${cleanDomain}`);
-            }
-          } catch (error) {
-            // Invalid URL, ignore
-          }
-        }
-      });
-    });
-    
-    updateDomainStates();
-    updateStats();
-    
-    // Clear inputs and reset to plan defaults
-    domainInput.value = '';
-    const planForClear = subscriptionService.getCurrentPlan();
-    if (planForClear.id === 'free') {
-      // Keep 1 hour for free plan (inputs are disabled)
-      hoursInput.value = '1';
-      minutesInput.value = '0';
-      secondsInput.value = '0';
-    } else {
+
+      if (!isValidDomainFormat(domain)) {
+        showError('Invalid domain format');
+        return;
+      }
+
+      // Calculate total seconds
+      const hours = parseInt(hoursInput.value) || 0;
+      const minutes = parseInt(minutesInput.value) || 0;
+      const seconds = parseInt(secondsInput.value) || 0;
+      const totalSeconds = (hours * 3600) + (minutes * 60) + seconds;
+
+      if (totalSeconds <= 0) {
+        showError('Please set a time limit greater than 0');
+        return;
+      }
+
+      // Check if user is authenticated
+      const user = firebaseAuth.getCurrentUser();
+      if (!user) {
+        showError('Please log in to add domains');
+        return;
+      }
+
+      // Add site to RTDB
+      const siteData = {
+        url: domain,
+        name: domain,
+        time_limit: totalSeconds,
+        time_remaining: totalSeconds
+      };
+
+      await rtdb.addBlockedSite(user.uid, siteData);
+      console.log('Site added to RTDB:', domain);
+
+      // Update local storage
+      domains[domain] = {
+        timeLimit: totalSeconds,
+        timeRemaining: totalSeconds,
+        isActive: true,
+        lastResetDate: getTodayString()
+      };
+
+      // Save to Chrome storage
+      await saveDomains();
+
+      // Clear inputs
+      domainInput.value = '';
       hoursInput.value = '';
       minutesInput.value = '';
       secondsInput.value = '';
+
+      // Update UI
+      await renderDomainsList();
+      showFeedback('Domain added successfully');
+
+    } catch (error) {
+      console.error('Error adding domain:', error);
+      showError('Failed to add domain. Please try again.');
     }
   }
   
