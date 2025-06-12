@@ -554,14 +554,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       console.log("wokring")
       // Sync to both Firestore and Realtime Database
       Promise.all([
-        // Sync to Firestore
-        // firebaseSyncService.syncDomainImmediately(
-        //   request.domain,
-        //   request.timeRemaining,
-        //   request.gracePeriod,
-        //   request.isOverride || false
-        // ),
-        // Sync to Realtime Database
         realtimeDB.addBlockedSite(timerSiteId, siteData)
       ]).then(([firestoreSuccess, realtimeSuccess]) => {
         sendResponse({ success: firestoreSuccess || realtimeSuccess });

@@ -377,7 +377,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
       // Update both Firestore and Realtime Database
       await Promise.all([
-        firestore.updateBlockedSite(siteId, siteData),
         realtimeDB.addBlockedSite(siteId, siteData)
       ]);
 
