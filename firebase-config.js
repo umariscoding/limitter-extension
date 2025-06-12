@@ -707,6 +707,42 @@ class FirebaseRealtimeDB {
     }
   }
 
+  // Get a specific blocked site
+  async getBlockedSite(siteId) {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      // Encode the siteId for the path
+      const encodedSiteId = this.encodePath(siteId);
+
+      const url = `${this.databaseURL}/blockedSites/${encodedSiteId}.json?auth=${user.idToken}`;
+      const response = await fetch(url, {
+        method: "GET",
+        headers: this.getAuthHeaders()
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to get blocked site: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (!data) return null;
+
+      // Return the data with decoded URL
+      return {
+        ...data,
+        id: encodedSiteId,
+        url: this.decodePath(siteId.split('_').slice(1).join('_')) // Remove userId_ prefix and decode
+      };
+    } catch (error) {
+      console.error("Get blocked site error:", error);
+      throw error;
+    }
+  }
+
   // Add a blocked site to the Realtime Database
   async addBlockedSite(siteId, siteData) {
     try {
@@ -718,25 +754,15 @@ class FirebaseRealtimeDB {
       // Clean and validate the data
       const cleanData = {
         ...siteData,
-        created_at: siteData.created_at ? siteData.created_at.toISOString() : new Date().toISOString(),
-        updated_at: siteData.updated_at ? siteData.updated_at.toISOString() : new Date().toISOString()
+        created_at: siteData.created_at ? siteData.created_at : new Date().toISOString(),
+        updated_at: siteData.updated_at ? siteData.updated_at : new Date().toISOString()
       };
 
       // Encode the siteId for the path
       const encodedSiteId = this.encodePath(siteId);
 
-      // Debug logs
-      console.log('Adding blocked site to Realtime DB:', {
-        originalSiteId: siteId,
-        encodedSiteId,
-        userId: user.uid,
-        data: cleanData
-      });
-
       // Store directly under blockedSites node
       const url = `${this.databaseURL}/blockedSites/${encodedSiteId}.json?auth=${user.idToken}`;
-      console.log('Request URL:', url);
-
       const response = await fetch(url, {
         method: "PUT",
         headers: this.getAuthHeaders(),

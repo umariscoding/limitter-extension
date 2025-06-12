@@ -488,51 +488,81 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
     case 'syncTimerToFirebase':
       // Content script requesting to sync timer state to Firebase
-      // if (!isAuthenticated) {
-      //   console.log('Smart Tab Blocker Background: Sync request denied - user not authenticated');
-      //   sendResponse({ success: false, error: 'User not authenticated' });
-      //   break;
-      // }
-      
-      if (!firebaseSyncService) {
-        console.error('Smart Tab Blocker Background: Sync request denied - FirebaseSyncService not available');
+      if (!firebaseSyncService || !realtimeDB) {
+        console.error('Smart Tab Blocker Background: Sync request denied - Services not available');
         console.error('Smart Tab Blocker Background: Debug info:', {
           isAuthenticated,
           hasFirebaseAuth: !!firebaseAuth,
           hasFirestore: !!firestore,
-          hasSubscriptionService: !!subscriptionService,
+          hasRealtimeDB: !!realtimeDB,
           hasSyncService: !!firebaseSyncService
         });
         
-        // Try to reinitialize the sync service
-        // console.log('Smart Tab Blocker Background: Attempting to reinitialize sync service...');
+        // Try to reinitialize the services
         try {
           if (firebaseAuth && firestore) {
             firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
             firebaseSyncService.init();
-            // console.log('Smart Tab Blocker Background: Sync service reinitialized successfully');
+            realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
           } else {
             console.error('Smart Tab Blocker Background: Cannot reinitialize - missing dependencies');
-            sendResponse({ success: false, error: 'Sync service not available and cannot reinitialize' });
+            sendResponse({ success: false, error: 'Services not available and cannot reinitialize' });
             break;
           }
         } catch (reinitError) {
-          console.error('Smart Tab Blocker Background: Failed to reinitialize sync service:', reinitError);
-          sendResponse({ success: false, error: 'Sync service not available and reinitialize failed' });
+          console.error('Smart Tab Blocker Background: Failed to reinitialize services:', reinitError);
+          sendResponse({ success: false, error: 'Services not available and reinitialize failed' });
           break;
         }
       }
       
-      // console.log('Smart Tab Blocker Background: Processing sync request for domain:', request.domain);
-      firebaseSyncService.syncDomainImmediately(
-        request.domain,
-        request.timeRemaining,
-        request.gracePeriod,
-        request.isOverride || false
-      ).then(() => {
-        sendResponse({ success: true });
+      // Get current user
+      const currentUser = firebaseAuth.getCurrentUser();
+      if (!currentUser) {
+        console.error('Smart Tab Blocker Background: No authenticated user');
+        sendResponse({ success: false, error: 'User not authenticated' });
+        break;
+      }
+
+      // Normalize domain and create siteId
+      const timerDomain = request.domain.replace(/^www\./, '').toLowerCase();
+      const timerSiteId = `${currentUser.uid}_${timerDomain}`;
+
+      // Prepare site data
+      const now = new Date();
+      const siteData = {
+        user_id: currentUser.uid,
+        url: timerDomain,
+        time_remaining: request.timeRemaining,
+        time_limit: request.gracePeriod,
+        is_active: true,
+        is_blocked: request.timeRemaining <= 0,
+        last_accessed: now.toISOString(),
+        updated_at: now.toISOString(),
+        last_reset_date: getTodayString()
+      };
+
+      // If timer has reached zero, mark as blocked
+      if (request.timeRemaining <= 0) {
+        siteData.is_blocked = true;
+        siteData.blocked_until = new Date(now.setHours(23, 59, 59, 999)).toISOString();
+      }
+
+      // Sync to both Firestore and Realtime Database
+      Promise.all([
+        // Sync to Firestore
+        firebaseSyncService.syncDomainImmediately(
+          request.domain,
+          request.timeRemaining,
+          request.gracePeriod,
+          request.isOverride || false
+        ),
+        // Sync to Realtime Database
+        realtimeDB.addBlockedSite(timerSiteId, siteData)
+      ]).then(([firestoreSuccess, realtimeSuccess]) => {
+        sendResponse({ success: firestoreSuccess || realtimeSuccess });
       }).catch(async (error) => {
-        console.error('Smart Tab Blocker Background: Error syncing timer to Firebase:', error);
+        console.error('Smart Tab Blocker Background: Error syncing timer:', error);
         
         // If error contains authentication issue, debug auth status
         if (error.message.includes('authenticated') || error.message.includes('auth')) {
@@ -771,7 +801,7 @@ function updateAllTrackedTabs() {
 // Load timer state from Firebase for cross-device syncing
 async function loadTimerStateFromFirebase(domain) {
   try {
-    if (!firestore || !firebaseAuth) {
+    if (!realtimeDB || !firebaseAuth) {
       console.log('Smart Tab Blocker Background: Not authenticated or services not available for Firebase load');
       return null;
     }
@@ -794,22 +824,14 @@ async function loadTimerStateFromFirebase(domain) {
     }
     
     // Normalize domain for consistency
-    const normalizedDomain = domain.replace(/^www\./, '').toLowerCase();
-    const siteId = `${userId}_${normalizedDomain}`;
+    const timerDomain = domain.replace(/^www\./, '').toLowerCase();
+    const timerSiteId = `${userId}_${timerDomain}`;
     
-    // console.log(`Smart Tab Blocker Background: Loading timer state for ${normalizedDomain} from Firebase (siteId: ${siteId})`);
+    // console.log(`Smart Tab Blocker Background: Loading timer state for ${timerDomain} from Firebase (siteId: ${timerSiteId})`);
     
-    const siteData = await firestore.getBlockedSite(siteId);
+    const siteData = await realtimeDB.getBlockedSite(timerSiteId);
     
     if (siteData) {
-      // console.log('Smart Tab Blocker Background: Firebase site data:', {
-      //   time_remaining: siteData.time_remaining,
-      //   is_active: siteData.is_active,
-      //   is_blocked: siteData.is_blocked,
-      //   time_limit: siteData.time_limit,
-      //   updated_at: siteData.updated_at
-      // });
-      
       // Check if site is blocked for today
       const today = getTodayString();
       const lastResetDate = siteData.last_reset_date;
@@ -828,10 +850,10 @@ async function loadTimerStateFromFirebase(domain) {
           gracePeriod: siteData.time_limit || 20,
           isActive: false,
           isPaused: false,
-          timestamp: siteData.updated_at ? siteData.updated_at.getTime() : Date.now(),
+          timestamp: new Date(siteData.updated_at).getTime(),
           url: siteData.url,
           date: today,
-          domain: normalizedDomain
+          domain: timerDomain
         };
       }
       
@@ -842,10 +864,10 @@ async function loadTimerStateFromFirebase(domain) {
           gracePeriod: siteData.time_limit || 20,
           isActive: true,
           isPaused: false, // Firebase doesn't track pause state
-          timestamp: siteData.updated_at ? siteData.updated_at.getTime() : Date.now(),
+          timestamp: new Date(siteData.updated_at).getTime(),
           url: siteData.url,
           date: today,
-          domain: normalizedDomain,
+          domain: timerDomain,
           override_active: siteData.override_active,
           override_initiated_by: siteData.override_initiated_by,
           override_initiated_at: siteData.override_initiated_at,
@@ -856,7 +878,7 @@ async function loadTimerStateFromFirebase(domain) {
       }
     }
     
-    // console.log(`Smart Tab Blocker Background: No active timer state found in Firebase for ${normalizedDomain}`);
+    // console.log(`Smart Tab Blocker Background: No active timer state found in Firebase for ${timerDomain}`);
     return null;
   } catch (error) {
     console.error('Smart Tab Blocker Background: Error loading timer state from Firebase:', error);
