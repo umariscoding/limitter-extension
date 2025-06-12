@@ -4,6 +4,7 @@ let isEnabled = true;
 let isAuthenticated = false;
 let firebaseAuth = null;
 let firestore = null;
+let realtimeDB = null;
 let subscriptionService = null;
 let firebaseSyncService = null;
 
@@ -151,7 +152,6 @@ chrome.runtime.onInstalled.addListener(async () => {
     
     // Only update tabs AFTER everything is fully initialized
     if (firebaseSyncService) {
-      // console.log('Smart Tab Blocker: Authentication and Firebase ready - updating tracked tabs');
       setTimeout(() => {
         updateAllTrackedTabs();
       }, 2000); // Extra delay to ensure everything is ready
@@ -1082,4 +1082,23 @@ async function handleOverrideRequest(domain, tabId) {
       error: error.message
     };
   }
-} 
+}
+
+// Initialize Firebase services
+async function initializeAuth() {
+  try {
+    firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
+    const user = await firebaseAuth.getStoredAuthData();
+    
+    if (user) {
+      isAuthenticated = true;
+      firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
+      realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
+      firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
+      return true;
+    }
+  } catch (error) {
+    console.error('Firebase initialization error:', error);
+  }
+  return false;
+}

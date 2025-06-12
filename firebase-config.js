@@ -633,7 +633,131 @@ class FirebaseFirestore {
   }
 }
 
+// Firebase Realtime Database class
+class FirebaseRealtimeDB {
+  constructor(config, authInstance) {
+    this.config = config;
+    this.auth = authInstance;
+    this.databaseURL = `https://${config.projectId}-default-rtdb.firebaseio.com`;
+  }
+
+  // Get authorization headers for API requests
+  getAuthHeaders() {
+    const user = this.auth.getCurrentUser();
+    if (!user || !user.idToken) {
+      throw new Error("User not authenticated");
+    }
+    return {
+      "Content-Type": "application/json",
+    };
+  }
+
+  // Encode a string to be safe for use in a Firebase path
+  encodePath(str) {
+    return str
+      .replace(/\./g, '_dot_')
+      .replace(/#/g, '_hash_')
+      .replace(/\$/g, '_dollar_')
+      .replace(/\[/g, '_lbracket_')
+      .replace(/\]/g, '_rbracket_')
+      .replace(/\//g, '_slash_');
+  }
+
+  // Decode a Firebase path back to original string
+  decodePath(str) {
+    return str
+      .replace(/_dot_/g, '.')
+      .replace(/_hash_/g, '#')
+      .replace(/_dollar_/g, '$')
+      .replace(/_lbracket_/g, '[')
+      .replace(/_rbracket_/g, ']')
+      .replace(/_slash_/g, '/');
+  }
+
+  // Get all blocked sites
+  async getBlockedSites() {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      const url = `${this.databaseURL}/blockedSites.json?auth=${user.idToken}`;
+      const response = await fetch(url, {
+        method: "GET",
+        headers: this.getAuthHeaders()
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to get blocked sites: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (!data) return [];
+
+      // Convert the data to an array and decode the site IDs
+      return Object.entries(data).map(([encodedId, siteData]) => ({
+        ...siteData,
+        id: encodedId,
+        url: this.decodePath(encodedId.split('_').slice(1).join('_')) // Remove userId_ prefix and decode
+      }));
+    } catch (error) {
+      console.error("Get blocked sites error:", error);
+      throw error;
+    }
+  }
+
+  // Add a blocked site to the Realtime Database
+  async addBlockedSite(siteId, siteData) {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      // Clean and validate the data
+      const cleanData = {
+        ...siteData,
+        created_at: siteData.created_at ? siteData.created_at.toISOString() : new Date().toISOString(),
+        updated_at: siteData.updated_at ? siteData.updated_at.toISOString() : new Date().toISOString()
+      };
+
+      // Encode the siteId for the path
+      const encodedSiteId = this.encodePath(siteId);
+
+      // Debug logs
+      console.log('Adding blocked site to Realtime DB:', {
+        originalSiteId: siteId,
+        encodedSiteId,
+        userId: user.uid,
+        data: cleanData
+      });
+
+      // Store directly under blockedSites node
+      const url = `${this.databaseURL}/blockedSites/${encodedSiteId}.json?auth=${user.idToken}`;
+      console.log('Request URL:', url);
+
+      const response = await fetch(url, {
+        method: "PUT",
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify(cleanData)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Realtime DB Error Response:', errorText);
+        throw new Error(`Failed to add blocked site: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error("Add blocked site error:", error);
+      throw error;
+    }
+  }
+}
+
 // Export for use in other scripts
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { FirebaseAuth, FirebaseFirestore, FIREBASE_CONFIG };
+  module.exports = { FirebaseAuth, FirebaseFirestore, FirebaseRealtimeDB, FIREBASE_CONFIG };
 }

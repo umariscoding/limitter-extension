@@ -28,6 +28,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // Initialize Firebase Auth and Firestore
   const firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
   const firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
+  const realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
   
   // Initialize Subscription Service
   const subscriptionService = new SubscriptionService(firebaseAuth, firestore);
@@ -311,7 +312,7 @@ document.addEventListener('DOMContentLoaded', function() {
       const todayString = getTodayString();
       
       // This function now only handles creating new sites
-      // console.log(`Creating new site ${domain} in Firestore`);
+      console.log(`Creating new site ${domain} in Firebase`);
       
       const siteData = {
         user_id: user.uid,
@@ -330,8 +331,16 @@ document.addEventListener('DOMContentLoaded', function() {
         updated_at: now
       };
 
-      await firestore.updateBlockedSite(siteId, siteData);
-      // console.log(`Created new domain ${domain} in Firestore`);
+      console.log('Syncing site data:', {
+        siteId,
+        data: siteData
+      });
+
+      // Add to both Firestore and Realtime Database
+      await Promise.all([
+        // firestore.updateBlockedSite(siteId, siteData),
+        realtimeDB.addBlockedSite(siteId, siteData)
+      ]);
 
       // Update user profile stats if we have one
       if (userProfile) {
@@ -340,7 +349,7 @@ document.addEventListener('DOMContentLoaded', function() {
         await firestore.updateUserProfile(user.uid, userProfile);
       }
     } catch (error) {
-      console.error('Error syncing domain to Firestore:', error);
+      console.error('Error syncing domain to Firebase:', error);
     }
   }
 
@@ -366,8 +375,13 @@ document.addEventListener('DOMContentLoaded', function() {
         updated_at: new Date() // Update the timestamp
       };
 
-      await firestore.updateBlockedSite(siteId, siteData);
-      console.log(`Removed domain ${domain} from Firestore (marked as inactive)`);
+      // Update both Firestore and Realtime Database
+      await Promise.all([
+        firestore.updateBlockedSite(siteId, siteData),
+        realtimeDB.addBlockedSite(siteId, siteData)
+      ]);
+
+      console.log(`Removed domain ${domain} from Firebase (marked as inactive)`);
 
       // Update user profile stats
       if (userProfile) {
@@ -376,7 +390,7 @@ document.addEventListener('DOMContentLoaded', function() {
         await firestore.updateUserProfile(user.uid, userProfile);
       }
     } catch (error) {
-      console.error('Error removing domain from Firestore:', error);
+      console.error('Error removing domain from Firebase:', error);
     }
   }
 
@@ -472,7 +486,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const password = passwordInput.value.trim();
     
     if (!email || !password) {
-      showAuthError('Please enter both email and password');
+      showAuthError('Please enter both email and password.');
       return;
     }
     
@@ -928,27 +942,28 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
-      // console.log('Loading blocked sites from Firestore for user:', user.uid);
+      console.log('Loading blocked sites from Firebase Realtime Database');
       
-      // Get user's blocked sites from Firestore
-      const blockedSites = await firestore.getUserBlockedSites(user.uid);
+      // Get user's blocked sites from Realtime Database
+      const blockedSites = await realtimeDB.getBlockedSites();
       
       // Clear existing domains object
       domains = {};
       
       if (blockedSites && blockedSites.length > 0) {
-        // Convert Firestore sites to local domains format
+        // Convert sites to local domains format
         blockedSites.forEach(site => {
           // Only load active sites
           if (site.is_active) {
+            // The url is already decoded by getBlockedSites
             domains[site.url] = site.time_limit;
-            // console.log(`Loaded site from Firestore: ${site.url} with ${site.time_limit}s timer`);
+            console.log(`Loaded site from Firebase: ${site.url} with ${site.time_limit}s timer`);
           }
         });
         
-        // console.log(`Loaded ${Object.keys(domains).length} active sites from Firestore:`, Object.keys(domains));
+        console.log(`Loaded ${Object.keys(domains).length} active sites from Firebase:`, Object.keys(domains));
       } else {
-        // console.log('No blocked sites found in Firestore');
+        console.log('No blocked sites found in Firebase');
       }
       
       // Save to local storage to sync with background script
@@ -958,7 +973,7 @@ document.addEventListener('DOMContentLoaded', function() {
       await cleanupLeftoverStorageEntries();
       
     } catch (error) {
-      console.error('Error loading domains from Firestore:', error);
+      console.error('Error loading domains from Firebase:', error);
       // Fallback to local storage
       console.log('Falling back to local storage due to error');
       loadDomains();
