@@ -1237,11 +1237,6 @@
         showTimer();
         updateTimerDisplay();
         
-        // Much more frequent syncing for smooth experience
-        let secondsCounter = 0;
-        let localSyncCounter = 0; // For inactive tab syncing
-        let crossDeviceCounter = 0; // For cross-device syncing
-        
         countdownTimer = setInterval(() => {
             // Check extension context on each tick
             if (!checkExtensionContext()) {
@@ -1255,21 +1250,6 @@
                     timeRemaining--;
                     updateTimerDisplay();
                     
-                    secondsCounter++;
-                    crossDeviceCounter++;
-                    
-                    // Very frequent Firebase sync for smooth cross-device experience (every 3 seconds)
-                    if (secondsCounter >= 3) {
-                        syncTimerToFirebase();
-                        secondsCounter = 0;
-                    }
-                    
-                    // Check for cross-device updates every 6 seconds
-                    if (crossDeviceCounter >= 6) {
-                        checkForCrossDeviceUpdates();
-                        crossDeviceCounter = 0;
-                    }
-                    
                     if (timeRemaining <= 0) {
                         stopCountdownTimer();
                         clearTimerState();
@@ -1278,22 +1258,6 @@
                         hideTimer();
                         showModal();
                         return;
-                    }
-                } else {
-                    // Inactive tab - sync more frequently for smoother updates
-                    localSyncCounter++;
-                    crossDeviceCounter++;
-                    
-                    // Sync from local storage every 3 seconds for inactive tabs
-                    if (localSyncCounter >= 3) {
-                        syncFromSharedState();
-                        localSyncCounter = 0;
-                    }
-                    
-                    // Check Firebase every 6 seconds for cross-device updates on inactive tabs
-                    if (crossDeviceCounter >= 6) {
-                        checkForCrossDeviceUpdates();
-                        crossDeviceCounter = 0;
                     }
                 }
             } else {

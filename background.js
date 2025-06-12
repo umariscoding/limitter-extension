@@ -499,6 +499,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         
         // Try to reinitialize the services
+        console.log('Smart Tab Blocker Backgrouilable');
+
         try {
           if (firebaseAuth && firestore) {
             firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
@@ -519,16 +521,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       // Get current user
       const currentUser = firebaseAuth.getCurrentUser();
       if (!currentUser) {
-        console.error('Smart Tab Blocker Background: No authenticated user');
-        sendResponse({ success: false, error: 'User not authenticated' });
+        console.log('Smart Tab Blocker Background: No authenticated user');
+        sendResponse({ success: false, error: 'Not authenticated' });
         break;
       }
+      console.log('Smart Tab Blocker Background: Sync request denied - Services not available');
 
-      // Normalize domain and create siteId
-      const timerDomain = request.domain.replace(/^www\./, '').toLowerCase();
+      // Format domain and create site ID
+      const timerDomain = request.domain;
       const timerSiteId = `${currentUser.uid}_${timerDomain}`;
 
-      // Prepare site data
+      // Create site data for Realtime Database
       const now = new Date();
       const siteData = {
         user_id: currentUser.uid,
@@ -539,7 +542,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         is_blocked: request.timeRemaining <= 0,
         last_accessed: now.toISOString(),
         updated_at: now.toISOString(),
-        last_reset_date: getTodayString()
+        last_reset_date: new Date().toLocaleDateString('en-US'),
+        is_paused: request.isPaused || false
       };
 
       // If timer has reached zero, mark as blocked
@@ -547,16 +551,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         siteData.is_blocked = true;
         siteData.blocked_until = new Date(now.setHours(23, 59, 59, 999)).toISOString();
       }
-
+      console.log("wokring")
       // Sync to both Firestore and Realtime Database
       Promise.all([
         // Sync to Firestore
-        firebaseSyncService.syncDomainImmediately(
-          request.domain,
-          request.timeRemaining,
-          request.gracePeriod,
-          request.isOverride || false
-        ),
+        // firebaseSyncService.syncDomainImmediately(
+        //   request.domain,
+        //   request.timeRemaining,
+        //   request.gracePeriod,
+        //   request.isOverride || false
+        // ),
         // Sync to Realtime Database
         realtimeDB.addBlockedSite(timerSiteId, siteData)
       ]).then(([firestoreSuccess, realtimeSuccess]) => {
