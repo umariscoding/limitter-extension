@@ -1133,7 +1133,8 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-    const siteId = `${user.uid}_${cleanDomain}`;
+    const formattedDomain = cleanDomain.replace(/\./g, '_');
+    const siteId = `${user.uid}_${formattedDomain}`;
     const existingSite = await firestore.getBlockedSite(siteId);
     
     if (existingSite) {
@@ -1670,7 +1671,8 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
-      const siteId = `${user.uid}_${domain}`;
+      const formattedDomain = domain.replace(/^www\./, '').toLowerCase().replace(/\./g, '_');
+      const siteId = `${user.uid}_${formattedDomain}`;
       
       // Parallel async operations (don't block on each other)
       const operations = [];

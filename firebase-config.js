@@ -1,5 +1,3 @@
-// Firebase Configuration
-// Replace these with your actual Firebase project configuration
 const firebaseConfig = {
   apiKey: "AIzaSyCRcKOOzsp_nX8auUOhAFR-UVhGqIgmOjU",
   authDomain: "test-ext-ad0b2.firebaseapp.com",
@@ -655,7 +653,7 @@ class FirebaseRealtimeDB {
   // Encode a string to be safe for use in a Firebase path
   encodePath(str) {
     return str
-      .replace(/\./g, '_dot_')
+      .replace(/\./g, '_')  // Replace dots with underscores for domain format
       .replace(/#/g, '_hash_')
       .replace(/\$/g, '_dollar_')
       .replace(/\[/g, '_lbracket_')
@@ -666,12 +664,17 @@ class FirebaseRealtimeDB {
   // Decode a Firebase path back to original string
   decodePath(str) {
     return str
-      .replace(/_dot_/g, '.')
       .replace(/_hash_/g, '#')
       .replace(/_dollar_/g, '$')
       .replace(/_lbracket_/g, '[')
       .replace(/_rbracket_/g, ']')
-      .replace(/_slash_/g, '/');
+      .replace(/_slash_/g, '/')
+      .replace(/_/g, '.');  // Replace underscores back to dots for domain format
+  }
+
+  // Format domain for Firebase keys (userId_domain_com format)
+  formatDomainForFirebase(domain) {
+    return domain.replace(/^www\./, '').toLowerCase().replace(/\./g, '_');
   }
 
   // Get all blocked sites
@@ -699,7 +702,7 @@ class FirebaseRealtimeDB {
       return Object.entries(data).map(([encodedId, siteData]) => ({
         ...siteData,
         id: encodedId,
-        url: this.decodePath(encodedId.split('_').slice(1).join('_')) // Remove userId_ prefix and decode
+        url: encodedId.split('_').slice(1).join('_').replace(/_/g, '.') // Remove userId_ prefix and convert underscores back to dots
       }));
     } catch (error) {
       console.error("Get blocked sites error:", error);
@@ -715,8 +718,8 @@ class FirebaseRealtimeDB {
         throw new Error("User not authenticated");
       }
 
-      // Encode the siteId for the path
-      const encodedSiteId = this.encodePath(siteId);
+      // The siteId should already be in the correct format (userId_domain_com)
+      const encodedSiteId = siteId;
 
       const url = `${this.databaseURL}/blockedSites/${encodedSiteId}.json?auth=${user.idToken}`;
       const response = await fetch(url, {
@@ -735,7 +738,7 @@ class FirebaseRealtimeDB {
       return {
         ...data,
         id: encodedSiteId,
-        url: this.decodePath(siteId.split('_').slice(1).join('_')) // Remove userId_ prefix and decode
+        url: siteId.split('_').slice(1).join('_').replace(/_/g, '.') // Remove userId_ prefix and convert underscores back to dots
       };
     } catch (error) {
       console.error("Get blocked site error:", error);
@@ -758,8 +761,8 @@ class FirebaseRealtimeDB {
         updated_at: siteData.updated_at ? siteData.updated_at : new Date().toISOString()
       };
 
-      // Encode the siteId for the path
-      const encodedSiteId = this.encodePath(siteId);
+      // The siteId should already be in the correct format (userId_domain_com)
+      const encodedSiteId = siteId;
 
       // Store directly under blockedSites node
       const url = `${this.databaseURL}/blockedSites/${encodedSiteId}.json?auth=${user.idToken}`;

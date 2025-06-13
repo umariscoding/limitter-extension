@@ -56,7 +56,8 @@ class FirebaseSyncService {
       }
 
       const normalizedDomain = this.normalizeDomain(timerState.domain);
-      const siteId = `${userId}_${normalizedDomain}`;
+      const formattedDomain = normalizedDomain.replace(/\./g, '_');
+      const siteId = `${userId}_${formattedDomain}`;
 
       const now = new Date();
       const siteData = {
@@ -65,6 +66,7 @@ class FirebaseSyncService {
         time_remaining: timerState.actualTimeRemaining,
         time_limit: timerState.gracePeriod,
         is_active: true,
+        override_active: false,
         is_blocked: timerState.actualTimeRemaining <= 0,
         last_accessed: now.toISOString(),
         updated_at: now.toISOString(),
