@@ -607,7 +607,8 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (e.target.classList.contains('remove-btn')) {
       await removeDomain(domain);
-          // Override button handler removed
+    } else if (e.target.classList.contains('override-btn')) {
+      await handleOverrideClick(domain);
     }
   });
   
@@ -1211,6 +1212,108 @@ document.addEventListener('DOMContentLoaded', function() {
     updateStats();
     showFeedback(`Removed ${domain} - all tabs will be refreshed`);
   }
+
+  async function handleOverrideClick(domain) {
+    // Check if user is authenticated
+    if (!isUserAuthenticated()) {
+      showError('Please log in to use override');
+      return;
+    }
+
+    try {
+      const user = firebaseAuth.getCurrentUser();
+      if (!user) {
+        showError('Please log in to use override');
+        return;
+      }
+
+      // Get the original time limit for this domain
+      const originalTimeLimit = domains[domain];
+      if (!originalTimeLimit) {
+        showError('Domain not found');
+        return;
+      }
+
+      // Format domain for Firebase
+      const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+      const siteId = `${user.uid}_${formattedDomain}`;
+
+      // Get existing site data
+      const existingSite = await realtimeDB.getBlockedSite(siteId);
+      if (!existingSite) {
+        showError('Site not found in database');
+        return;
+      }
+
+      // Create updated site data with reset timer and override active
+      const now = new Date();
+      const updatedSiteData = {
+        ...existingSite,
+        time_remaining: originalTimeLimit, // Reset to original time limit
+        time_limit: originalTimeLimit,
+        override_active: true, // Set override active
+        is_blocked: false, // Unblock the site
+        blocked_until: null, // Clear blocked until
+        updated_at: now.toISOString(),
+        last_accessed: now.toISOString()
+      };
+
+      // Update Firebase Realtime Database
+      await realtimeDB.addBlockedSite(siteId, updatedSiteData);
+
+      // Clear daily block in Chrome storage
+      clearDailyBlock(domain);
+
+      // Reset timer state in Chrome storage
+      const timerKey = `timerState_${domain}`;
+      const resetTimerState = {
+        timeRemaining: originalTimeLimit,
+        gracePeriod: originalTimeLimit,
+        isActive: true,
+        isPaused: false,
+        timestamp: Date.now(),
+        date: getTodayString(),
+        url: domain,
+        override_active: true,
+        override_initiated_by: user.uid,
+        override_initiated_at: now.toISOString(),
+        time_limit: originalTimeLimit
+      };
+
+      safeChromeCall(() => {
+        chrome.storage.local.set({
+          [timerKey]: resetTimerState
+        });
+      });
+
+      // Update the domains object and save to Chrome sync storage
+      domains[domain] = originalTimeLimit;
+      saveDomains();
+
+      domainStates[domain] = {
+        status: 'running',
+        timeRemaining: originalTimeLimit,
+        isActive: true
+      };
+
+      safeChromeCall(() => {
+        chrome.runtime.sendMessage({
+          action: 'domainOverrideActivated',
+          domain: domain,
+          timeLimit: originalTimeLimit
+        });
+      });
+
+      renderDomainsList();
+      updateStats();
+      
+      showFeedback(`Override activated for ${domain} - timer reset to ${formatTime(originalTimeLimit)}`);
+
+    } catch (error) {
+      console.error('Override error:', error);
+      showError('Failed to activate override. Please try again.');
+    }
+  }
   
   async function renderDomainsList() {
     const domainKeys = Object.keys(domains);
@@ -1278,7 +1381,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="domain-timer ${statusClass}">${statusText}</div>
           </div>
           <div class="domain-buttons">
-            <!-- Override button removed -->
+            <button class="override-btn" data-domain="${domain}" title="Reset timer and override block">Override</button>
             <button class="remove-btn" data-domain="${domain}" title="Remove domain">Remove</button>
           </div>
         </div>

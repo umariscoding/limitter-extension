@@ -47,7 +47,13 @@
     let isActiveTab = true; // Track if this is the currently active tab
     let lastSyncTime = 0; // Track when we last synced with shared state
     let hasLoadedFromFirebase = false; // Prevent writing to Firebase until we've loaded current state
-    let isInitializing = true; 
+    let isInitializing = true;
+    
+    // Override state variables
+    let currentOverrideActive = false;
+    let currentOverrideInitiatedBy = null;
+    let currentOverrideInitiatedAt = null;
+    let currentTimeLimit = null; 
     
     // Get unique tab identifier
     function getTabId() {
@@ -401,6 +407,13 @@
                         if (state && state.date === getTodayString()) {
                             // Only restore if same day - we're more lenient about URL to handle subdomain variations
                             console.log(`Smart Tab Blocker: Found saved timer state with ${state.timeRemaining}s remaining`);
+                            
+                            // Update override state variables from Chrome storage
+                            currentOverrideActive = state.override_active || false;
+                            currentOverrideInitiatedBy = state.override_initiated_by || null;
+                            currentOverrideInitiatedAt = state.override_initiated_at || null;
+                            currentTimeLimit = state.time_limit || gracePeriod;
+                            
                             resolve(state);
                             return;
                         }
@@ -449,6 +462,12 @@
                     chrome.storage.local.get([storageKey], (result) => {
                         const state = result[storageKey];
                         if (state && state.date === getTodayString()) {
+                            // Update override state variables from Chrome storage
+                            currentOverrideActive = state.override_active || false;
+                            currentOverrideInitiatedBy = state.override_initiated_by || null;
+                            currentOverrideInitiatedAt = state.override_initiated_at || null;
+                            currentTimeLimit = state.time_limit || gracePeriod;
+                            
                             resolve(state);
                         } else {
                             resolve(null);
@@ -482,20 +501,13 @@
                     
                     if (response && response.success && response.timerState) {
                         const firebaseState = response.timerState;
+                       
                         
-                        // Calculate elapsed time since last Firebase update
-                        // const now = Date.now();
-                        // const timeDiff = Math.floor((now - firebaseState.timestamp) / 1000);
-                        
-                        // // Adjust time remaining based on elapsed time
-                        // let adjustedTimeRemaining = firebaseState.timeRemaining;
-                        // if (firebaseState.isActive && !firebaseState.isPaused) {
-                        //     adjustedTimeRemaining = Math.max(0, firebaseState.timeRemaining - timeDiff);
-                        // }
-                    
-                        // console.log(`Smart Tab Blocker: Firebase state - was ${firebaseState.timeRemaining}s, ${timeDiff}s elapsed, now ${adjustedTimeRemaining}s`);
-                        // console.log("Smart Tab Blocker: Complete Firebase state:", firebaseState);
-                        console.log(firebaseState)
+                        // Update override state variables
+                        currentOverrideActive = firebaseState.override_active || false;
+                        currentOverrideInitiatedBy = firebaseState.override_initiated_by || null;
+                        currentOverrideInitiatedAt = firebaseState.override_initiated_at || null;
+                        currentTimeLimit = firebaseState.time_limit || gracePeriod;
                         
                         resolve({
                             ...firebaseState,
@@ -527,7 +539,11 @@
             url: window.location.href,
             gracePeriod: gracePeriod,
             date: getTodayString(),
-            activeTabId: isActiveTab ? getTabId() : null // Track which tab is currently active
+            activeTabId: isActiveTab ? getTabId() : null, // Track which tab is currently active
+            override_active: currentOverrideActive, // Preserve override state
+            override_initiated_by: currentOverrideInitiatedBy,
+            override_initiated_at: currentOverrideInitiatedAt,
+            time_limit: currentTimeLimit
         };
         
         console.log(`Smart Tab Blocker: Saving timer state with ${timeRemaining}s remaining (active: ${isActiveTab}, hasLoadedFromFirebase: ${hasLoadedFromFirebase})`);
@@ -652,6 +668,7 @@
         currentDomain = getCurrentDomain();
         gracePeriod = domainConfig ? domainConfig.timer : 20;
         timeRemaining = gracePeriod;
+        currentTimeLimit = gracePeriod; // Initialize time limit
         
         // console.log(`Smart Tab Blocker: Initializing for ${currentDomain} with ${gracePeriod}s timer`);
         
@@ -773,7 +790,24 @@
                 if (request.enabled && request.domainConfig) {
                     // Domain is still tracked, update config
                     gracePeriod = request.domainConfig.timer;
-                    if (!countdownTimer) {
+                    currentTimeLimit = gracePeriod; // Update time limit
+                    
+                    if (request.overrideActivated) {
+                        // Override was activated - reset timer completely
+                        console.log(`Smart Tab Blocker: Override activated, resetting timer to ${gracePeriod}s`);
+                        timeRemaining = gracePeriod;
+                        currentOverrideActive = true;
+                        currentOverrideInitiatedBy = null; // Will be set by Firebase sync
+                        currentOverrideInitiatedAt = null; // Will be set by Firebase sync
+                        
+                        // Stop existing timer and start fresh
+                        stopCountdownTimer();
+                        startCountdownTimer();
+                        
+                        // Save the new state
+                        saveTimerState();
+                    } else if (!countdownTimer) {
+                        // No existing timer, start new one
                         timeRemaining = gracePeriod;
                         startCountdownTimer();
                     }
@@ -1246,7 +1280,11 @@
                     gracePeriod: gracePeriod,
                     isActive: true,
                     isPaused: isTimerPaused,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    override_active: currentOverrideActive,
+                    override_initiated_by: currentOverrideInitiatedBy,
+                    override_initiated_at: currentOverrideInitiatedAt,
+                    time_limit: currentTimeLimit
                 }, (response) => {
                     if (chrome.runtime.lastError) {
                         console.log('Smart Tab Blocker: Error syncing timer to Firebase:', chrome.runtime.lastError);

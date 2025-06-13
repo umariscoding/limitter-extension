@@ -512,9 +512,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         user_id: currentUser.uid,
         url: timerDomain,
         time_remaining: request.timeRemaining,
-        time_limit: request.gracePeriod,
+        time_limit: request.time_limit || request.gracePeriod,
         is_active: true,
-        override_active: false,
+        override_active: request.override_active || false,
+        override_initiated_by: request.override_initiated_by || null,
+        override_initiated_at: request.override_initiated_at || null,
         is_blocked: request.timeRemaining <= 0,
         last_accessed: now.toISOString(),
         updated_at: now.toISOString(),
@@ -583,6 +585,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
       return true; // Keep message channel open for async response
       
+    case 'domainOverrideActivated':
+      // Handle domain override activation - notify content scripts
+      const overrideDomain = request.domain;
+      const overrideTimeLimit = request.timeLimit;
+      
+      console.log(`Smart Tab Blocker Background: Domain override activated for ${overrideDomain} with ${overrideTimeLimit}s`);
+      
+      // Find and update tabs with this domain
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => {
+          if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+            try {
+              const hostname = new URL(tab.url).hostname.toLowerCase();
+              const cleanHostname = hostname.replace(/^www\./, '');
+              
+              // Check if this tab matches the override domain
+              if (cleanHostname === overrideDomain || hostname === overrideDomain) {
+                console.log(`Smart Tab Blocker Background: Sending override update to tab ${tab.id} for domain ${overrideDomain}`);
+                chrome.tabs.sendMessage(tab.id, {
+                  action: 'updateConfig',
+                  enabled: isEnabled,
+                  domainConfig: { timer: overrideTimeLimit },
+                  overrideActivated: true
+                }).catch((error) => {
+                  console.log(`Smart Tab Blocker Background: Could not send override update to tab ${tab.id}:`, error);
+                });
+              }
+            } catch (error) {
+              // Invalid URL, ignore
+            }
+          }
+        });
+      });
+      
+      sendResponse({ success: true });
+      break;
       
     default:
       sendResponse({ success: false, error: 'Unknown action' });
