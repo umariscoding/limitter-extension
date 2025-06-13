@@ -53,7 +53,8 @@
     let currentOverrideActive = false;
     let currentOverrideInitiatedBy = null;
     let currentOverrideInitiatedAt = null;
-    let currentTimeLimit = null; 
+    let currentTimeLimit = null;
+    let overrideClearTimeout = null; 
     
     // Get unique tab identifier
     function getTabId() {
@@ -409,9 +410,13 @@
                             console.log(`Smart Tab Blocker: Found saved timer state with ${state.timeRemaining}s remaining`);
                             
                             // Update override state variables from Chrome storage
-                            currentOverrideActive = state.override_active || false;
-                            currentOverrideInitiatedBy = state.override_initiated_by || null;
-                            currentOverrideInitiatedAt = state.override_initiated_at || null;
+                            if (state.override_active) {
+                                setOverrideActive(state.override_initiated_by, state.override_initiated_at);
+                            } else {
+                                currentOverrideActive = false;
+                                currentOverrideInitiatedBy = null;
+                                currentOverrideInitiatedAt = null;
+                            }
                             currentTimeLimit = state.time_limit || gracePeriod;
                             
                             resolve(state);
@@ -463,9 +468,13 @@
                         const state = result[storageKey];
                         if (state && state.date === getTodayString()) {
                             // Update override state variables from Chrome storage
-                            currentOverrideActive = state.override_active || false;
-                            currentOverrideInitiatedBy = state.override_initiated_by || null;
-                            currentOverrideInitiatedAt = state.override_initiated_at || null;
+                            if (state.override_active) {
+                                setOverrideActive(state.override_initiated_by, state.override_initiated_at);
+                            } else {
+                                currentOverrideActive = false;
+                                currentOverrideInitiatedBy = null;
+                                currentOverrideInitiatedAt = null;
+                            }
                             currentTimeLimit = state.time_limit || gracePeriod;
                             
                             resolve(state);
@@ -504,9 +513,13 @@
                        
                         
                         // Update override state variables
-                        currentOverrideActive = firebaseState.override_active || false;
-                        currentOverrideInitiatedBy = firebaseState.override_initiated_by || null;
-                        currentOverrideInitiatedAt = firebaseState.override_initiated_at || null;
+                        if (firebaseState.override_active) {
+                            setOverrideActive(firebaseState.override_initiated_by, firebaseState.override_initiated_at);
+                        } else {
+                            currentOverrideActive = false;
+                            currentOverrideInitiatedBy = null;
+                            currentOverrideInitiatedAt = null;
+                        }
                         currentTimeLimit = firebaseState.time_limit || gracePeriod;
                         
                         resolve({
@@ -615,6 +628,67 @@
             }
         } catch (e) {
             console.log("Smart Tab Blocker: Extension context invalidated, cannot clear daily block");
+        }
+    }
+
+    // Set override active and schedule automatic clearing
+    function setOverrideActive(userId, initiatedAt) {
+        currentOverrideActive = true;
+        currentOverrideInitiatedBy = userId;
+        currentOverrideInitiatedAt = initiatedAt;
+        
+        // Clear any existing timeout
+        if (overrideClearTimeout) {
+            clearTimeout(overrideClearTimeout);
+        }
+        
+        // Calculate remaining time if override was initiated earlier
+        let timeoutDuration = 4000; // Default 4 seconds
+        if (initiatedAt) {
+            const initiatedTime = new Date(initiatedAt).getTime();
+            const currentTime = Date.now();
+            const elapsedTime = currentTime - initiatedTime;
+            
+            if (elapsedTime >= 4000) {
+                // Override should have already expired, clear it immediately
+                console.log('Smart Tab Blocker: Override has already expired, clearing immediately');
+                clearOverrideActive();
+                return;
+            } else {
+                // Calculate remaining time
+                timeoutDuration = 4000 - elapsedTime;
+                console.log(`Smart Tab Blocker: Override initiated ${elapsedTime}ms ago, clearing in ${timeoutDuration}ms`);
+            }
+        }
+        
+        // Set timeout to clear override after remaining time
+        overrideClearTimeout = setTimeout(() => {
+            console.log('Smart Tab Blocker: Automatically clearing override_active after timeout');
+            clearOverrideActive();
+        }, timeoutDuration);
+    }
+
+    // Clear override active state
+    function clearOverrideActive() {
+        if (!currentOverrideActive) return;
+        
+        console.log('Smart Tab Blocker: Clearing override_active state');
+        currentOverrideActive = false;
+        currentOverrideInitiatedBy = null;
+        currentOverrideInitiatedAt = null;
+        
+        // Clear timeout if it exists
+        if (overrideClearTimeout) {
+            clearTimeout(overrideClearTimeout);
+            overrideClearTimeout = null;
+        }
+        
+        // Save updated state to Chrome storage
+        saveTimerState();
+        
+        // Sync to Firebase
+        if (hasLoadedFromFirebase && !isInitializing) {
+            syncTimerToFirebase();
         }
     }
     
@@ -796,15 +870,15 @@
                         // Override was activated - reset timer completely
                         console.log(`Smart Tab Blocker: Override activated, resetting timer to ${gracePeriod}s`);
                         timeRemaining = gracePeriod;
-                        currentOverrideActive = true;
-                        currentOverrideInitiatedBy = null; // Will be set by Firebase sync
-                        currentOverrideInitiatedAt = null; // Will be set by Firebase sync
+                        
+                        // Set override active with automatic clearing after 4 seconds
+                        setOverrideActive(null, new Date().toISOString());
                         
                         // Stop existing timer and start fresh
                         stopCountdownTimer();
                         startCountdownTimer();
                         
-                        // Save the new state
+                        // Save the new state (will be called by setOverrideActive, but call again to ensure timer state is saved)
                         saveTimerState();
                     } else if (!countdownTimer) {
                         // No existing timer, start new one
