@@ -244,29 +244,7 @@ document.addEventListener('DOMContentLoaded', function() {
         userProfile = null;
       }
 
-      // Load user override data
-      try {
-        const userOverrides = await firestore.getUserOverrides(user.uid);
-        if (userOverrides) {
-          // console.log('User overrides loaded:', userOverrides);
-          // Store override data for use in UI - prioritize total overrides over individual fields
-          if (userProfile) {
-            userProfile.override_credits = userOverrides.override_credits || 0;
-            userProfile.overrides = userOverrides.overrides || 0;
-            userProfile.total_overrides = userOverrides.overrides || 0; // Total available overrides
-            userProfile.monthly_stats = userOverrides.monthly_stats || {};
-          } else {
-            // Create temporary profile object if none exists
-            userProfile = {
-              override_credits: userOverrides.override_credits || 0,
-              overrides: userOverrides.overrides || 0,
-              total_overrides: userOverrides.overrides || 0
-            };
-          }
-        }
-      } catch (error) {
-                  // console.log('User overrides not found, will create on first override usage');
-      }
+      // Override functionality removed - can be recreated later
 
       // Load subscription data (for paid plans)
       try {
@@ -307,7 +285,8 @@ document.addEventListener('DOMContentLoaded', function() {
       const user = firebaseAuth.getCurrentUser();
       if (!user) return;
 
-      const siteId = `${user.uid}_${domain}`;
+      const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+      const siteId = `${user.uid}_${formattedDomain}`;
       const now = new Date();
       const todayString = getTodayString();
       
@@ -358,7 +337,8 @@ document.addEventListener('DOMContentLoaded', function() {
       const user = firebaseAuth.getCurrentUser();
       if (!user) return;
 
-      const siteId = `${user.uid}_${domain}`;
+      const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+      const siteId = `${user.uid}_${formattedDomain}`;
       
       // First, get the existing site data to preserve it
       const existingSite = await firestore.getBlockedSite(siteId);
@@ -627,8 +607,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (e.target.classList.contains('remove-btn')) {
       await removeDomain(domain);
-    } else if (e.target.classList.contains('override-btn')) {
-      await handleOverrideClick(domain);
+          // Override button handler removed
     }
   });
   
@@ -769,25 +748,7 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
   
-  // Get override button state based on available overrides
-  function getOverrideButtonState() {
-    if (!userProfile) {
-      return 'title="Loading override data..."';
-    }
-    
-    // Elite plans get unlimited overrides
-    if (userProfile.plan === 'elite') {
-      return 'title="Override block and access site (unlimited)"';
-    }
-    
-    const availableOverrides = userProfile.overrides || userProfile.total_overrides || 0;
-    
-    if (availableOverrides <= 0) {
-      return 'title="Click to purchase overrides"';
-    }
-    
-    return `title="Override block and access site (${availableOverrides} remaining)"`;
-  }
+    // Override button state function removed
 
   // Format seconds into hours, minutes, and seconds
   function formatTime(seconds) {
@@ -1133,7 +1094,7 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-    const formattedDomain = cleanDomain.replace(/\./g, '_');
+    const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
     const siteId = `${user.uid}_${formattedDomain}`;
     const existingSite = await firestore.getBlockedSite(siteId);
     
@@ -1317,7 +1278,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="domain-timer ${statusClass}">${statusText}</div>
           </div>
           <div class="domain-buttons">
-            <button class="override-btn" data-domain="${domain}" title="Override block and access site" ${getOverrideButtonState()}>Override</button>
+            <!-- Override button removed -->
             <button class="remove-btn" data-domain="${domain}" title="Remove domain">Remove</button>
           </div>
         </div>
@@ -1456,294 +1417,7 @@ document.addEventListener('DOMContentLoaded', function() {
     return true;
   }
   
-  // Handle override button click - checks user_overrides collection directly
-  async function handleOverrideClick(domain) {
-    try {
-      const user = firebaseAuth.getCurrentUser();
-      if (!user) {
-        showError('Please log in to use override functionality');
-        return;
-      }
-    // Check if user has elite plan first
-    const userProfile = await firestore.getUserProfile(user.uid);
-    const isElitePlan = userProfile && userProfile.plan === 'elite';
-        
-      if (isElitePlan) {
-        console.log('Elite plan user - granting unlimited override');
-        await handleOverride(domain);
-        return;
-      }
-      
-      // Check user's override balance directly from user_overrides collection
-      const userOverrides = await firestore.getUserOverrides(user.uid);
-      
-      if (!userOverrides) {
-        // No override record found - user has no overrides
-        showWarning('No overrides available. Redirecting to purchase page...');
-        chrome.tabs.create({ url: 'http://localhost:3000/checkout?overrides=1' });
-        return;
-      }
-
-  
-      // For non-elite users, check override balance
-      const availableOverrides = userOverrides.overrides || 0;
-      
-      if (availableOverrides <= 0 ) {
-        // No overrides remaining
-        showWarning('No overrides remaining. Redirecting to purchase page...');
-        chrome.tabs.create({ url: 'http://localhost:3000/checkout?overrides=1' });
-        return;
-      }
-
-      // User has overrides available - proceed with override
-      console.log(`User has ${availableOverrides} overrides remaining, proceeding with override for ${domain}`);
-      await handleOverride(domain);
-      
-    } catch (error) {
-      console.error('Error checking override eligibility:', error);
-      showError('Failed to check override availability. Please try again.');
-    }
-  }
-  
-  // Handle override based on subscription plan
-  async function handleOverride(domain) {
-    try {
-      // Immediate local override - no blocking operations
-      console.log(`Starting immediate override for ${domain}`);
-      // 1. Clear local blocks immediately
-      clearDailyBlock(domain);
-      
-      // 2. Reset timer state immediately
-      domainStates[domain] = {
-        status: 'ready',
-        timeRemaining: domains[domain],
-        isActive: false
-      };
-      
-      // 3. Update UI immediately
-      renderDomainsList();
-      
-      // 4. Notify content scripts immediately (don't wait for response)
-      chrome.tabs.query({}, (tabs) => {
-        tabs.forEach(tab => {
-          if (tab.url) {
-            try {
-              const hostname = new URL(tab.url).hostname.toLowerCase();
-              const cleanHostname = hostname.replace(/^www\./, '');
-              if (cleanHostname === domain || hostname === domain) {
-                // Send override immediately, don't wait for response
-                chrome.tabs.sendMessage(tab.id, { 
-                  action: 'overrideGranted',
-                  domain: domain,
-                  timer: domains[domain]
-                }).catch((error) => {
-                  // Ignore errors - tab may not have content script
-                  if (error.message && (error.message.includes('Could not establish connection') || 
-                      error.message.includes('Receiving end does not exist'))) {
-                    showContentScriptError('override');
-                  }
-                });
-              }
-            } catch (error) {
-              // Invalid URL, ignore
-            }
-          }
-        });
-      });
-      
-      // 5. Show immediate feedback
-      showFeedback(`✅ Override granted for ${domain} - access restored!`);
-      
-      // 6. Handle backend operations asynchronously (don't block UI)
-      handleOverrideBackend(domain).catch(error => {
-        console.error('Backend override processing error (non-blocking):', error);
-      });
-
-    } catch (error) {
-      console.error('Error in immediate override:', error);
-      // Even if there's an error, try to grant access
-      clearDailyBlock(domain);
-      domainStates[domain] = {
-        status: 'ready',
-        timeRemaining: domains[domain],
-        isActive: false
-      };
-      renderDomainsList();
-      showFeedback(`⚠️ Override granted for ${domain} (with warnings)`);
-    }
-  }
-
-  // Handle backend operations for override (non-blocking)
-  async function handleOverrideBackend(domain) {
-    try {
-      const user = firebaseAuth.getCurrentUser();
-      if (!user) {
-        console.log('No authenticated user, skipping backend override');
-        return;
-      }
-
-      const currentPlan = subscriptionService.getCurrentPlan();
-      
-    
-      // Process backend operations
-      await processOverride(domain, currentPlan, true);
-      
-    } catch (error) {
-      console.error('Backend override processing failed:', error);
-      // Don't show error to user - override already granted locally
-    }
-    }
-  
-  // Decrement user's override count in user_overrides collection
-  async function processUserOverrideDecrement(userId, domain) {
-    try {
-      // Get current user overrides
-      const userOverrides = await firestore.getUserOverrides(userId);
-      
-      if (!userOverrides) {
-        throw new Error('No user override record found');
-      }
-      
-      if (userOverrides.overrides <= 0) {
-        throw new Error('No overrides remaining to decrement');
-      }
-      
-      // Get current month for monthly stats
-      const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM format
-      
-      // Update override data
-      const updatedOverrides = {
-        ...userOverrides,
-        overrides: Math.max(0, userOverrides.overrides - 1), // Decrement override count
-        overrides_used_total: (userOverrides.overrides_used_total || 0) + 1, // Increment total used
-        updated_at: new Date(),
-        // Update monthly stats
-        monthly_stats: {
-          ...userOverrides.monthly_stats,
-          [currentMonth]: {
-            ...userOverrides.monthly_stats?.[currentMonth],
-            overrides_used: ((userOverrides.monthly_stats?.[currentMonth]?.overrides_used) || 0) + 1,
-            credit_overrides_used: ((userOverrides.monthly_stats?.[currentMonth]?.credit_overrides_used) || 0) + 1
-          }
-        }
-      };
-      
-      // Update in Firebase
-      await firestore.updateUserOverrides(userId, updatedOverrides);
-      
-      // Also record in override history
-      const historyRecord = {
-        user_id: userId,
-        site_url: domain,
-        timestamp: new Date(),
-        amount: 0, // Free override
-        override_type: 'credit',
-        month: currentMonth,
-        plan: userProfile?.plan || 'free',
-        reason: 'User requested override from popup',
-        created_at: new Date()
-      };
-      
-      // Create override history entry (if the method exists)
-      try {
-        await firestore.createOverrideHistory(`${userId}_${Date.now()}`, historyRecord);
-        console.log('Override history recorded');
-      } catch (error) {
-        console.log('Override history recording failed (non-critical):', error);
-      }
-      
-      console.log(`Override decremented: ${userOverrides.overrides} -> ${updatedOverrides.overrides}`);
-      
-    } catch (error) {
-      console.error('Error processing user override decrement:', error);
-      throw error;
-    }
-  }
-  
-  // Process the actual override (backend operations)
-  async function processOverride(domain, plan, overrideCheck) {
-    try {
-      console.log(`Processing backend override for ${domain} on ${plan.name}`);
-
-      const user = firebaseAuth.getCurrentUser();
-      if (!user) {
-        console.log('No user for backend override processing');
-        return;
-      }
-
-      const formattedDomain = domain.replace(/^www\./, '').toLowerCase().replace(/\./g, '_');
-      const siteId = `${user.uid}_${formattedDomain}`;
-      
-      // Parallel async operations (don't block on each other)
-      const operations = [];
-      
-      // 1. Update Firestore site data
-      operations.push(
-        firestore.getBlockedSite(siteId).then(async (siteData) => {
-          if (siteData) {
-            const deviceId = Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-            
-            await firestore.updateBlockedSite(siteId, {
-              ...siteData,
-              override_active: true,
-              override_initiated_by: 'Owner',
-              override_initiated_at: new Date(),
-              time_remaining: domains[domain], // Reset timer
-              time_spent_today: 0, // Reset daily usage
-              is_blocked: false, // Clear block
-              blocked_until: null, // Clear block timestamp
-              updated_at: new Date()
-            });
-            
-            // Store device ID locally
-            chrome.storage.local.set({
-              [`override_device_${domain}`]: deviceId
-            });
-            
-            console.log(`Updated Firestore for ${domain} override`);
-          }
-        }).catch(error => {
-          console.error('Error updating Firestore site data:', error);
-        })
-      );
-      
-      // 2. Update user_overrides to decrement override count (skip for elite plans)
-      const isElitePlan = userProfile && userProfile.plan === 'elite';
-      if (!isElitePlan) {
-        operations.push(
-          processUserOverrideDecrement(user.uid, domain)
-            .then(() => {
-              console.log(`User override count decremented for ${domain}`);
-            })
-            .catch(error => {
-              console.error('Error updating user override count:', error);
-            })
-        );
-      } else {
-        console.log('Elite plan user - skipping override count decrement');
-      }
-      
-      // 3. Update user profile
-      operations.push(
-        loadUserDataFromFirestore()
-          .then(() => {
-            console.log('User data reloaded after override');
-          })
-          .catch(error => {
-            console.error('Error reloading user data:', error);
-          })
-      );
-      
-      // Wait for all operations to complete (but don't fail if some fail)
-      await Promise.allSettled(operations);
-      
-      console.log(`Backend override processing completed for ${domain}`);
-
-    } catch (error) {
-      console.error('Error in backend override processing:', error);
-      // Don't propagate error - local override already granted
-    }
-  }
+  // All override functions removed - can be recreated later
 
 
 

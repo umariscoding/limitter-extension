@@ -56,7 +56,7 @@ class FirebaseSyncService {
       }
 
       const normalizedDomain = this.normalizeDomain(timerState.domain);
-      const formattedDomain = normalizedDomain.replace(/\./g, '_');
+      const formattedDomain = realtimeDB.formatDomainForFirebase(normalizedDomain);
       const siteId = `${userId}_${formattedDomain}`;
 
       const now = new Date();
