@@ -746,6 +746,16 @@ class FirebaseRealtimeDB {
     }
   }
 
+  // Get site data (alias for getBlockedSite for unified API)
+  async getSiteData(siteId) {
+    return this.getBlockedSite(siteId);
+  }
+
+  // Get site data (alias for getBlockedSite for unified API)
+  async getSiteData(siteId) {
+    return this.getBlockedSite(siteId);
+  }
+
   // Add a blocked site to the Realtime Database
   async addBlockedSite(siteId, siteData) {
     try {
