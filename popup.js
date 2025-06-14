@@ -78,7 +78,7 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Active Timer Display Functions (moved to top for availability)
   function updateActiveTimerDisplay(timerData) {
-    console.log('Popup: updateActiveTimerDisplay called with:', timerData);
+    // console.log('Popup: updateActiveTimerDisplay called with:', timerData);
     
     const activeTimerCard = document.getElementById('activeTimerCard');
     const timerDomain = document.getElementById('timerDomain');
@@ -87,23 +87,23 @@ document.addEventListener('DOMContentLoaded', function() {
     const timerProgressFill = document.getElementById('timerProgressFill');
     const timerIcon = document.querySelector('.timer-icon');
     
-    console.log('Popup: Timer elements found:', {
-      activeTimerCard: !!activeTimerCard,
-      timerDomain: !!timerDomain,
-      timerStatus: !!timerStatus,
-      timerCountdown: !!timerCountdown,
-      timerProgressFill: !!timerProgressFill,
-      timerIcon: !!timerIcon
-    });
+    // console.log('Popup: Timer elements found:', {
+      // activeTimerCard: !!activeTimerCard,
+      // timerDomain: !!timerDomain,
+      // timerStatus: !!timerStatus,
+      // timerCountdown: !!timerCountdown,
+      // timerProgressFill: !!timerProgressFill,
+      // timerIcon: !!timerIcon
+    // });
     
     if (!activeTimerCard || !timerData) {
-      console.log('Popup: Missing activeTimerCard or timerData, returning');
+      // console.log('Popup: Missing activeTimerCard or timerData, returning');
       return;
     }
     
     // Show the timer card
     activeTimerCard.style.display = 'block';
-    console.log('Popup: Timer card set to display: block');
+    // console.log('Popup: Timer card set to display: block');
     
     // Update domain name
     if (timerDomain) {
@@ -168,7 +168,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // Listen for notification messages from background script
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'displayNotification') {
-      console.log('Smart Tab Blocker Popup: Received notification:', message);
+      // console.log('Smart Tab Blocker Popup: Received notification:', message);
       
              if (message.isError) {
          showError(message.message);
@@ -186,7 +186,7 @@ document.addEventListener('DOMContentLoaded', function() {
       
       sendResponse({ displayed: true });
     } else if (message.action === 'triggerDomainListRefresh') {
-      console.log('Smart Tab Blocker Popup: Refreshing domain list due to deactivation');
+      // console.log('Smart Tab Blocker Popup: Refreshing domain list due to deactivation');
       loadDomainsFromFirestore().then(() => {
         renderDomainsList();
       }).catch(error => {
@@ -195,29 +195,29 @@ document.addEventListener('DOMContentLoaded', function() {
       sendResponse({ refreshed: true });
     } else if (message.type === 'TIMER_UPDATE') {
       // Only show timer for currently active tab
-      console.log('Popup: Received TIMER_UPDATE message:', message.data);
+      // console.log('Popup: Received TIMER_UPDATE message:', message.data);
       chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
         if (tabs.length > 0 && sender.tab && sender.tab.id === tabs[0].id) {
-          console.log('Popup: Updating timer display for active tab:', tabs[0].id);
+          // console.log('Popup: Updating timer display for active tab:', tabs[0].id);
           updateActiveTimerDisplay(message.data);
         } else {
-          console.log('Popup: Timer update not for active tab, ignoring');
+          // console.log('Popup: Timer update not for active tab, ignoring');
         }
       });
     } else if (message.type === 'TIMER_STOPPED') {
       // Only hide timer if it's from the currently active tab
-      console.log('Popup: Received TIMER_STOPPED message');
+      // console.log('Popup: Received TIMER_STOPPED message');
       chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
         if (tabs.length > 0 && sender.tab && sender.tab.id === tabs[0].id) {
-          console.log('Popup: Hiding timer display for active tab:', tabs[0].id);
+          // console.log('Popup: Hiding timer display for active tab:', tabs[0].id);
           hideActiveTimerDisplay();
         } else {
-          console.log('Popup: Timer stop not for active tab, ignoring');
+          // console.log('Popup: Timer stop not for active tab, ignoring');
         }
       });
     } else if (message.type === 'DOMAIN_DEACTIVATED') {
       // Handle domain deactivation from another device
-      console.log(`Popup: Domain deactivated from another device: ${message.domain}`);
+      // console.log(`Popup: Domain deactivated from another device: ${message.domain}`);
       
       // Remove from local domains object and save
       if (domains[message.domain]) {
@@ -225,7 +225,7 @@ document.addEventListener('DOMContentLoaded', function() {
         delete domainStates[message.domain];
         saveDomains();
         
-        console.log(`Popup: Removed ${message.domain} from local storage`);
+        // console.log(`Popup: Removed ${message.domain} from local storage`);
         
         // Update UI immediately
         renderDomainsList();
@@ -2091,13 +2091,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // When popup opens, request timer update from current active tab
   chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
     if (tabs.length > 0) {
-      console.log('Popup: DOM loaded, requesting timer update from tab:', tabs[0].id);
+      // console.log('Popup: DOM loaded, requesting timer update from tab:', tabs[0].id);
       chrome.tabs.sendMessage(tabs[0].id, {
         action: 'requestTimerUpdate'
       }).then((response) => {
-        console.log('Popup: Timer update request response:', response);
+        // console.log('Popup: Timer update request response:', response);
       }).catch((error) => {
-        console.log('Popup: Timer update request error:', error);
+        // console.log('Popup: Timer update request error:', error);
         // Content script might not be loaded or no timer running, which is fine
         if (error.message && (error.message.includes('Could not establish connection') || 
             error.message.includes('Receiving end does not exist'))) {
@@ -2105,7 +2105,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
     } else {
-      console.log('Popup: No active tabs found');
+      // console.log('Popup: No active tabs found');
     }
   });
 });

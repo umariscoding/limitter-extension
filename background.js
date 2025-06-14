@@ -1532,7 +1532,8 @@ async function handleSiteOpened(domain, localTimeRemaining) {
       // Send site opened signal with local time
       await realtimeDB.updateSiteOpened(siteId, { 
         deviceId, 
-        timeRemaining: localTimeRemaining 
+        timeRemaining: localTimeRemaining , 
+        site_opened_active: true
       });
       
       // Wait a bit for other devices to respond, then sync using min logic
@@ -1564,7 +1565,8 @@ async function handleSiteOpened(domain, localTimeRemaining) {
       console.log(`📤 Only local time available, sending site opened signal: ${localTimeRemaining}s`);
       await realtimeDB.updateSiteOpened(siteId, { 
         deviceId, 
-        timeRemaining: localTimeRemaining 
+        timeRemaining: localTimeRemaining ,
+        site_opened_active: true
       });
       
       return { success: true, message: 'Site opened signal sent with local time' };
