@@ -834,30 +834,53 @@ class FirebaseRealtimeDB {
             // If this is a tab switch event, we need the complete site data including time_remaining
             if (data.data.tab_switch_active === true) {
               console.log('Firebase Realtime DB: Tab switch detected in patch, fetching complete site data...');
-              // Fetch complete site data to get time_remaining
-              this.getBlockedSite(siteId).then(completeData => {
-                if (completeData) {
-                  console.log('Firebase Realtime DB: Complete site data for tab switch:', completeData);
-                  // Merge patch data with complete data, prioritizing patch data
-                  const mergedData = {
-                    ...completeData,
+              console.log('Firebase Realtime DB: Patch data received:', data.data);
+              
+              // Add a small delay to ensure Firebase has been updated completely
+              setTimeout(async () => {
+                try {
+                  // Fetch complete site data to get time_remaining
+                  const completeData = await this.getBlockedSite(siteId);
+                  if (completeData) {
+                    console.log('Firebase Realtime DB: Complete site data for tab switch:', completeData);
+                    // Merge patch data with complete data, prioritizing patch data
+                    const mergedData = {
+                      ...completeData,
+                      ...data.data,
+                      id: encodedSiteId,
+                      url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+                    };
+                    console.log('Firebase Realtime DB: Final merged data for tab switch:', mergedData);
+                    callback(mergedData);
+                  } else {
+                    console.warn('Firebase Realtime DB: No complete data found, using patch data only');
+                    // Fallback to patch data only with URL
+                    const fallbackData = {
+                      ...data.data,
+                      id: encodedSiteId,
+                      url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+                    };
+                    callback(fallbackData);
+                  }
+                } catch (error) {
+                  console.error('Firebase Realtime DB: Error fetching complete site data:', error);
+                  // Fallback to patch data only with URL
+                  const fallbackData = {
                     ...data.data,
                     id: encodedSiteId,
                     url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
                   };
-                  callback(mergedData);
-                } else {
-                  // Fallback to patch data only
-                  callback(data.data);
+                  callback(fallbackData);
                 }
-              }).catch(error => {
-                console.error('Firebase Realtime DB: Error fetching complete site data:', error);
-                // Fallback to patch data only
-                callback(data.data);
-              });
+              }, 100); // Small delay to ensure Firebase consistency
             } else {
               // For non-tab-switch updates, patch data is sufficient
-              callback(data.data);
+              const nonTabSwitchData = {
+                ...data.data,
+                id: encodedSiteId,
+                url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+              };
+              callback(nonTabSwitchData);
             }
           }
         } catch (error) {
@@ -931,7 +954,7 @@ class FirebaseRealtimeDB {
         } catch (error) {
           console.error("Error clearing tab switch flag:", error);
         }
-      }, 1000);
+      }, 3000); // Increased from 1000ms to 3000ms to give other devices more time
 
       return responseData;
     } catch (error) {
@@ -949,8 +972,10 @@ class FirebaseRealtimeDB {
       }
 
       const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
-      
+      const siteData = await this.getBlockedSite(siteId);
+      console.log("Sited Data", siteData)
       const updateData = {
+        tab_switch_active: true,
         time_remaining: timeRemaining,
         updated_at: new Date().toISOString()
       };
@@ -968,7 +993,7 @@ class FirebaseRealtimeDB {
       }
 
       const responseData = await response.json();
-      console.log(`✅ Firebase timer updated successfully for ${siteId}`);
+      console.log(`✅ Firebase timer updated successfully for ${siteId}`, responseData);
       return responseData;
     } catch (error) {
       console.error("Update site synced timer error:", error);

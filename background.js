@@ -1146,12 +1146,16 @@ async function handleTabSwitchSync(domain, updatedData) {
         const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
         const siteId = `${user.uid}_${formattedDomain}`;
         
+        console.log(`🔄 Syncing timers - Local: ${localTimerState.timeRemaining}s, Firebase: ${firebaseTimeRemaining}s`);
+        
         await syncTimerStates(domain, localTimerState.timeRemaining, firebaseTimeRemaining, siteId, {
           updateFirebase: true, // May update Firebase if large difference
           updateLocal: true,
           timeDifferenceThreshold: 5,
           source: 'cross-device'
         });
+        
+        console.log(`✅ Cross-device timer sync completed for ${domain}`);
       } else {
         console.error('❌ No authenticated user for Firebase update');
       }
@@ -1159,11 +1163,14 @@ async function handleTabSwitchSync(domain, updatedData) {
       console.log(`⚠️ No valid local timer state found for ${domain}`);
       console.log(`  Will use Firebase time as reference: ${firebaseTimeRemaining}s`);
       
-      // No local timer found, but we have Firebase time - this is normal for cross-device sync
-      console.log(`✅ Using Firebase time for cross-device sync: ${firebaseTimeRemaining}s`);
+      // No local timer found, but we have Firebase time - update local timers directly
+      console.log(`🔄 Updating local timers with Firebase time: ${firebaseTimeRemaining}s`);
+      await updateLocalTimers(domain, firebaseTimeRemaining);
+      console.log(`✅ Local timers updated with Firebase time for cross-device sync`);
     }
   } else {
     console.log(`⚠️ Invalid Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
+    console.log(`  Tab switch event processed but no valid timer data to sync`);
   }
 }
 
