@@ -679,9 +679,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           console.log(`Firebase Realtime Update: Site ${listenerDomain}, Data:`, updatedData);
           
           // Check specifically for override_active changes
-          if (updatedData.override_active !== undefined) {
-            console.log(`Firebase Realtime Update: override_active changed for ${listenerDomain}: ${updatedData.override_active}`);
-            
+          if (updatedData.override_active !== undefined) {            
             // Notify content scripts on tabs with this domain
             chrome.tabs.query({}, (tabs) => {
               tabs.forEach(tab => {
@@ -706,6 +704,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                   }
                 }
               });
+            });
+          }
+
+          // Check for tab switch changes
+          if (updatedData.tab_switch_active !== undefined && updatedData.tab_switch_device) {
+            getDeviceId().then(currentDeviceId => {
+              // Only log if it's from another device
+              if (updatedData.tab_switch_device !== currentDeviceId) {
+                console.log(`🔄 TAB SWITCH: Another device switched to ${listenerDomain}`);
+              }
             });
           }
         });
@@ -1003,3 +1011,56 @@ async function initializeAuth() {
   }
   return false;
 }
+
+// Tab switch detection
+let currentDeviceId = null;
+
+async function getDeviceId() {
+  if (currentDeviceId) return currentDeviceId;
+  
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['deviceId'], (result) => {
+      if (result.deviceId) {
+        currentDeviceId = result.deviceId;
+        resolve(result.deviceId);
+      } else {
+        const newDeviceId = `device_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        currentDeviceId = newDeviceId;
+        chrome.storage.local.set({ deviceId: newDeviceId }, () => {
+          resolve(newDeviceId);
+        });
+      }
+    });
+  });
+}
+
+async function handleTabSwitch(tabId) {
+  try {
+    if (!realtimeDB || !firebaseAuth || !isAuthenticated) return;
+    
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+      return;
+    }
+    
+    const user = firebaseAuth.getCurrentUser();
+    if (!user) return;
+    
+    const domainInfo = isTrackedDomain(tab.url);
+    if (!domainInfo) return; // Only track sites that are being monitored
+    
+    const deviceId = await getDeviceId();
+    const formattedDomain = realtimeDB.formatDomainForFirebase(domainInfo.domain);
+    const siteId = `${user.uid}_${formattedDomain}`;
+    
+    await realtimeDB.updateSiteTabSwitch(siteId, { deviceId });
+    
+  } catch (error) {
+    console.error('Error handling tab switch:', error);
+  }
+}
+
+// Initialize tab switch listener
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  handleTabSwitch(activeInfo.tabId);
+});

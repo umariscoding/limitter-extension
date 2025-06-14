@@ -837,6 +837,37 @@ class FirebaseRealtimeDB {
       throw error;
     }
   }
+
+  // Update site with tab switch event
+  async updateSiteTabSwitch(siteId, tabSwitchData) {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
+      const response = await fetch(url, {
+        method: "PATCH",
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({
+          tab_switch_active: true,
+          tab_switch_device: tabSwitchData.deviceId,
+          tab_switch_timestamp: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update tab switch: ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error("Update site tab switch error:", error);
+      throw error;
+    }
+  }
 }
 
 // Export for use in other scripts
