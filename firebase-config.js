@@ -751,11 +751,6 @@ class FirebaseRealtimeDB {
     return this.getBlockedSite(siteId);
   }
 
-  // Get site data (alias for getBlockedSite for unified API)
-  async getSiteData(siteId) {
-    return this.getBlockedSite(siteId);
-  }
-
   // Add a blocked site to the Realtime Database
   async addBlockedSite(siteId, siteData) {
     try {
@@ -873,14 +868,55 @@ class FirebaseRealtimeDB {
                   callback(fallbackData);
                 }
               }, 100); // Small delay to ensure Firebase consistency
+            } else if (data.data.site_opened_active === true) {
+              console.log('Firebase Realtime DB: Site opened detected in patch, fetching complete site data...');
+              console.log('Firebase Realtime DB: Site opened patch data received:', data.data);
+              
+              // Add a small delay to ensure Firebase has been updated completely
+              setTimeout(async () => {
+                try {
+                  // Fetch complete site data to get time_remaining
+                  const completeData = await this.getBlockedSite(siteId);
+                  if (completeData) {
+                    console.log('Firebase Realtime DB: Complete site data for site opened:', completeData);
+                    // Merge patch data with complete data, prioritizing patch data
+                    const mergedData = {
+                      ...completeData,
+                      ...data.data,
+                      id: encodedSiteId,
+                      url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+                    };
+                    console.log('Firebase Realtime DB: Final merged data for site opened:', mergedData);
+                    callback(mergedData);
+                  } else {
+                    console.warn('Firebase Realtime DB: No complete data found for site opened, using patch data only');
+                    // Fallback to patch data only with URL
+                    const fallbackData = {
+                      ...data.data,
+                      id: encodedSiteId,
+                      url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+                    };
+                    callback(fallbackData);
+                  }
+                } catch (error) {
+                  console.error('Firebase Realtime DB: Error fetching complete site data for site opened:', error);
+                  // Fallback to patch data only with URL
+                  const fallbackData = {
+                    ...data.data,
+                    id: encodedSiteId,
+                    url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+                  };
+                  callback(fallbackData);
+                }
+              }, 100); // Small delay to ensure Firebase consistency
             } else {
-              // For non-tab-switch updates, patch data is sufficient
-              const nonTabSwitchData = {
+              // For non-tab-switch and non-site-opened updates, patch data is sufficient
+              const nonSpecialEventData = {
                 ...data.data,
                 id: encodedSiteId,
                 url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
               };
-              callback(nonTabSwitchData);
+              callback(nonSpecialEventData);
             }
           }
         } catch (error) {
@@ -997,6 +1033,71 @@ class FirebaseRealtimeDB {
       return responseData;
     } catch (error) {
       console.error("Update site synced timer error:", error);
+      throw error;
+    }
+  }
+
+  // Update site with site opened event (for fresh tabs/reloads)
+  async updateSiteOpened(siteId, siteOpenedData) {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
+      
+      // First set the site opened event
+      const updateData = {
+        site_opened_active: true,
+        site_opened_timestamp: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        time_remaining: siteOpenedData.timeRemaining,
+        deviceId: siteOpenedData.deviceId
+      };
+      
+      console.log("siteOpenedData", siteOpenedData);
+      // Always include time_remaining, even if it's null/undefined for debugging
+      updateData.time_remaining = siteOpenedData.timeRemaining;
+      console.log(`Site opened - including time_remaining: ${siteOpenedData.timeRemaining} (type: ${typeof siteOpenedData.timeRemaining})`);
+      console.log(`Site opened - including deviceId: ${siteOpenedData.deviceId}`);
+      
+      console.log("Final site opened updateData being sent to Firebase:", updateData);
+      
+      const response = await fetch(url, {
+        method: "PATCH",
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify(updateData)
+      });
+      
+      console.log("Firebase site opened response status:", response.status);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to update site opened: ${response.status}`);
+      }
+
+      const responseData = await response.json();
+      console.log("Firebase site opened response data:", responseData);
+
+      // Clear the site opened flag after a delay to allow other devices to process
+      setTimeout(async () => {
+        try {
+          await fetch(url, {
+            method: "PATCH",
+            headers: this.getAuthHeaders(),
+            body: JSON.stringify({
+              site_opened_active: false,
+              updated_at: new Date().toISOString()
+            })
+          });
+        } catch (error) {
+          console.error("Error clearing site opened flag:", error);
+        }
+      }, 3000); // Same timeout as tab switch
+
+      return responseData;
+    } catch (error) {
+      console.error("Update site opened error:", error);
       throw error;
     }
   }
