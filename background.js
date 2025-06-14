@@ -1081,6 +1081,11 @@ function setupDomainListener(domain) {
       if (updatedData.is_active === false) {
         handleDomainDeactivation(cleanDomain, updatedData);
       }
+      
+      // Handle domain reactivation (is_active becomes true)
+      if (updatedData.is_active === true && updatedData.reactivation_signal === true) {
+        handleDomainReactivation(cleanDomain, updatedData);
+      }
     });
     
     // Store the listener for cleanup later
@@ -1682,5 +1687,57 @@ function handleDomainDeactivation(domain, updatedData) {
   } catch (error) {
     // Popup not open, that's fine
     console.log(`No popup to notify about ${domain} deactivation`);
+  }
+}
+
+// Handle domain reactivation (is_active becomes true)
+function handleDomainReactivation(domain, updatedData) {
+  console.log(`🔄 DOMAIN REACTIVATION: Domain reactivation detected for ${domain}`);
+  console.log("updatedData", updatedData);
+  
+  // Add domain back to local domains object in background script
+  if (updatedData.time_limit && !blockedDomains[domain]) {
+    blockedDomains[domain] = updatedData.time_limit;
+    console.log(`Added ${domain} back to background script's blocked domains with ${updatedData.time_limit}s timer`);
+  }
+  
+  // Notify content scripts on tabs with this domain
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach(tab => {
+      if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+        try {
+          const hostname = new URL(tab.url).hostname.toLowerCase();
+          const cleanHostname = hostname.replace(/^www\./, '');
+          
+          if (cleanHostname === domain || hostname === domain) {
+            console.log(`Notifying tab ${tab.id} of domain reactivation for ${domain}`);
+            chrome.tabs.sendMessage(tab.id, {
+              action: 'domainReactivated',
+              domain: domain,
+              data: updatedData
+            }).catch((error) => {
+              console.log(`Could not notify tab ${tab.id}:`, error);
+            });
+          }
+        } catch (error) {
+          // Invalid URL, ignore
+        }
+      }
+    });
+  });
+  
+  // Notify any open popups about the domain reactivation
+  try {
+    chrome.runtime.sendMessage({
+      type: 'DOMAIN_REACTIVATED',
+      domain: domain,
+      data: updatedData
+    }).catch(() => {
+      // Popup might not be open, that's fine
+      console.log(`No popup to notify about ${domain} reactivation`);
+    });
+  } catch (error) {
+    // Popup not open, that's fine
+    console.log(`No popup to notify about ${domain} reactivation`);
   }
 }

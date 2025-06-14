@@ -234,6 +234,24 @@ document.addEventListener('DOMContentLoaded', function() {
         // Show notification to user
         showFeedback(`${message.domain} was removed from another device`);
       }
+    } else if (message.type === 'DOMAIN_REACTIVATED') {
+      // Handle domain reactivation from another device
+      console.log(`Popup: Domain reactivated from another device: ${message.domain}`);
+      
+      // Add back to local domains object and save
+      if (!domains[message.domain] && message.data && message.data.time_limit) {
+        domains[message.domain] = message.data.time_limit;
+        saveDomains();
+        
+        console.log(`Popup: Added ${message.domain} back to local storage with ${message.data.time_limit}s timer`);
+        
+        // Update UI immediately
+        renderDomainsList();
+        updateStats();
+        
+        // Show notification to user
+        showFeedback(`${message.domain} was reactivated from another device`);
+      }
     }
   });
   
@@ -1340,7 +1358,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
     const siteId = `${user.uid}_${formattedDomain}`;
-    const existingSite = await firestore.getBlockedSite(siteId);
+    const existingSite = await realtimeDB.getBlockedSite(siteId);
     
     if (existingSite) {
       if (existingSite.is_active) {
@@ -1348,29 +1366,16 @@ document.addEventListener('DOMContentLoaded', function() {
         showWarning(`${cleanDomain} is already being tracked`);
         return;
       } else {
-        // Site exists but is inactive - reactivate it without changing time_limit or time_remaining
+        // Site exists but is inactive - reactivate it
         console.log(`Reactivating inactive site: ${cleanDomain}`);
-        const now = new Date();
         const reactivatedSiteData = {
-          // Preserve essential existing data but be selective
-          user_id: existingSite.user_id,
-          url: existingSite.url,
-          time_limit: existingSite.time_limit,
-          time_remaining: existingSite.time_remaining,
-          last_reset_date: existingSite.last_reset_date,
-          // Only include these if they exist and are not null/undefined
-          ...(existingSite.override_active !== undefined && { override_active: existingSite.override_active }),
-          ...(existingSite.override_initiated_by && { override_initiated_by: existingSite.override_initiated_by }),
-          ...(existingSite.override_initiated_at && { override_initiated_at: existingSite.override_initiated_at }),
-          ...(existingSite.blocked_until && { blocked_until: existingSite.blocked_until }),
-          ...(existingSite.last_accessed && { last_accessed: existingSite.last_accessed }),
-          // Override the fields we're specifically updating
-          is_active: true,
-          updated_at: now
-          // Don't change time_limit or time_remaining
+          ...existingSite, // Keep all existing data unchanged
+          is_active: true, // Only change the active status
+          reactivation_signal: true, // Signal for cross-device reactivation
+          updated_at: new Date().toISOString()
         };
         
-        await firestore.updateBlockedSite(siteId, reactivatedSiteData);
+        await realtimeDB.addBlockedSite(siteId, reactivatedSiteData);
         
         // Add to local domains with existing time_limit
         domains[cleanDomain] = existingSite.time_limit;
@@ -1557,23 +1562,80 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
+      // Get user data and override information
+      const userDoc = await firestore.getUserProfile(user.uid);
+      if (!userDoc) {
+        showError('User data not found');
+        return;
+      }
+
+      const userPlan = userDoc.plan || 'free';
+      let canOverride = true;
+
+      // Only check override credits for non-elite users
+      if (userPlan !== 'elite') {
+        // Get user's override data
+        const userOverrides = await firestore.getUserOverrides(user.uid);
+        if (!userOverrides || userOverrides.overrides <= 0) {
+          // Redirect to checkout page instead of showing error
+          chrome.tabs.create({ url: 'http://localhost:3000/checkout?overrides=1' });
+          return;
+        }
+        
+        // Update user's override data
+        const now = new Date();
+        const currentMonth = now.toISOString().slice(0, 7); // YYYY-MM format
+        
+        const updatedOverrides = {
+          overrides: Math.max(0, userOverrides.overrides - 1),
+          overrides_used_total: (userOverrides.overrides_used_total || 0) + 1,
+          updated_at: now,
+          monthly_stats: {
+            ...userOverrides.monthly_stats,
+            [currentMonth]: {
+              ...userOverrides.monthly_stats?.[currentMonth],
+              overrides_used: ((userOverrides.monthly_stats?.[currentMonth]?.overrides_used) || 0) + 1,
+              credit_overrides_used: ((userOverrides.monthly_stats?.[currentMonth]?.credit_overrides_used) || 0) + 1
+            }
+          }
+        };
+
+        // Update user_overrides collection
+        await firestore.updateUserOverrides(user.uid, updatedOverrides);
+
+        // Create override history record
+        const historyId = `${user.uid}_${Date.now()}`;
+        const historyData = {
+          user_id: user.uid,
+          site_url: domain,
+          timestamp: now,
+          amount: 0,
+          override_type: 'credit',
+          month: currentMonth,
+          plan: userPlan,
+          reason: '',
+          created_at: now
+        };
+
+        await firestore.createOverrideHistory(historyId, historyData);
+      }
+
       // Create updated site data with reset timer and override active
       const now = new Date();
       const updatedSiteData = {
-        // Preserve essential existing data but be selective
         user_id: existingSite.user_id,
         url: existingSite.url,
         last_reset_date: existingSite.last_reset_date,
-        // Only include these if they exist and are not null/undefined  
         ...(existingSite.last_accessed && { last_accessed: existingSite.last_accessed }),
-        // Override the fields we're specifically updating
-        time_remaining: originalTimeLimit, // Reset to original time limit
+        time_remaining: originalTimeLimit,
         time_limit: originalTimeLimit,
-        override_active: true, // Set override active
-        is_blocked: false, // Unblock the site
-        blocked_until: null, // Clear blocked until
+        override_active: true,
+        is_blocked: false,
+        blocked_until: null,
         updated_at: now.toISOString(),
-        last_accessed: now.toISOString()
+        last_accessed: now.toISOString(),
+        override_initiated_by: user.uid,
+        override_initiated_at: now.toISOString()
       };
 
       // Update Firebase Realtime Database

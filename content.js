@@ -1141,6 +1141,40 @@
                 }
                 
                 sendResponse({ success: true });
+            } else if (request.action === 'domainReactivated') {
+                // Handle domain reactivation from Firebase realtime update
+                console.log(`Firebase Realtime Update: Domain reactivated for ${request.domain}`);
+                console.log("request.data", request.data);
+                
+                // Check if this matches current domain
+                if (getCurrentDomain() === request.domain) {
+                    console.log(`Domain ${request.domain} reactivated from another device - starting tracking immediately`);
+                    
+                    // Add back to Chrome sync storage
+                    try {
+                        chrome.storage.sync.get(['blockedDomains'], (result) => {
+                            const domains = result.blockedDomains || {};
+                            domains[request.domain] = request.data.time_limit;
+                            chrome.storage.sync.set({
+                                blockedDomains: domains
+                            }, () => {
+                                console.log(`Chrome sync storage updated - added ${request.domain} with ${request.data.time_limit}s timer`);
+                                
+                                // Initialize tracking for this domain
+                                initializeWithConfig({ 
+                                    timer: request.data.time_limit,
+                                    fromReactivation: true
+                                });
+                            });
+                        });
+                    } catch (error) {
+                        console.error('Error updating Chrome sync storage:', error);
+                    }
+                    
+                    console.log(`Domain ${request.domain} reactivated and tracking restarted`);
+                }
+                
+                sendResponse({ success: true });
             }
             
             return true; // Keep message channel open for async response
