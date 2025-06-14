@@ -1533,29 +1533,71 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     try {
-      const user = firebaseAuth.getCurrentUser();
+      const user = await firebaseAuth.getCurrentUser();
       if (!user) {
         showError('Please log in to use override');
         return;
       }
 
-      // Get the original time limit for this domain
-      const originalTimeLimit = domains[domain];
-      if (!originalTimeLimit) {
-        showError('Domain not found');
+      // Get user's profile to check plan
+      const userProfile = await firestore.getUserProfile(user.uid);
+      if (!userProfile) {
+        showError('Could not fetch user data');
         return;
       }
+
+      const userPlan = userProfile.plan || 'free';
+      
+      // If user is elite, no need to check overrides
+      if (userPlan === 'elite') {
+        console.log('Elite user - unlimited overrides available');
+        await processOverride(domain, user.uid, userPlan, user);
+        return;
+      }
+
+      // Get user's overrides from user_overrides collection
+      const userOverrides = await firestore.getUserOverrides(user.uid);
+      if (!userOverrides) {
+        showError('Could not fetch override data');
+        return;
+      }
+
+      // Check if user has overrides available
+      if (userOverrides.overrides <= 0) {
+        // No overrides available - redirect to checkout
+        window.location.href = 'http://localhost:3000/checkout?overrides=1';
+        return;
+      }
+
+      console.log(`User has ${userOverrides.overrides} overrides remaining`);
+      
+      // Process the override if we get here
+      await processOverride(domain, user.uid, userPlan, user);
+
+    } catch (error) {
+      console.log('Error handling override:', error);
+      showError('Failed to process override');
+    }
+  }
+
+  async function processOverride(domain, userId, userPlan, user = {}) {
+    // Get the original time limit for this domain
+    const originalTimeLimit = domains[domain];
+    if (!originalTimeLimit) {
+      showError('Domain not found');
+      return;
+    }
 
       // Format domain for Firebase
       const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-      const siteId = `${user.uid}_${formattedDomain}`;
+      const siteId = `${userId}_${formattedDomain}`;
 
-      // Get existing site data
-      const existingSite = await realtimeDB.getBlockedSite(siteId);
-      if (!existingSite) {
-        showError('Site not found in database');
-        return;
-      }
+    // Get existing site data
+    const existingSite = await realtimeDB.getBlockedSite(siteId);
+    if (!existingSite) {
+      showError('Site not found in database');
+      return;
+    }
 
       // Create updated site data with reset timer and override active
       const now = new Date();
@@ -1576,11 +1618,49 @@ document.addEventListener('DOMContentLoaded', function() {
         last_accessed: now.toISOString()
       };
 
-      // Update Firebase Realtime Database
-      await realtimeDB.addBlockedSite(siteId, updatedSiteData);
+    // Update Firebase Realtime Database
+    await realtimeDB.addBlockedSite(siteId, updatedSiteData);
 
-      // Clear daily block in Chrome storage
-      clearDailyBlock(domain);
+    // Create override history record
+    const historyId = crypto.randomUUID();
+    const historyData = {
+      user_id: userId,
+      site_url: domain,
+      timestamp: now.toISOString(),
+      month: now.toISOString().slice(0, 7),
+      override_type: userPlan === 'elite' ? 'unlimited' : 'override',
+      plan: userPlan,
+      created_at: now.toISOString()
+    };
+
+    await firestore.createOverrideHistory(historyId, historyData);
+
+    // Update user overrides if not elite
+    if (userPlan !== 'elite') {
+      const userOverrides = await firestore.getUserOverrides(userId);
+      const currentMonth = now.toISOString().slice(0, 7);
+      const monthlyStats = userOverrides?.monthly_stats || {};
+      const thisMonthStats = monthlyStats[currentMonth] || {
+        overrides_used: 0,
+        total_spent_this_month: 0
+      };
+
+      // Update stats
+      thisMonthStats.overrides_used++;
+      
+      await firestore.updateUserOverrides(userId, {
+        overrides: Math.max(0, (userOverrides?.overrides || 0) - 1),
+        overrides_used_total: (userOverrides?.overrides_used_total || 0) + 1,
+        monthly_stats: {
+          ...monthlyStats,
+          [currentMonth]: thisMonthStats
+        },
+        updated_at: now.toISOString()
+      });
+    }
+
+    // Clear daily block in Chrome storage
+    clearDailyBlock(domain);
 
       // Reset timer state in Chrome storage
       const timerKey = `timerState_${domain}`;
@@ -1593,7 +1673,7 @@ document.addEventListener('DOMContentLoaded', function() {
         date: getTodayString(),
         url: domain,
         override_active: true,
-        override_initiated_by: user.uid,
+        override_initiated_by: userId,
         override_initiated_at: now.toISOString(),
         time_limit: originalTimeLimit
       };
@@ -1627,11 +1707,14 @@ document.addEventListener('DOMContentLoaded', function() {
       
       showFeedback(`Override activated for ${domain} - timer reset to ${formatTime(originalTimeLimit)}`);
 
-    } catch (error) {
-      console.error('Override error:', error);
-      showError('Failed to activate override. Please try again.');
-    }
+   
   }
+
+
+
+
+
+
   
   async function renderDomainsList() {
     const domainKeys = Object.keys(domains);
