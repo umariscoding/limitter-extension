@@ -847,6 +847,8 @@ class FirebaseRealtimeDB {
       }
 
       const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
+      
+      // First set the tab switch event
       const response = await fetch(url, {
         method: "PATCH",
         headers: this.getAuthHeaders(),
@@ -861,6 +863,22 @@ class FirebaseRealtimeDB {
       if (!response.ok) {
         throw new Error(`Failed to update tab switch: ${response.status}`);
       }
+
+      // Clear the tab switch flag after a short delay to allow for next detection
+      setTimeout(async () => {
+        try {
+          await fetch(url, {
+            method: "PATCH",
+            headers: this.getAuthHeaders(),
+            body: JSON.stringify({
+              tab_switch_active: false,
+              updated_at: new Date().toISOString()
+            })
+          });
+        } catch (error) {
+          console.error("Error clearing tab switch flag:", error);
+        }
+      }, 1000);
 
       return await response.json();
     } catch (error) {

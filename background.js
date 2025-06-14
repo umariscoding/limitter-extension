@@ -708,7 +708,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           }
 
           // Check for tab switch changes
-          if (updatedData.tab_switch_active !== undefined && updatedData.tab_switch_device) {
+          if (updatedData.tab_switch_active === true && updatedData.tab_switch_device) {
             getDeviceId().then(currentDeviceId => {
               // Only log if it's from another device
               if (updatedData.tab_switch_device !== currentDeviceId) {
