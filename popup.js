@@ -1340,7 +1340,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
     const siteId = `${user.uid}_${formattedDomain}`;
-    const existingSite = await firestore.getBlockedSite(siteId);
+    const existingSite = await realtimeDB.getBlockedSite(siteId);
     
     if (existingSite) {
       if (existingSite.is_active) {
@@ -1370,7 +1370,7 @@ document.addEventListener('DOMContentLoaded', function() {
           // Don't change time_limit or time_remaining
         };
         
-        await firestore.updateBlockedSite(siteId, reactivatedSiteData);
+        await realtimeDB.addBlockedSite(siteId, reactivatedSiteData);
         
         // Add to local domains with existing time_limit
         domains[cleanDomain] = existingSite.time_limit;
