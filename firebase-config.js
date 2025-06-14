@@ -1,5 +1,3 @@
-// Firebase Configuration
-// Replace these with your actual Firebase project configuration
 const firebaseConfig = {
   apiKey: "AIzaSyCRcKOOzsp_nX8auUOhAFR-UVhGqIgmOjU",
   authDomain: "test-ext-ad0b2.firebaseapp.com",
@@ -633,7 +631,479 @@ class FirebaseFirestore {
   }
 }
 
+// Firebase Realtime Database class
+class FirebaseRealtimeDB {
+  constructor(config, authInstance) {
+    this.config = config;
+    this.auth = authInstance;
+    this.databaseURL = `https://${config.projectId}-default-rtdb.firebaseio.com`;
+  }
+
+  // Get authorization headers for API requests
+  getAuthHeaders() {
+    const user = this.auth.getCurrentUser();
+    if (!user || !user.idToken) {
+      throw new Error("User not authenticated");
+    }
+    return {
+      "Content-Type": "application/json",
+    };
+  }
+
+  // Encode a string to be safe for use in a Firebase path
+  encodePath(str) {
+    return str
+      .replace(/\./g, '_')  // Replace dots with underscores for domain format
+      .replace(/#/g, '_hash_')
+      .replace(/\$/g, '_dollar_')
+      .replace(/\[/g, '_lbracket_')
+      .replace(/\]/g, '_rbracket_')
+      .replace(/\//g, '_slash_');
+  }
+
+  // Decode a Firebase path back to original string
+  decodePath(str) {
+    return str
+      .replace(/_hash_/g, '#')
+      .replace(/_dollar_/g, '$')
+      .replace(/_lbracket_/g, '[')
+      .replace(/_rbracket_/g, ']')
+      .replace(/_slash_/g, '/')
+      .replace(/_/g, '.');  // Replace underscores back to dots for domain format
+  }
+
+  // Format domain for Firebase keys (userId_domain_com format)
+  formatDomainForFirebase(domain) {
+    return domain.replace(/^www\./, '').toLowerCase().replace(/\./g, '_');
+  }
+
+  // Get all blocked sites
+  async getBlockedSites() {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      const url = `${this.databaseURL}/blockedSites.json?auth=${user.idToken}`;
+      const response = await fetch(url, {
+        method: "GET",
+        headers: this.getAuthHeaders()
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to get blocked sites: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (!data) return [];
+
+      // Convert the data to an array and decode the site IDs
+      return Object.entries(data).map(([encodedId, siteData]) => ({
+        ...siteData,
+        id: encodedId,
+        url: encodedId.split('_').slice(1).join('_').replace(/_/g, '.') // Remove userId_ prefix and convert underscores back to dots
+      }));
+    } catch (error) {
+      console.error("Get blocked sites error:", error);
+      throw error;
+    }
+  }
+
+  // Get a specific blocked site
+  async getBlockedSite(siteId) {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      // The siteId should already be in the correct format (userId_domain_com)
+      const encodedSiteId = siteId;
+
+      const url = `${this.databaseURL}/blockedSites/${encodedSiteId}.json?auth=${user.idToken}`;
+      const response = await fetch(url, {
+        method: "GET",
+        headers: this.getAuthHeaders()
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to get blocked site: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (!data) return null;
+
+      // Return the data with decoded URL
+      return {
+        ...data,
+        id: encodedSiteId,
+        url: siteId.split('_').slice(1).join('_').replace(/_/g, '.') // Remove userId_ prefix and convert underscores back to dots
+      };
+    } catch (error) {
+      console.error("Get blocked site error:", error);
+      throw error;
+    }
+  }
+
+  // Get site data (alias for getBlockedSite for unified API)
+  async getSiteData(siteId) {
+    return this.getBlockedSite(siteId);
+  }
+
+  // Add a blocked site to the Realtime Database
+  async addBlockedSite(siteId, siteData) {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      // Clean and validate the data
+      const cleanData = {
+        ...siteData,
+        created_at: siteData.created_at ? siteData.created_at : new Date().toISOString(),
+        updated_at: siteData.updated_at ? siteData.updated_at : new Date().toISOString()
+      };
+
+      // The siteId should already be in the correct format (userId_domain_com)
+      const encodedSiteId = siteId;
+
+      // Store directly under blockedSites node
+      const url = `${this.databaseURL}/blockedSites/${encodedSiteId}.json?auth=${user.idToken}`;
+      const response = await fetch(url, {
+        method: "PUT",
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify(cleanData)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Realtime DB Error Response:', errorText);
+        throw new Error(`Failed to add blocked site: ${response.status} - ${errorText}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error("Add blocked site error:", error);
+      throw error;
+    }
+  }
+
+  // Listen for real-time changes to a specific blocked site
+  listenToBlockedSite(siteId, callback) {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      const encodedSiteId = siteId;
+      const url = `${this.databaseURL}/blockedSites/${encodedSiteId}.json?auth=${user.idToken}`;
+      
+      const eventSource = new EventSource(url);
+      
+      eventSource.addEventListener('put', (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && data.data) {
+            const siteData = {
+              ...data.data,
+              id: encodedSiteId,
+              url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+            };
+            console.log('Firebase Realtime DB: Received update for site:', siteId, siteData);
+            callback(siteData);
+          }
+        } catch (error) {
+          console.error('Firebase Realtime DB: Error parsing event data:', error);
+        }
+      });
+
+      eventSource.addEventListener('patch', (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && data.data) {
+            console.log('Firebase Realtime DB: Received patch update for site:', siteId, data.data);
+            
+            // If this is a tab switch event, we need the complete site data including time_remaining
+            if (data.data.tab_switch_active === true) {
+              console.log('Firebase Realtime DB: Tab switch detected in patch, fetching complete site data...');
+              console.log('Firebase Realtime DB: Patch data received:', data.data);
+              
+              // Add a small delay to ensure Firebase has been updated completely
+              setTimeout(async () => {
+                try {
+                  // Fetch complete site data to get time_remaining
+                  const completeData = await this.getBlockedSite(siteId);
+                  if (completeData) {
+                    console.log('Firebase Realtime DB: Complete site data for tab switch:', completeData);
+                    // Merge patch data with complete data, prioritizing patch data
+                    const mergedData = {
+                      ...completeData,
+                      ...data.data,
+                      id: encodedSiteId,
+                      url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+                    };
+                    console.log('Firebase Realtime DB: Final merged data for tab switch:', mergedData);
+                    callback(mergedData);
+                  } else {
+                    console.warn('Firebase Realtime DB: No complete data found, using patch data only');
+                    // Fallback to patch data only with URL
+                    const fallbackData = {
+                      ...data.data,
+                      id: encodedSiteId,
+                      url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+                    };
+                    callback(fallbackData);
+                  }
+                } catch (error) {
+                  console.error('Firebase Realtime DB: Error fetching complete site data:', error);
+                  // Fallback to patch data only with URL
+                  const fallbackData = {
+                    ...data.data,
+                    id: encodedSiteId,
+                    url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+                  };
+                  callback(fallbackData);
+                }
+              }, 100); // Small delay to ensure Firebase consistency
+            } else if (data.data.site_opened_active === true) {
+              console.log('Firebase Realtime DB: Site opened detected in patch, fetching complete site data...');
+              console.log('Firebase Realtime DB: Site opened patch data received:', data.data);
+              
+              // Add a small delay to ensure Firebase has been updated completely
+              setTimeout(async () => {
+                try {
+                  // Fetch complete site data to get time_remaining
+                  const completeData = await this.getBlockedSite(siteId);
+                  if (completeData) {
+                    console.log('Firebase Realtime DB: Complete site data for site opened:', completeData);
+                    // Merge patch data with complete data, prioritizing patch data
+                    const mergedData = {
+                      ...completeData,
+                      ...data.data,
+                      id: encodedSiteId,
+                      url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+                    };
+                    console.log('Firebase Realtime DB: Final merged data for site opened:', mergedData);
+                    callback(mergedData);
+                  } else {
+                    console.warn('Firebase Realtime DB: No complete data found for site opened, using patch data only');
+                    // Fallback to patch data only with URL
+                    const fallbackData = {
+                      ...data.data,
+                      id: encodedSiteId,
+                      url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+                    };
+                    callback(fallbackData);
+                  }
+                } catch (error) {
+                  console.error('Firebase Realtime DB: Error fetching complete site data for site opened:', error);
+                  // Fallback to patch data only with URL
+                  const fallbackData = {
+                    ...data.data,
+                    id: encodedSiteId,
+                    url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+                  };
+                  callback(fallbackData);
+                }
+              }, 100); // Small delay to ensure Firebase consistency
+            } else {
+              // For non-tab-switch and non-site-opened updates, patch data is sufficient
+              const nonSpecialEventData = {
+                ...data.data,
+                id: encodedSiteId,
+                url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+              };
+              callback(nonSpecialEventData);
+            }
+          }
+        } catch (error) {
+          console.error('Firebase Realtime DB: Error parsing patch data:', error);
+        }
+      });
+
+      eventSource.addEventListener('error', (error) => {
+        console.error('Firebase Realtime DB: EventSource error:', error);
+      });
+
+      return eventSource; // Return so it can be closed later
+    } catch (error) {
+      console.error("Listen to blocked site error:", error);
+      throw error;
+    }
+  }
+
+  // Update site with tab switch event
+  async updateSiteTabSwitch(siteId, tabSwitchData) {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
+      
+      // First set the tab switch event
+      const updateData = {
+        tab_switch_active: true,
+        tab_switch_timestamp: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        time_remaining: tabSwitchData.timeRemaining,
+        deviceId: tabSwitchData.deviceId
+      };
+      console.log("tabSwitchData", tabSwitchData)
+      // Always include time_remaining, even if it's null/undefined for debugging
+      updateData.time_remaining = tabSwitchData.timeRemaining;
+      console.log(`Always including time_remaining: ${tabSwitchData.timeRemaining} (type: ${typeof tabSwitchData.timeRemaining})`);
+      console.log(`Including deviceId: ${tabSwitchData.deviceId}`);
+      
+      console.log("Final updateData being sent to Firebase:", updateData);
+      
+      const response = await fetch(url, {
+        method: "PATCH",
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify(updateData)
+      });
+      
+      console.log("Firebase response status:", response.status);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to update tab switch: ${response.status}`);
+      }
+
+      const responseData = await response.json();
+      console.log("Firebase response data:", responseData);
+
+      // Clear the tab switch flag after a short delay to allow for next detection
+      setTimeout(async () => {
+        try {
+          await fetch(url, {
+            method: "PATCH",
+            headers: this.getAuthHeaders(),
+            body: JSON.stringify({
+              tab_switch_active: false,
+              updated_at: new Date().toISOString()
+            })
+          });
+        } catch (error) {
+          console.error("Error clearing tab switch flag:", error);
+        }
+      }, 3000); // Increased from 1000ms to 3000ms to give other devices more time
+
+      return responseData;
+    } catch (error) {
+      console.error("Update site tab switch error:", error);
+      throw error;
+    }
+  }
+
+  // Update site with synchronized timer value
+  async updateSiteSyncedTimer(siteId, timeRemaining) {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
+      const siteData = await this.getBlockedSite(siteId);
+      console.log("Sited Data", siteData)
+      const updateData = {
+        tab_switch_active: true,
+        time_remaining: timeRemaining,
+        updated_at: new Date().toISOString()
+      };
+      
+      console.log(`🔄 Updating Firebase timer for ${siteId} to ${timeRemaining}s`);
+      
+      const response = await fetch(url, {
+        method: "PATCH",
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify(updateData)
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to update synced timer: ${response.status}`);
+      }
+
+      const responseData = await response.json();
+      console.log(`✅ Firebase timer updated successfully for ${siteId}`, responseData);
+      return responseData;
+    } catch (error) {
+      console.error("Update site synced timer error:", error);
+      throw error;
+    }
+  }
+
+  // Update site with site opened event (for fresh tabs/reloads)
+  async updateSiteOpened(siteId, siteOpenedData) {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
+      
+      // First set the site opened event
+      const updateData = {
+        site_opened_active: true,
+        site_opened_timestamp: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        time_remaining: siteOpenedData.timeRemaining,
+        deviceId: siteOpenedData.deviceId
+      };
+      
+      console.log("siteOpenedData", siteOpenedData);
+      // Always include time_remaining, even if it's null/undefined for debugging
+      updateData.time_remaining = siteOpenedData.timeRemaining;
+      console.log(`Site opened - including time_remaining: ${siteOpenedData.timeRemaining} (type: ${typeof siteOpenedData.timeRemaining})`);
+      console.log(`Site opened - including deviceId: ${siteOpenedData.deviceId}`);
+      
+      console.log("Final site opened updateData being sent to Firebase:", updateData);
+      
+      const response = await fetch(url, {
+        method: "PATCH",
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify(updateData)
+      });
+      
+      console.log("Firebase site opened response status:", response.status);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to update site opened: ${response.status}`);
+      }
+
+      const responseData = await response.json();
+      console.log("Firebase site opened response data:", responseData);
+
+      // Clear the site opened flag after a delay to allow other devices to process
+      setTimeout(async () => {
+        try {
+          await fetch(url, {
+            method: "PATCH",
+            headers: this.getAuthHeaders(),
+            body: JSON.stringify({
+              site_opened_active: false,
+              updated_at: new Date().toISOString()
+            })
+          });
+        } catch (error) {
+          console.error("Error clearing site opened flag:", error);
+        }
+      }, 3000); // Same timeout as tab switch
+
+      return responseData;
+    } catch (error) {
+      console.error("Update site opened error:", error);
+      throw error;
+    }
+  }
+}
+
 // Export for use in other scripts
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { FirebaseAuth, FirebaseFirestore, FIREBASE_CONFIG };
+  module.exports = { FirebaseAuth, FirebaseFirestore, FirebaseRealtimeDB, FIREBASE_CONFIG };
 }
