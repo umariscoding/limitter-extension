@@ -932,11 +932,88 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (updatedSiteData.override_active !== undefined) {
                   console.log(`Override active changed for ${site.url}: ${updatedSiteData.override_active}`);
                   
-                  // Update UI or sync with other devices here
                   if (updatedSiteData.override_active) {
                     console.log(`Override activated for ${site.url} from another device`);
+                    
+                    // Update Chrome local storage with reset timer state
+                    console.log("updatedSiteData", updatedSiteData)
+                    const timerKey = `timerState_${site.url}`;
+                    const resetTimerState = {
+                      timeRemaining: updatedSiteData.time_limit,
+                      gracePeriod: updatedSiteData.time_limit,
+                      isActive: true,
+                      isPaused: false,
+                      timestamp: Date.now(),
+                      date: getTodayString(),
+                      url: site.url,
+                      override_active: true,
+                      override_initiated_by: updatedSiteData.override_initiated_by,
+                      override_initiated_at: updatedSiteData.override_initiated_at,
+                      time_limit: updatedSiteData.time_limit
+                    };
+
+                    safeChromeCall(() => {
+                      chrome.storage.local.set({
+                        [timerKey]: resetTimerState
+                      }, () => {
+                        console.log(`Chrome local storage updated for ${site.url} - override activated`);
+                      });
+                    });
+
+                    // Clear daily block
+                    clearDailyBlock(site.url);
+                    
+                    // Update domains object for Chrome sync storage
+                    domains[site.url] = updatedSiteData.time_limit;
+                    saveDomains(); // This saves to Chrome sync storage
+                    
+                    // Update domain states for UI
+                    domainStates[site.url] = {
+                      status: 'running',
+                      timeRemaining: updatedSiteData.time_remaining || updatedSiteData.time_limit,
+                      isActive: true
+                    };
+                    
+                    // Re-render the domains list to show updated state
+                    renderDomainsList();
+                    
+                    console.log(`Domains object and Chrome sync storage updated for ${site.url}`);
+                    
                   } else {
                     console.log(`Override deactivated for ${site.url} from another device`);
+                    
+                    // Update Chrome local storage to clear override state
+                    const timerKey = `timerState_${site.url}`;
+                    safeChromeCall(() => {
+                      chrome.storage.local.get([timerKey], (result) => {
+                        if (result[timerKey]) {
+                          const updatedState = {
+                            ...result[timerKey],
+                            override_active: false,
+                            override_initiated_by: null,
+                            override_initiated_at: null,
+                            timestamp: Date.now()
+                          };
+                          
+                          chrome.storage.local.set({
+                            [timerKey]: updatedState
+                          }, () => {
+                            console.log(`Chrome local storage updated for ${site.url} - override cleared`);
+                          });
+                        }
+                      });
+                    });
+                    
+                    // Update domain states for UI
+                    if (domainStates[site.url]) {
+                      domainStates[site.url] = {
+                        ...domainStates[site.url],
+                        // Keep existing state but ensure override is cleared
+                      };
+                    }
+                    
+                    // Re-render the domains list
+                    renderDomainsList();
                   }
                 }
               });

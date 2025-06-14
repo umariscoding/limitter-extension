@@ -59,6 +59,19 @@ async function initializeAuth() {
       console.warn('Smart Tab Blocker Background: Error creating FirebaseSyncService, continuing without sync:', syncServiceError);
       firebaseSyncService = null;
     }
+
+    try {
+      if (firebaseAuth) {
+        realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
+        console.log('Smart Tab Blocker Background: FirebaseRealtimeDB created successfully');
+      } else {
+        console.log('Smart Tab Blocker Background: Skipping FirebaseRealtimeDB creation - auth not available');
+        realtimeDB = null;
+      }
+    } catch (realtimeError) {
+      console.warn('Smart Tab Blocker Background: Error creating FirebaseRealtimeDB, continuing without realtime features:', realtimeError);
+      realtimeDB = null;
+    }
     
     let storedUser = null;
     if (firebaseAuth) {
@@ -115,7 +128,7 @@ async function initializeAuth() {
       console.log('Smart Tab Blocker Background: User not authenticated or subscription service not available');
     }
     
-    console.log('Smart Tab Blocker Background: Authentication initialized, isAuthenticated:', isAuthenticated, 'syncService available:', !!firebaseSyncService);
+    console.log('Smart Tab Blocker Background: Authentication initialized, isAuthenticated:', isAuthenticated, 'syncService available:', !!firebaseSyncService, 'realtimeDB available:', !!realtimeDB);
   } catch (error) {
     console.warn('Smart Tab Blocker Background: Auth initialization failed, extension will work in offline mode:', error);
     isAuthenticated = false;
@@ -123,6 +136,7 @@ async function initializeAuth() {
     firebaseAuth = null;
     firestore = null;
     subscriptionService = null;
+    realtimeDB = null;
   }
 }
 
@@ -327,23 +341,36 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
     case 'userLoggedIn':
       isAuthenticated = true;
+      console.log('Smart Tab Blocker Background: User logged in, reinitializing all Firebase services...');
+      
       (async () => {
         try {
-          if (subscriptionService) {
-            await subscriptionService.initializePlan();
-            console.log('Smart Tab Blocker Background: Subscription service reinitialized');
-          }
+          // Reinitialize all Firebase services after login
+          console.log('Smart Tab Blocker Background: Reinitializing Firebase services...');
           
-          // Ensure Firebase sync service is initialized
-          if (!firebaseSyncService && firebaseAuth && firestore) {
-            console.log('Smart Tab Blocker Background: Creating Firebase sync service after login...');
-            firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
-            firebaseSyncService.init();
-            console.log('Smart Tab Blocker Background: Firebase sync service initialized after login');
-          }
+          firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
+          firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
+          realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
+          
+          // Initialize sync service
+          firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
+          firebaseSyncService.init();
+          
+          // Initialize subscription service
+          subscriptionService = new SubscriptionService(firebaseAuth, firestore);
+          await subscriptionService.initializePlan();
+          
+          console.log('Smart Tab Blocker Background: All Firebase services reinitialized successfully');
+          console.log('Smart Tab Blocker Background: Service status after login:', {
+            hasFirebaseAuth: !!firebaseAuth,
+            hasFirestore: !!firestore,
+            hasRealtimeDB: !!realtimeDB,
+            hasFirebaseSyncService: !!firebaseSyncService,
+            hasSubscriptionService: !!subscriptionService
+          });
           
           // Only proceed with tab updates if everything is ready
-          if (firebaseSyncService) {
+          if (firebaseSyncService && realtimeDB) {
             console.log('Smart Tab Blocker Background: All services ready - loading configuration and updating tabs');
             
             // Load configuration first, then update tabs
@@ -359,7 +386,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               reloadAllTabs();
             }, 3000);
           } else {
-            console.error('Smart Tab Blocker Background: Firebase sync service still not available after login');
+            console.error('Smart Tab Blocker Background: Firebase services still not available after login');
+            console.error('Smart Tab Blocker Background: Service status:', {
+              hasFirebaseSyncService: !!firebaseSyncService,
+              hasRealtimeDB: !!realtimeDB,
+              hasFirebaseAuth: !!firebaseAuth,
+              hasFirestore: !!firestore
+            });
           }
           
         } catch (error) {

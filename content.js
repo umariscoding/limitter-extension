@@ -542,7 +542,7 @@
     function saveTimerState() {
         const storageKey = getStorageKey();
         if (!storageKey) return;
-        
+        console.log("timeRemaining", timeRemaining)
         const state = {
             timeRemaining: timeRemaining,
             isActive: !!countdownTimer && isActiveTab, // Only active tab should be marked as running the timer
@@ -940,31 +940,67 @@
                 
                 if (request.override_active) {
                     console.log(`Override activated for ${request.domain} from another device - updating local state`);
-                    
+                    console.log("request.data", request.data)
                     // Update local override state if this matches current domain
-                    if (getCurrentDomain() === request.domain) {
-                        setOverrideActive(request.data.override_initiated_by, request.data.override_initiated_at);
+                        // Follow the EXACT same pattern as when override button is clicked
+                        // Use the time_limit as the full timer value (like originalTimeLimit in popup)
+                        const originalTimeLimit = request.data.time_limit;
                         
-                        // Reset timer if override is active
-                        if (request.data.time_remaining && request.data.time_remaining > timeRemaining) {
-                            timeRemaining = request.data.time_remaining;
-                            currentTimeLimit = request.data.time_limit || gracePeriod;
-                            
-                            // Restart timer with new values
-                            stopCountdownTimer();
-                            startCountdownTimer();
-                            
-                            console.log(`Timer reset due to override from another device: ${timeRemaining}s remaining`);
+                        console.log(`Firebase override: resetting timer to full time_limit: ${originalTimeLimit}s`);
+                        timeRemaining = originalTimeLimit; // Reset to full time like override button click
+                        currentTimeLimit = originalTimeLimit;
+                        gracePeriod = originalTimeLimit;
+                        
+                        // Set override active with automatic clearing after 4 seconds (same as override button)
+                        setOverrideActive(null, new Date().toISOString());
+                        
+                        // Stop existing timer and start fresh (same as override button)
+                        stopCountdownTimer();
+                        startCountdownTimer();
+                        
+                        // Update timer display immediately to show the reset time
+                        updateTimerDisplay();
+                        
+                        // Notify popup of timer update (same as override button)
+                        sendTimerUpdateToPopup();
+                        
+                        // Save the new state (same as override button)
+                        saveTimerState();
+                        
+                        // Also update Chrome sync storage to ensure domain is properly tracked
+                        try {
+                            chrome.storage.sync.get(['blockedDomains'], (result) => {
+                                const domains = result.blockedDomains || {};
+                                domains[request.domain] = originalTimeLimit;
+                                chrome.storage.sync.set({
+                                    blockedDomains: domains
+                                }, () => {
+                                    console.log(`Chrome sync storage updated for ${request.domain} with timer: ${domains[request.domain]}s`);
+                                });
+                            });
+                        } catch (error) {
+                            console.error('Error updating Chrome sync storage:', error);
                         }
-                    }
-                } else {
-                    console.log(`Override deactivated for ${request.domain} from another device`);
-                    
-                    // Clear override state if this matches current domain
-                    if (getCurrentDomain() === request.domain) {
+                        
+                        // Clear any daily block since override is active
+                        clearDailyBlock();
                         clearOverrideActive();
+                        console.log(`Timer reset to full time due to override from another device: ${timeRemaining}s remaining`);
+                        console.log(`Chrome local and sync storage updated with Firebase override state`);
                     }
-                }
+                // } else {
+                //     console.log(`Override deactivated for ${request.domain} from another device`);
+                    
+                //     // Clear override state if this matches current domain
+                //     if (getCurrentDomain() === request.domain) {
+                //         clearOverrideActive();
+                        
+                //         // Update Chrome local storage after clearing override
+                //         saveTimerState();
+                        
+                //         console.log(`Chrome local storage updated - override cleared`);
+                //     }
+                // }
                 
                 sendResponse({ success: true });
             }
