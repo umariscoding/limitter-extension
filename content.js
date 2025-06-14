@@ -1003,6 +1003,33 @@
                 // }
                 
                 sendResponse({ success: true });
+            } else if (request.action === 'getTimerState') {
+                // Return current timer state for tab switch detection
+                sendResponse({ 
+                    timeRemaining: timeRemaining,
+                    isActive: isEnabled,
+                    gracePeriod: gracePeriod
+                });
+            } else if (request.action === 'updateTimer') {
+                // Update timer from background script (for cross-device sync)
+                if (typeof request.timeRemaining === 'number' && request.timeRemaining >= 0) {
+                    console.log(`🔄 Updating timer from background script: ${timeRemaining}s → ${request.timeRemaining}s`);
+                    timeRemaining = request.timeRemaining;
+                    updateTimerDisplay();
+                    
+                    // Save the updated state
+                    saveTimerState();
+                    
+                    // If timer expired, handle blocking
+                    if (timeRemaining <= 0) {
+                        stopCountdownTimer();
+                        clearTimerState();
+                        markDomainBlockedToday();
+                        hideTimer();
+                        showModal();
+                    }
+                }
+                sendResponse({ success: true });
             }
             
             return true; // Keep message channel open for async response

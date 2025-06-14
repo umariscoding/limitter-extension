@@ -820,7 +820,35 @@ class FirebaseRealtimeDB {
           const data = JSON.parse(event.data);
           if (data && data.data) {
             console.log('Firebase Realtime DB: Received patch update for site:', siteId, data.data);
-            callback(data.data);
+            
+            // If this is a tab switch event, we need the complete site data including time_remaining
+            if (data.data.tab_switch_active === true) {
+              console.log('Firebase Realtime DB: Tab switch detected in patch, fetching complete site data...');
+              // Fetch complete site data to get time_remaining
+              this.getBlockedSite(siteId).then(completeData => {
+                if (completeData) {
+                  console.log('Firebase Realtime DB: Complete site data for tab switch:', completeData);
+                  // Merge patch data with complete data, prioritizing patch data
+                  const mergedData = {
+                    ...completeData,
+                    ...data.data,
+                    id: encodedSiteId,
+                    url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+                  };
+                  callback(mergedData);
+                } else {
+                  // Fallback to patch data only
+                  callback(data.data);
+                }
+              }).catch(error => {
+                console.error('Firebase Realtime DB: Error fetching complete site data:', error);
+                // Fallback to patch data only
+                callback(data.data);
+              });
+            } else {
+              // For non-tab-switch updates, patch data is sufficient
+              callback(data.data);
+            }
           }
         } catch (error) {
           console.error('Firebase Realtime DB: Error parsing patch data:', error);
@@ -849,20 +877,33 @@ class FirebaseRealtimeDB {
       const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
       
       // First set the tab switch event
+      const updateData = {
+        tab_switch_active: true,
+        tab_switch_timestamp: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        time_remaining: tabSwitchData.timeRemaining
+      };
+      console.log("tabSwitchData", tabSwitchData)
+      // Always include time_remaining, even if it's null/undefined for debugging
+      updateData.time_remaining = tabSwitchData.timeRemaining;
+      console.log(`Always including time_remaining: ${tabSwitchData.timeRemaining} (type: ${typeof tabSwitchData.timeRemaining})`);
+      
+      console.log("Final updateData being sent to Firebase:", updateData);
+      
       const response = await fetch(url, {
         method: "PATCH",
         headers: this.getAuthHeaders(),
-        body: JSON.stringify({
-          tab_switch_active: true,
-          tab_switch_device: tabSwitchData.deviceId,
-          tab_switch_timestamp: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
+        body: JSON.stringify(updateData)
       });
-
+      
+      console.log("Firebase response status:", response.status);
+      
       if (!response.ok) {
         throw new Error(`Failed to update tab switch: ${response.status}`);
       }
+
+      const responseData = await response.json();
+      console.log("Firebase response data:", responseData);
 
       // Clear the tab switch flag after a short delay to allow for next detection
       setTimeout(async () => {
@@ -880,9 +921,45 @@ class FirebaseRealtimeDB {
         }
       }, 1000);
 
-      return await response.json();
+      return responseData;
     } catch (error) {
       console.error("Update site tab switch error:", error);
+      throw error;
+    }
+  }
+
+  // Update site with synchronized timer value
+  async updateSiteSyncedTimer(siteId, timeRemaining) {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
+      
+      const updateData = {
+        time_remaining: timeRemaining,
+        updated_at: new Date().toISOString()
+      };
+      
+      console.log(`🔄 Updating Firebase timer for ${siteId} to ${timeRemaining}s`);
+      
+      const response = await fetch(url, {
+        method: "PATCH",
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify(updateData)
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to update synced timer: ${response.status}`);
+      }
+
+      const responseData = await response.json();
+      console.log(`✅ Firebase timer updated successfully for ${siteId}`);
+      return responseData;
+    } catch (error) {
+      console.error("Update site synced timer error:", error);
       throw error;
     }
   }
