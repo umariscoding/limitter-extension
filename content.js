@@ -779,6 +779,20 @@
                 // Mark that we've attempted to load from Firebase
                 hasLoadedFromFirebase = true;
                 
+                // Set up real-time listener for this specific blocked site
+                try {
+                    chrome.runtime.sendMessage({
+                        action: 'setupRealtimeListener',
+                        domain: currentDomain
+                    }, (response) => {
+                        if (response && response.success) {
+                            console.log(`Firebase Realtime Listener: Set up successfully for ${currentDomain}`);
+                        }
+                    });
+                } catch (error) {
+                    console.error('Failed to set up realtime listener:', error);
+                }
+                
                 if (firebaseState && firebaseState.timeRemaining > 0) {
                     // Firebase has valid state - use it (this handles cross-device syncing)
                     // console.log(`Smart Tab Blocker: Using Firebase state (cross-device) with ${firebaseState.timeRemaining}s remaining`);
@@ -919,6 +933,39 @@
                 if (isEnabled && countdownTimer) {
                     sendTimerUpdateToPopup();
                 }
+                sendResponse({ success: true });
+            } else if (request.action === 'overrideActiveChanged') {
+                // Handle Firebase realtime update for override_active property
+                console.log(`Firebase Realtime Update: override_active changed for ${request.domain}: ${request.override_active}`);
+                
+                if (request.override_active) {
+                    console.log(`Override activated for ${request.domain} from another device - updating local state`);
+                    
+                    // Update local override state if this matches current domain
+                    if (getCurrentDomain() === request.domain) {
+                        setOverrideActive(request.data.override_initiated_by, request.data.override_initiated_at);
+                        
+                        // Reset timer if override is active
+                        if (request.data.time_remaining && request.data.time_remaining > timeRemaining) {
+                            timeRemaining = request.data.time_remaining;
+                            currentTimeLimit = request.data.time_limit || gracePeriod;
+                            
+                            // Restart timer with new values
+                            stopCountdownTimer();
+                            startCountdownTimer();
+                            
+                            console.log(`Timer reset due to override from another device: ${timeRemaining}s remaining`);
+                        }
+                    }
+                } else {
+                    console.log(`Override deactivated for ${request.domain} from another device`);
+                    
+                    // Clear override state if this matches current domain
+                    if (getCurrentDomain() === request.domain) {
+                        clearOverrideActive();
+                    }
+                }
+                
                 sendResponse({ success: true });
             }
             

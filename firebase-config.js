@@ -784,6 +784,59 @@ class FirebaseRealtimeDB {
       throw error;
     }
   }
+
+  // Listen for real-time changes to a specific blocked site
+  listenToBlockedSite(siteId, callback) {
+    try {
+      const user = this.auth.getCurrentUser();
+      if (!user) {
+        throw new Error("User not authenticated");
+      }
+
+      const encodedSiteId = siteId;
+      const url = `${this.databaseURL}/blockedSites/${encodedSiteId}.json?auth=${user.idToken}`;
+      
+      const eventSource = new EventSource(url);
+      
+      eventSource.addEventListener('put', (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && data.data) {
+            const siteData = {
+              ...data.data,
+              id: encodedSiteId,
+              url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
+            };
+            console.log('Firebase Realtime DB: Received update for site:', siteId, siteData);
+            callback(siteData);
+          }
+        } catch (error) {
+          console.error('Firebase Realtime DB: Error parsing event data:', error);
+        }
+      });
+
+      eventSource.addEventListener('patch', (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && data.data) {
+            console.log('Firebase Realtime DB: Received patch update for site:', siteId, data.data);
+            callback(data.data);
+          }
+        } catch (error) {
+          console.error('Firebase Realtime DB: Error parsing patch data:', error);
+        }
+      });
+
+      eventSource.addEventListener('error', (error) => {
+        console.error('Firebase Realtime DB: EventSource error:', error);
+      });
+
+      return eventSource; // Return so it can be closed later
+    } catch (error) {
+      console.error("Listen to blocked site error:", error);
+      throw error;
+    }
+  }
 }
 
 // Export for use in other scripts

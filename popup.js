@@ -919,6 +919,30 @@ document.addEventListener('DOMContentLoaded', function() {
             // The url is already decoded by getBlockedSites
             domains[site.url] = site.time_limit;
             console.log(`Loaded site from Firebase: ${site.url} with ${site.time_limit}s timer`);
+            
+            // Set up real-time listener for each blocked site
+            const formattedDomain = realtimeDB.formatDomainForFirebase(site.url);
+            const siteId = `${user.uid}_${formattedDomain}`;
+            
+            try {
+              realtimeDB.listenToBlockedSite(siteId, (updatedSiteData) => {
+                console.log(`Firebase Realtime Update - Site: ${site.url}, override_active: ${updatedSiteData.override_active}`);
+                
+                // Check if override_active property changed
+                if (updatedSiteData.override_active !== undefined) {
+                  console.log(`Override active changed for ${site.url}: ${updatedSiteData.override_active}`);
+                  
+                  // Update UI or sync with other devices here
+                  if (updatedSiteData.override_active) {
+                    console.log(`Override activated for ${site.url} from another device`);
+                  } else {
+                    console.log(`Override deactivated for ${site.url} from another device`);
+                  }
+                }
+              });
+            } catch (error) {
+              console.error(`Failed to set up listener for ${site.url}:`, error);
+            }
           }
         });
         

@@ -621,6 +621,69 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
       sendResponse({ success: true });
       break;
+
+    case 'setupRealtimeListener':
+      // Set up Firebase realtime listener for a specific blocked site
+      if (!realtimeDB || !firebaseAuth) {
+        sendResponse({ success: false, error: 'Firebase services not available' });
+        break;
+      }
+      
+      const authUser = firebaseAuth.getCurrentUser();
+      if (!authUser) {
+        sendResponse({ success: false, error: 'User not authenticated' });
+        break;
+      }
+      
+      const listenerDomain = request.domain.replace(/^www\./, '').toLowerCase();
+      const formattedListenerDomain = realtimeDB.formatDomainForFirebase(listenerDomain);
+      const listenerSiteId = `${authUser.uid}_${formattedListenerDomain}`;
+      
+      try {
+        console.log(`Firebase Realtime Listener: Setting up listener for site ${listenerSiteId}`);
+        
+        const eventSource = realtimeDB.listenToBlockedSite(listenerSiteId, (updatedData) => {
+          console.log(`Firebase Realtime Update: Site ${listenerDomain}, Data:`, updatedData);
+          
+          // Check specifically for override_active changes
+          if (updatedData.override_active !== undefined) {
+            console.log(`Firebase Realtime Update: override_active changed for ${listenerDomain}: ${updatedData.override_active}`);
+            
+            // Notify content scripts on tabs with this domain
+            chrome.tabs.query({}, (tabs) => {
+              tabs.forEach(tab => {
+                if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+                  try {
+                    const hostname = new URL(tab.url).hostname.toLowerCase();
+                    const cleanHostname = hostname.replace(/^www\./, '');
+                    
+                    if (cleanHostname === listenerDomain || hostname === listenerDomain) {
+                      console.log(`Notifying tab ${tab.id} of override_active change for ${listenerDomain}`);
+                      chrome.tabs.sendMessage(tab.id, {
+                        action: 'overrideActiveChanged',
+                        domain: listenerDomain,
+                        override_active: updatedData.override_active,
+                        data: updatedData
+                      }).catch((error) => {
+                        console.log(`Could not notify tab ${tab.id}:`, error);
+                      });
+                    }
+                  } catch (error) {
+                    // Invalid URL, ignore
+                  }
+                }
+              });
+            });
+          }
+        });
+        
+        sendResponse({ success: true });
+      } catch (error) {
+        console.error(`Failed to set up realtime listener for ${listenerDomain}:`, error);
+        sendResponse({ success: false, error: error.message });
+      }
+      
+      return true;
       
     default:
       sendResponse({ success: false, error: 'Unknown action' });
