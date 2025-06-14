@@ -656,208 +656,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break;
 
     case 'setupRealtimeListener':
-      // Set up Firebase realtime listener for a specific blocked site
-      if (!realtimeDB || !firebaseAuth) {
-        sendResponse({ success: false, error: 'Firebase services not available' });
-        break;
-      }
-      
-      const authUser = firebaseAuth.getCurrentUser();
-      if (!authUser) {
-        sendResponse({ success: false, error: 'User not authenticated' });
-        break;
-      }
-      
+      // Listeners are now set up persistently, so this is just a compatibility response
       const listenerDomain = request.domain.replace(/^www\./, '').toLowerCase();
-      const formattedListenerDomain = realtimeDB.formatDomainForFirebase(listenerDomain);
-      const listenerSiteId = `${authUser.uid}_${formattedListenerDomain}`;
+      console.log(`📡 Realtime listener request for ${listenerDomain} - using persistent listener`);
       
-      try {
-        console.log(`Firebase Realtime Listener: Setting up listener for site ${listenerSiteId}`);
+      // Check if we have a persistent listener for this domain
+      const user = firebaseAuth.getCurrentUser();
+      if (user && realtimeDB) {
+        const formattedDomain = realtimeDB.formatDomainForFirebase(listenerDomain);
+        const siteId = `${user.uid}_${formattedDomain}`;
         
-        const eventSource = realtimeDB.listenToBlockedSite(listenerSiteId, (updatedData) => {
-          console.log(`Firebase Realtime Update: Site ${listenerDomain}, Data:`, updatedData);
-          
-          // Check specifically for override_active changes
-          if (updatedData.override_active !== undefined) {            
-            // Notify content scripts on tabs with this domain
-            chrome.tabs.query({}, (tabs) => {
-              tabs.forEach(tab => {
-                if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
-                  try {
-                    const hostname = new URL(tab.url).hostname.toLowerCase();
-                    const cleanHostname = hostname.replace(/^www\./, '');
-                    
-                    if (cleanHostname === listenerDomain || hostname === listenerDomain) {
-                      console.log(`Notifying tab ${tab.id} of override_active change for ${listenerDomain}`);
-                      chrome.tabs.sendMessage(tab.id, {
-                        action: 'overrideActiveChanged',
-                        domain: listenerDomain,
-                        override_active: updatedData.override_active,
-                        data: updatedData
-                      }).catch((error) => {
-                        console.log(`Could not notify tab ${tab.id}:`, error);
-                      });
-                    }
-                  } catch (error) {
-                    // Invalid URL, ignore
-                  }
-                }
-              });
-            });
-          }
-
-          // Check for tab switch changes
-          if (updatedData.tab_switch_active === true) {
-            console.log(`🔄 TAB SWITCH: Tab switch detected for ${listenerDomain}`);
-            console.log("updatedData", updatedData);
-            
-            // Timer synchronization logic
-            const firebaseTimeRemaining = updatedData.time_remaining;
-            console.log(`Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
-            
-            if (firebaseTimeRemaining !== undefined && firebaseTimeRemaining !== null && typeof firebaseTimeRemaining === 'number') {
-              console.log(`🔄 Getting local timer state from content scripts for domain: ${listenerDomain}`);
-              
-              // Get local timer state from all tabs running this domain
-              chrome.tabs.query({}, async (tabs) => {
-                let localTimeRemaining = null;
-                let foundInTab = null;
-                
-                // Try to get timer state from content scripts
-                for (const tab of tabs) {
-                  if (tab.url) {
-                    try {
-                      const hostname = new URL(tab.url).hostname.toLowerCase().replace(/^www\./, '');
-                      if (hostname === listenerDomain) {
-                        try {
-                          const response = await chrome.tabs.sendMessage(tab.id, { action: 'getTimerState' });
-                          if (response && typeof response.timeRemaining === 'number') {
-                            localTimeRemaining = response.timeRemaining;
-                            foundInTab = tab.id;
-                            console.log(`✅ Found local timer state in tab ${tab.id}: ${localTimeRemaining}s`);
-                            break;
-                          }
-                        } catch (error) {
-                          // Content script might not be loaded, continue to next tab
-                        }
-                      }
-                    } catch (error) {
-                      // Invalid URL, continue
-                    }
-                  }
-                }
-                
-                console.log(`🔍 Local timer state search results:`);
-                console.log(`  Domain: ${listenerDomain}`);
-                console.log(`  Found in tab: ${foundInTab}`);
-                console.log(`  Local time: ${localTimeRemaining}s`);
-                
-                                 try {
-                   if (localTimeRemaining !== null && typeof localTimeRemaining === 'number') {
-                     const timeDifference = Math.abs(firebaseTimeRemaining - localTimeRemaining);
-                    
-                    console.log(`🔄 Timer sync comparison:`);
-                    console.log(`  Firebase: ${firebaseTimeRemaining}s`);
-                    console.log(`  Local: ${localTimeRemaining}s`);
-                    console.log(`  Difference: ${timeDifference}s`);
-                    
-                    // Choose minimum time (both must be positive)
-                    const minTime = Math.min(Math.max(0, firebaseTimeRemaining), Math.max(0, localTimeRemaining));
-                    console.log(`  Minimum time: ${minTime}s`);
-                    
-                                         if (timeDifference <= 5) {
-                       // Within 5 seconds - just sync locally to minimum
-                       if (minTime !== localTimeRemaining) {
-                         console.log(`✅ Syncing local timer to minimum: ${minTime}s`);
-                         
-                         // Notify content scripts to update their timer
-                         chrome.tabs.query({}, (tabs) => {
-                           tabs.forEach(tab => {
-                             if (tab.url) {
-                               try {
-                                 const hostname = new URL(tab.url).hostname.toLowerCase().replace(/^www\./, '');
-                                 if (hostname === listenerDomain) {
-                                   chrome.tabs.sendMessage(tab.id, {
-                                     action: 'updateTimer',
-                                     timeRemaining: minTime
-                                   }).catch(() => {
-                                     // Content script might not be loaded, ignore
-                                   });
-                                 }
-                               } catch (error) {
-                                 // Invalid URL, ignore
-                               }
-                             }
-                           });
-                         });
-                       } else {
-                         console.log(`✅ Local timer already at minimum: ${minTime}s`);
-                       }
-                    } else {
-                      // More than 5 seconds difference - update Firebase with minimum
-                      console.log(`⚠️ Large time difference (${timeDifference}s) - updating Firebase with minimum: ${minTime}s`);
-                      
-                      const user = firebaseAuth.getCurrentUser();
-                      if (user) {
-                        const formattedDomain = realtimeDB.formatDomainForFirebase(listenerDomain);
-                        const siteId = `${user.uid}_${formattedDomain}`;
-                        
-                                                 try {
-                           await realtimeDB.updateSiteSyncedTimer(siteId, minTime);
-                           console.log(`✅ Updated Firebase timer to: ${minTime}s`);
-                           
-                           // Notify content scripts to update their timer
-                           chrome.tabs.query({}, (tabs) => {
-                             tabs.forEach(tab => {
-                               if (tab.url) {
-                                 try {
-                                   const hostname = new URL(tab.url).hostname.toLowerCase().replace(/^www\./, '');
-                                   if (hostname === listenerDomain) {
-                                     chrome.tabs.sendMessage(tab.id, {
-                                       action: 'updateTimer',
-                                       timeRemaining: minTime
-                                     }).catch(() => {
-                                       // Content script might not be loaded, ignore
-                                     });
-                                   }
-                                 } catch (error) {
-                                   // Invalid URL, ignore
-                                 }
-                               }
-                             });
-                           });
-                         } catch (error) {
-                           console.error('❌ Error updating synchronized timer:', error);
-                         }
-                      } else {
-                        console.error('❌ No authenticated user for Firebase update');
-                      }
-                    }
-                                     } else {
-                     console.log(`⚠️ No valid local timer state found for ${listenerDomain}`);
-                     console.log(`  Will use Firebase time as reference: ${firebaseTimeRemaining}s`);
-                     
-                     // No local timer found, but we have Firebase time - this is normal for cross-device sync
-                     console.log(`✅ Using Firebase time for cross-device sync: ${firebaseTimeRemaining}s`);
-                   }
-                 } catch (error) {
-                   console.error('❌ Error in timer synchronization logic:', error);
-                 }
-               });
-             } else {
-               console.log(`⚠️ Invalid Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
-             }
-          }
-        });
-        
-        sendResponse({ success: true });
-      } catch (error) {
-        console.error(`Failed to set up realtime listener for ${listenerDomain}:`, error);
-        sendResponse({ success: false, error: error.message });
+        if (activeListeners.has(siteId)) {
+          console.log(`✅ Persistent listener already active for ${listenerDomain}`);
+          sendResponse({ success: true });
+        } else {
+          console.log(`🔄 Setting up missing persistent listener for ${listenerDomain}`);
+          setupDomainListener(listenerDomain);
+          sendResponse({ success: true });
+        }
+      } else {
+        sendResponse({ success: false, error: 'Firebase services not available' });
       }
       
-      return true;
+             return true;
       
     default:
       sendResponse({ success: false, error: 'Unknown action' });
@@ -878,8 +699,45 @@ chrome.storage.onChanged.addListener((changes, area) => {
     }
     
     if (changes.blockedDomains) {
-      blockedDomains = changes.blockedDomains.newValue || {};
+      const oldDomains = blockedDomains || {};
+      const newDomains = changes.blockedDomains.newValue || {};
+      blockedDomains = newDomains;
+      
       console.log('Smart Tab Blocker: Domains configuration changed', blockedDomains);
+      
+      // Set up listeners for newly added domains
+      if (isAuthenticated && realtimeDB) {
+        Object.keys(newDomains).forEach(domain => {
+          if (!oldDomains[domain]) {
+            console.log(`🔄 Setting up listener for newly added domain: ${domain}`);
+            setupDomainListener(domain);
+          }
+        });
+        
+        // Clean up listeners for removed domains
+        Object.keys(oldDomains).forEach(domain => {
+          if (!newDomains[domain]) {
+            console.log(`🧹 Cleaning up listener for removed domain: ${domain}`);
+            const user = firebaseAuth.getCurrentUser();
+            if (user) {
+              const cleanDomain = domain.replace(/^www\./, '').toLowerCase();
+              const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
+              const siteId = `${user.uid}_${formattedDomain}`;
+              
+              const listener = activeListeners.get(siteId);
+              if (listener) {
+                try {
+                  listener.eventSource.close();
+                  activeListeners.delete(siteId);
+                  console.log(`✅ Cleaned up listener for ${domain}`);
+                } catch (error) {
+                  console.error(`Error cleaning up listener for ${domain}:`, error);
+                }
+              }
+            }
+          }
+        });
+      }
       
       // Update all tabs to reflect new configuration
       updateAllTrackedTabs();
@@ -894,6 +752,9 @@ function stopAllTimers() {
     console.log('Smart Tab Blocker: Extension context invalidated, skipping stop timers');
     return;
   }
+
+  // Clean up Firebase listeners
+  cleanupListeners();
 
   chrome.tabs.query({}, (tabs) => {
     tabs.forEach(tab => {
@@ -1126,6 +987,9 @@ function getTodayString() {
 }
 
 
+// Store active Firebase listeners
+const activeListeners = new Map();
+
 // Initialize Firebase services
 async function initializeAuth() {
   try {
@@ -1137,12 +1001,278 @@ async function initializeAuth() {
       firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
       realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
       firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
+      
+      // Set up persistent listeners for all tracked domains
+      await setupPersistentListeners();
+      
       return true;
     }
   } catch (error) {
     console.error('Firebase initialization error:', error);
   }
   return false;
+}
+
+// Set up persistent Firebase listeners for all tracked domains
+async function setupPersistentListeners() {
+  try {
+    console.log('🔄 Setting up persistent Firebase listeners for all tracked domains...');
+    
+    // Load current blocked domains configuration
+    await loadConfiguration();
+    
+    const user = firebaseAuth.getCurrentUser();
+    if (!user || !blockedDomains) {
+      console.log('❌ Cannot set up listeners - no user or domains');
+      return;
+    }
+    
+    // Set up listeners for each tracked domain
+    Object.keys(blockedDomains).forEach(domain => {
+      setupDomainListener(domain);
+    });
+    
+    console.log(`✅ Set up persistent listeners for ${Object.keys(blockedDomains).length} domains`);
+  } catch (error) {
+    console.error('Error setting up persistent listeners:', error);
+  }
+}
+
+// Set up listener for a specific domain
+function setupDomainListener(domain) {
+  const user = firebaseAuth.getCurrentUser();
+  if (!user || !realtimeDB) return;
+  
+  const cleanDomain = domain.replace(/^www\./, '').toLowerCase();
+  const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
+  const siteId = `${user.uid}_${formattedDomain}`;
+  
+  // Don't set up duplicate listeners
+  if (activeListeners.has(siteId)) {
+    console.log(`🔄 Listener already exists for ${cleanDomain}`);
+    return;
+  }
+  
+  try {
+    console.log(`🔄 Setting up persistent listener for domain: ${cleanDomain} (${siteId})`);
+    
+    const eventSource = realtimeDB.listenToBlockedSite(siteId, (updatedData) => {
+      console.log(`🔥 Firebase Update: ${cleanDomain}`, updatedData);
+      
+      // Handle override changes
+      if (updatedData.override_active !== undefined) {
+        handleOverrideChange(cleanDomain, updatedData);
+      }
+      
+      // Handle tab switch changes
+      if (updatedData.tab_switch_active === true) {
+        handleTabSwitchSync(cleanDomain, updatedData);
+      }
+    });
+    
+    // Store the listener for cleanup later
+    activeListeners.set(siteId, {
+      eventSource,
+      domain: cleanDomain,
+      siteId
+    });
+    
+    console.log(`✅ Persistent listener active for ${cleanDomain}`);
+  } catch (error) {
+    console.error(`❌ Failed to set up listener for ${cleanDomain}:`, error);
+  }
+}
+
+// Handle override changes
+function handleOverrideChange(domain, updatedData) {
+  console.log(`🔄 Override change for ${domain}:`, updatedData.override_active);
+  
+  // Notify content scripts on tabs with this domain
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach(tab => {
+      if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+        try {
+          const hostname = new URL(tab.url).hostname.toLowerCase();
+          const cleanHostname = hostname.replace(/^www\./, '');
+          
+          if (cleanHostname === domain || hostname === domain) {
+            console.log(`Notifying tab ${tab.id} of override_active change for ${domain}`);
+            chrome.tabs.sendMessage(tab.id, {
+              action: 'overrideActiveChanged',
+              domain: domain,
+              override_active: updatedData.override_active,
+              data: updatedData
+            }).catch((error) => {
+              console.log(`Could not notify tab ${tab.id}:`, error);
+            });
+          }
+        } catch (error) {
+          // Invalid URL, ignore
+        }
+      }
+    });
+  });
+}
+
+// Handle tab switch synchronization
+async function handleTabSwitchSync(domain, updatedData) {
+  console.log(`🔄 TAB SWITCH: Tab switch detected for ${domain}`);
+  console.log("updatedData", updatedData);
+  
+  // Check if this tab switch event is from our own device - if so, ignore it
+  const currentDeviceId = await getDeviceId();
+  const eventDeviceId = updatedData.deviceId;
+  
+  console.log(`🔍 Device check: Current=${currentDeviceId}, Event=${eventDeviceId}`);
+  
+  if (eventDeviceId && eventDeviceId === currentDeviceId) {
+    console.log(`⏭️ Ignoring tab switch from our own device (${currentDeviceId})`);
+    return;
+  }
+  
+  console.log(`✅ Processing tab switch from different device: ${eventDeviceId}`);
+  
+  // Timer synchronization logic
+  const firebaseTimeRemaining = updatedData.time_remaining;
+  console.log(`Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
+  
+  if (firebaseTimeRemaining !== undefined && firebaseTimeRemaining !== null && typeof firebaseTimeRemaining === 'number') {
+    console.log(`🔄 Getting local timer state from content scripts for domain: ${domain}`);
+    
+    // Get local timer state from all tabs running this domain
+    chrome.tabs.query({}, async (tabs) => {
+      let localTimeRemaining = null;
+      let foundInTab = null;
+      
+      // Try to get timer state from content scripts
+      for (const tab of tabs) {
+        if (tab.url) {
+          try {
+            const hostname = new URL(tab.url).hostname.toLowerCase().replace(/^www\./, '');
+            if (hostname === domain) {
+              try {
+                const response = await chrome.tabs.sendMessage(tab.id, { action: 'getTimerState' });
+                if (response && typeof response.timeRemaining === 'number') {
+                  localTimeRemaining = response.timeRemaining;
+                  foundInTab = tab.id;
+                  console.log(`✅ Found local timer state in tab ${tab.id}: ${localTimeRemaining}s`);
+                  break;
+                }
+              } catch (error) {
+                // Content script might not be loaded, continue to next tab
+              }
+            }
+          } catch (error) {
+            // Invalid URL, continue
+          }
+        }
+      }
+      
+      console.log(`🔍 Local timer state search results:`);
+      console.log(`  Domain: ${domain}`);
+      console.log(`  Found in tab: ${foundInTab}`);
+      console.log(`  Local time: ${localTimeRemaining}s`);
+      
+      try {
+        if (localTimeRemaining !== null && typeof localTimeRemaining === 'number') {
+          const timeDifference = Math.abs(firebaseTimeRemaining - localTimeRemaining);
+          
+          console.log(`🔄 Timer sync comparison:`);
+          console.log(`  Firebase: ${firebaseTimeRemaining}s`);
+          console.log(`  Local: ${localTimeRemaining}s`);
+          console.log(`  Difference: ${timeDifference}s`);
+          
+          // Choose minimum time (both must be positive)
+          const minTime = Math.min(Math.max(0, firebaseTimeRemaining), Math.max(0, localTimeRemaining));
+          console.log(`  Minimum time: ${minTime}s`);
+          
+          if (timeDifference <= 5) {
+            // Within 5 seconds - just sync locally to minimum
+            if (minTime !== localTimeRemaining) {
+              console.log(`✅ Syncing local timer to minimum: ${minTime}s`);
+              
+              // Notify content scripts to update their timer
+              notifyTabsOfTimerUpdate(domain, minTime);
+            } else {
+              console.log(`✅ Local timer already at minimum: ${minTime}s`);
+            }
+          } else {
+            // More than 5 seconds difference - update Firebase with minimum
+            console.log(`⚠️ Large time difference (${timeDifference}s) - updating Firebase with minimum: ${minTime}s`);
+            
+            const user = firebaseAuth.getCurrentUser();
+            if (user) {
+              const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+              const siteId = `${user.uid}_${formattedDomain}`;
+              
+              try {
+                await realtimeDB.updateSiteSyncedTimer(siteId, minTime);
+                console.log(`✅ Updated Firebase timer to: ${minTime}s`);
+                
+                // Notify content scripts to update their timer
+                notifyTabsOfTimerUpdate(domain, minTime);
+              } catch (error) {
+                console.error('❌ Error updating synchronized timer:', error);
+              }
+            } else {
+              console.error('❌ No authenticated user for Firebase update');
+            }
+          }
+        } else {
+          console.log(`⚠️ No valid local timer state found for ${domain}`);
+          console.log(`  Will use Firebase time as reference: ${firebaseTimeRemaining}s`);
+          
+          // No local timer found, but we have Firebase time - this is normal for cross-device sync
+          console.log(`✅ Using Firebase time for cross-device sync: ${firebaseTimeRemaining}s`);
+        }
+      } catch (error) {
+        console.error('❌ Error in timer synchronization logic:', error);
+      }
+    });
+  } else {
+    console.log(`⚠️ Invalid Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
+  }
+}
+
+// Helper function to notify tabs of timer updates
+function notifyTabsOfTimerUpdate(domain, timeRemaining) {
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach(tab => {
+      if (tab.url) {
+        try {
+          const hostname = new URL(tab.url).hostname.toLowerCase().replace(/^www\./, '');
+          if (hostname === domain) {
+            chrome.tabs.sendMessage(tab.id, {
+              action: 'updateTimer',
+              timeRemaining: timeRemaining
+            }).catch(() => {
+              // Content script might not be loaded, ignore
+            });
+          }
+        } catch (error) {
+          // Invalid URL, ignore
+        }
+      }
+    });
+  });
+}
+
+// Clean up listeners when user logs out
+function cleanupListeners() {
+  console.log(`🧹 Cleaning up ${activeListeners.size} Firebase listeners`);
+  
+  activeListeners.forEach((listener, siteId) => {
+    try {
+      if (listener.eventSource) {
+        listener.eventSource.close();
+      }
+    } catch (error) {
+      console.error(`Error closing listener for ${siteId}:`, error);
+    }
+  });
+  
+  activeListeners.clear();
+  console.log('✅ All Firebase listeners cleaned up');
 }
 
 // Tab switch detection

@@ -881,12 +881,14 @@ class FirebaseRealtimeDB {
         tab_switch_active: true,
         tab_switch_timestamp: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-        time_remaining: tabSwitchData.timeRemaining
+        time_remaining: tabSwitchData.timeRemaining,
+        deviceId: tabSwitchData.deviceId
       };
       console.log("tabSwitchData", tabSwitchData)
       // Always include time_remaining, even if it's null/undefined for debugging
       updateData.time_remaining = tabSwitchData.timeRemaining;
       console.log(`Always including time_remaining: ${tabSwitchData.timeRemaining} (type: ${typeof tabSwitchData.timeRemaining})`);
+      console.log(`Including deviceId: ${tabSwitchData.deviceId}`);
       
       console.log("Final updateData being sent to Firebase:", updateData);
       
