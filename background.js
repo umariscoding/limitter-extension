@@ -738,8 +738,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
           }
         });
       }
-      
-      // Update all tabs to reflect new configuration
+    
       updateAllTrackedTabs();
     }
   }
@@ -1344,12 +1343,67 @@ async function handleTabSwitch(tabId) {
       if (response && response.timeRemaining !== undefined) {
         console.log(`✅ Tab switch: Got timer state from content script: ${response.timeRemaining}s for ${domainInfo.domain}`);
         
-        console.log(`🚀 Calling updateSiteTabSwitch with:`, { deviceId, timeRemaining: response.timeRemaining });
-        await realtimeDB.updateSiteTabSwitch(siteId, { 
-          deviceId,
-          timeRemaining: response.timeRemaining 
-        });
-        console.log(`✅ updateSiteTabSwitch completed successfully`);
+        // Before sending to Firebase, check if Firebase has a lower time that we should sync to
+        console.log(`🔄 Checking Firebase for current timer state before updating...`);
+        try {
+          const firebaseState = await realtimeDB.getBlockedSite(siteId);
+          if (firebaseState && typeof firebaseState.time_remaining === 'number') {
+            const localTime = response.timeRemaining;
+            const firebaseTime = firebaseState.time_remaining;
+            
+            console.log(`🔍 Individual sync check:`);
+            console.log(`  Local time: ${localTime}s`);
+            console.log(`  Firebase time: ${firebaseTime}s`);
+            
+            // Choose minimum time
+            const minTime = Math.min(Math.max(0, localTime), Math.max(0, firebaseTime));
+            console.log(`  Minimum time: ${minTime}s`);
+            
+            if (minTime !== localTime) {
+              console.log(`✅ Syncing local timer to Firebase minimum: ${minTime}s`);
+              
+              // Update the local timer to the minimum time
+              chrome.tabs.sendMessage(tab.id, {
+                action: 'updateTimer',
+                timeRemaining: minTime
+              }).catch(() => {
+                console.log('Could not update content script timer');
+              });
+              
+              // Send the minimum time to Firebase
+              await realtimeDB.updateSiteTabSwitch(siteId, { 
+                deviceId,
+                timeRemaining: minTime 
+              });
+            } else {
+              console.log(`✅ Local timer already at minimum, sending to Firebase: ${localTime}s`);
+              
+              // Send local time to Firebase
+              await realtimeDB.updateSiteTabSwitch(siteId, { 
+                deviceId,
+                timeRemaining: localTime 
+              });
+            }
+          } else {
+            console.log(`⚠️ No Firebase timer state found, sending local time: ${response.timeRemaining}s`);
+            
+            // No Firebase state, just send local time
+            await realtimeDB.updateSiteTabSwitch(siteId, { 
+              deviceId,
+              timeRemaining: response.timeRemaining 
+            });
+          }
+        } catch (error) {
+          console.error('❌ Error checking Firebase state:', error);
+          
+          // Fallback: just send local time
+          await realtimeDB.updateSiteTabSwitch(siteId, { 
+            deviceId,
+            timeRemaining: response.timeRemaining 
+          });
+        }
+        
+        console.log(`✅ Individual tab switch sync completed`);
         return;
       } else {
         console.log(`❌ Content script response invalid:`, response);
@@ -1370,14 +1424,90 @@ async function handleTabSwitch(tabId) {
       // Only proceed if we have actual timer state with time remaining
       if (timerState && timerState.timeRemaining !== undefined) {
         const timeRemaining = timerState.timeRemaining;
-        console.log(`✅ Tab switch: Sending time remaining ${timeRemaining}s for ${domainInfo.domain}`);
+        console.log(`✅ Tab switch: Got timer state from storage: ${timeRemaining}s for ${domainInfo.domain}`);
         
-        console.log(`🚀 Calling updateSiteTabSwitch with:`, { deviceId, timeRemaining });
-        await realtimeDB.updateSiteTabSwitch(siteId, { 
-          deviceId,
-          timeRemaining 
-        });
-        console.log(`✅ updateSiteTabSwitch completed successfully`);
+        // Before sending to Firebase, check if Firebase has a lower time that we should sync to
+        console.log(`🔄 Checking Firebase for current timer state before updating...`);
+        try {
+          const firebaseState = await realtimeDB.getBlockedSite(siteId);
+          if (firebaseState && typeof firebaseState.time_remaining === 'number') {
+            const localTime = timeRemaining;
+            const firebaseTime = firebaseState.time_remaining;
+            
+            console.log(`🔍 Individual sync check (storage):`);
+            console.log(`  Local time: ${localTime}s`);
+            console.log(`  Firebase time: ${firebaseTime}s`);
+            
+            // Choose minimum time
+            const minTime = Math.min(Math.max(0, localTime), Math.max(0, firebaseTime));
+            console.log(`  Minimum time: ${minTime}s`);
+            
+            if (minTime !== localTime) {
+              console.log(`✅ Syncing local timer to Firebase minimum: ${minTime}s`);
+              
+              // Update the local timer state in storage
+              const updatedTimerState = {
+                ...timerState,
+                timeRemaining: minTime,
+                timestamp: Date.now()
+              };
+              chrome.storage.local.set({ [timerKey]: updatedTimerState });
+              
+              // Also notify content script if available
+              chrome.tabs.query({}, (tabs) => {
+                tabs.forEach(tab => {
+                  if (tab.url) {
+                    try {
+                      const hostname = new URL(tab.url).hostname.toLowerCase().replace(/^www\./, '');
+                      if (hostname === domainInfo.domain) {
+                        chrome.tabs.sendMessage(tab.id, {
+                          action: 'updateTimer',
+                          timeRemaining: minTime
+                        }).catch(() => {
+                          // Content script might not be loaded, ignore
+                        });
+                      }
+                    } catch (error) {
+                      // Invalid URL, ignore
+                    }
+                  }
+                });
+              });
+              
+              // Send the minimum time to Firebase
+              await realtimeDB.updateSiteTabSwitch(siteId, { 
+                deviceId,
+                timeRemaining: minTime 
+              });
+            } else {
+              console.log(`✅ Local timer already at minimum, sending to Firebase: ${localTime}s`);
+              
+              // Send local time to Firebase
+              await realtimeDB.updateSiteTabSwitch(siteId, { 
+                deviceId,
+                timeRemaining: localTime 
+              });
+            }
+          } else {
+            console.log(`⚠️ No Firebase timer state found, sending local time: ${timeRemaining}s`);
+            
+            // No Firebase state, just send local time
+            await realtimeDB.updateSiteTabSwitch(siteId, { 
+              deviceId,
+              timeRemaining 
+            });
+          }
+        } catch (error) {
+          console.error('❌ Error checking Firebase state:', error);
+          
+          // Fallback: just send local time
+          await realtimeDB.updateSiteTabSwitch(siteId, { 
+            deviceId,
+            timeRemaining 
+          });
+        }
+        
+        console.log(`✅ Individual tab switch sync completed (storage)`);
       } else {
         console.log(`❌ Tab switch: No timer state for ${domainInfo.domain}, just creating tab switch event`);
         
