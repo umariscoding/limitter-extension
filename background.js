@@ -1076,6 +1076,11 @@ function setupDomainListener(domain) {
       if (updatedData.site_opened_active === true) {
         handleSiteOpenedSync(cleanDomain, updatedData);
       }
+      
+      // Handle domain deactivation (is_active becomes false)
+      if (updatedData.is_active === false) {
+        handleDomainDeactivation(cleanDomain, updatedData);
+      }
     });
     
     // Store the listener for cleanup later
@@ -1625,5 +1630,57 @@ async function handleSiteOpenedSync(domain, updatedData) {
     }
   } else {
     console.log(`⚠️ Invalid Firebase time_remaining from site opened: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
+  }
+}
+
+// Handle domain deactivation (is_active becomes false)
+function handleDomainDeactivation(domain, updatedData) {
+  console.log(`🔄 DOMAIN DEACTIVATION: Domain deactivation detected for ${domain}`);
+  console.log("updatedData", updatedData);
+  
+  // Update local domains object in background script
+  if (blockedDomains[domain]) {
+    delete blockedDomains[domain];
+    console.log(`Removed ${domain} from background script's blocked domains`);
+  }
+  
+  // Notify content scripts on tabs with this domain
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach(tab => {
+      if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+        try {
+          const hostname = new URL(tab.url).hostname.toLowerCase();
+          const cleanHostname = hostname.replace(/^www\./, '');
+          
+          if (cleanHostname === domain || hostname === domain) {
+            console.log(`Notifying tab ${tab.id} of domain deactivation for ${domain}`);
+            chrome.tabs.sendMessage(tab.id, {
+              action: 'domainDeactivated',
+              domain: domain,
+              data: updatedData
+            }).catch((error) => {
+              console.log(`Could not notify tab ${tab.id}:`, error);
+            });
+          }
+        } catch (error) {
+          // Invalid URL, ignore
+        }
+      }
+    });
+  });
+  
+  // Notify any open popups about the domain deactivation
+  try {
+    chrome.runtime.sendMessage({
+      type: 'DOMAIN_DEACTIVATED',
+      domain: domain,
+      data: updatedData
+    }).catch(() => {
+      // Popup might not be open, that's fine
+      console.log(`No popup to notify about ${domain} deactivation`);
+    });
+  } catch (error) {
+    // Popup not open, that's fine
+    console.log(`No popup to notify about ${domain} deactivation`);
   }
 }

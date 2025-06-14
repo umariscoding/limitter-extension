@@ -1102,6 +1102,45 @@
                     }
                 }
                 sendResponse({ success: true });
+            } else if (request.action === 'domainDeactivated') {
+                // Handle domain deactivation from Firebase realtime update
+                console.log(`Firebase Realtime Update: Domain deactivated for ${request.domain}`);
+                console.log("request.data", request.data);
+                
+                // Check if this matches current domain
+                if (getCurrentDomain() === request.domain) {
+                    console.log(`Domain ${request.domain} deactivated from another device - stopping tracking immediately`);
+                    
+                    // Immediately stop all tracking for this domain
+                    isEnabled = false;
+                    isInitialized = false;
+                    stopCountdownTimer();
+                    clearTimerState();
+                    hideTimer();
+                    hideModal();
+                    
+                    // Clear daily blocks for this domain
+                    clearDailyBlock();
+                    
+                    // Clear from Chrome sync storage
+                    try {
+                        chrome.storage.sync.get(['blockedDomains'], (result) => {
+                            const domains = result.blockedDomains || {};
+                            delete domains[request.domain];
+                            chrome.storage.sync.set({
+                                blockedDomains: domains
+                            }, () => {
+                                console.log(`Chrome sync storage updated - removed ${request.domain}`);
+                            });
+                        });
+                    } catch (error) {
+                        console.error('Error updating Chrome sync storage:', error);
+                    }
+                    
+                    console.log(`Domain ${request.domain} completely stopped tracking due to deactivation from another device`);
+                }
+                
+                sendResponse({ success: true });
             }
             
             return true; // Keep message channel open for async response

@@ -76,6 +76,95 @@ document.addEventListener('DOMContentLoaded', function() {
   // Initialize authentication on startup
   initializeAuth();
   
+  // Active Timer Display Functions (moved to top for availability)
+  function updateActiveTimerDisplay(timerData) {
+    console.log('Popup: updateActiveTimerDisplay called with:', timerData);
+    
+    const activeTimerCard = document.getElementById('activeTimerCard');
+    const timerDomain = document.getElementById('timerDomain');
+    const timerStatus = document.getElementById('timerStatus');
+    const timerCountdown = document.getElementById('timerCountdown');
+    const timerProgressFill = document.getElementById('timerProgressFill');
+    const timerIcon = document.querySelector('.timer-icon');
+    
+    console.log('Popup: Timer elements found:', {
+      activeTimerCard: !!activeTimerCard,
+      timerDomain: !!timerDomain,
+      timerStatus: !!timerStatus,
+      timerCountdown: !!timerCountdown,
+      timerProgressFill: !!timerProgressFill,
+      timerIcon: !!timerIcon
+    });
+    
+    if (!activeTimerCard || !timerData) {
+      console.log('Popup: Missing activeTimerCard or timerData, returning');
+      return;
+    }
+    
+    // Show the timer card
+    activeTimerCard.style.display = 'block';
+    console.log('Popup: Timer card set to display: block');
+    
+    // Update domain name
+    if (timerDomain) {
+      timerDomain.textContent = timerData.domain;
+    }
+    
+    // Update countdown
+    if (timerCountdown) {
+      timerCountdown.textContent = formatTime(timerData.timeRemaining);
+    }
+    
+    // Update status and styling based on timer state
+    if (timerData.isResetting) {
+      activeTimerCard.classList.add('resetting');
+      activeTimerCard.classList.remove('paused');
+      if (timerIcon) {
+        timerIcon.classList.add('resetting');
+        timerIcon.classList.remove('paused');
+      }
+      if (timerStatus) {
+        timerStatus.innerHTML = `🔄 <span class="resetting-text">Resetting Timer...</span>`;
+        timerStatus.classList.remove('paused');
+        timerStatus.classList.add('resetting');
+      }
+    } else if (timerData.isPaused) {
+      activeTimerCard.classList.add('paused');
+      activeTimerCard.classList.remove('resetting');
+      if (timerIcon) {
+        timerIcon.classList.add('paused');
+        timerIcon.classList.remove('resetting');
+      }
+      if (timerStatus) {
+        timerStatus.textContent = `⏸️ Paused - ${formatTime(timerData.timeRemaining)} remaining`;
+        timerStatus.classList.add('paused');
+        timerStatus.classList.remove('resetting');
+      }
+    } else {
+      activeTimerCard.classList.remove('paused', 'resetting');
+      if (timerIcon) {
+        timerIcon.classList.remove('paused', 'resetting');
+      }
+      if (timerStatus) {
+        timerStatus.innerHTML = `Blocking in <span class="countdown">${formatTime(timerData.timeRemaining)}</span>`;
+        timerStatus.classList.remove('paused', 'resetting');
+      }
+    }
+    
+    // Update progress bar
+    if (timerProgressFill && timerData.gracePeriod) {
+      const progressPercentage = (timerData.timeRemaining / timerData.gracePeriod) * 100;
+      timerProgressFill.style.width = Math.max(0, progressPercentage) + '%';
+    }
+  }
+
+  function hideActiveTimerDisplay() {
+    const activeTimerCard = document.getElementById('activeTimerCard');
+    if (activeTimerCard) {
+      activeTimerCard.style.display = 'none';
+    }
+  }
+  
   // Listen for notification messages from background script
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'displayNotification') {
@@ -104,6 +193,47 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('Error refreshing domain list:', error);
       });
       sendResponse({ refreshed: true });
+    } else if (message.type === 'TIMER_UPDATE') {
+      // Only show timer for currently active tab
+      console.log('Popup: Received TIMER_UPDATE message:', message.data);
+      chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+        if (tabs.length > 0 && sender.tab && sender.tab.id === tabs[0].id) {
+          console.log('Popup: Updating timer display for active tab:', tabs[0].id);
+          updateActiveTimerDisplay(message.data);
+        } else {
+          console.log('Popup: Timer update not for active tab, ignoring');
+        }
+      });
+    } else if (message.type === 'TIMER_STOPPED') {
+      // Only hide timer if it's from the currently active tab
+      console.log('Popup: Received TIMER_STOPPED message');
+      chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+        if (tabs.length > 0 && sender.tab && sender.tab.id === tabs[0].id) {
+          console.log('Popup: Hiding timer display for active tab:', tabs[0].id);
+          hideActiveTimerDisplay();
+        } else {
+          console.log('Popup: Timer stop not for active tab, ignoring');
+        }
+      });
+    } else if (message.type === 'DOMAIN_DEACTIVATED') {
+      // Handle domain deactivation from another device
+      console.log(`Popup: Domain deactivated from another device: ${message.domain}`);
+      
+      // Remove from local domains object and save
+      if (domains[message.domain]) {
+        delete domains[message.domain];
+        delete domainStates[message.domain];
+        saveDomains();
+        
+        console.log(`Popup: Removed ${message.domain} from local storage`);
+        
+        // Update UI immediately
+        renderDomainsList();
+        updateStats();
+        
+        // Show notification to user
+        showFeedback(`${message.domain} was removed from another device`);
+      }
     }
   });
   
@@ -1314,28 +1444,85 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-    delete domains[domain];
-    delete domainStates[domain];
-    saveDomains();
-    
-    // Sync to Firestore (marks domain as inactive)
-    await removeDomainFromFirestore(domain);
-    
-    clearDailyBlock(domain);
-    stopTrackingDomain(domain);
-    
-    // Notify background script to reload tabs for this domain across all devices
-    // This ensures inactive tabs also stop tracking the removed domain
-    safeChromeCall(() => {
-      chrome.runtime.sendMessage({ 
-        action: 'domainRemoved', 
-        domain: domain 
+    try {
+      const user = firebaseAuth.getCurrentUser();
+      if (!user) {
+        showError('Please log in to remove domains');
+        return;
+      }
+
+      // Format domain for Firebase
+      const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+      const siteId = `${user.uid}_${formattedDomain}`;
+
+      console.log(`Removing domain ${domain} from both local storage and Firebase (siteId: ${siteId})`);
+
+      // Remove from local storage first
+      delete domains[domain];
+      delete domainStates[domain];
+      saveDomains();
+
+      // Remove from both Firestore (mark as inactive) and Realtime Database (delete completely)
+      await Promise.all([
+        // Mark as inactive in Firestore
+        // removeDomainFromFirestore(domain),
+        
+        // Set is_active: false in Realtime Database so other devices can detect the change
+        (async () => {
+          try {
+            const existingSite = await realtimeDB.getBlockedSite(siteId);
+            if (existingSite) {
+              const updatedSiteData = {
+                // Preserve essential existing data but be selective
+                user_id: existingSite.user_id,
+                url: existingSite.url,
+                time_limit: existingSite.time_limit,
+                time_remaining: existingSite.time_remaining,
+                last_reset_date: existingSite.last_reset_date,
+                // Only include these if they exist and are not null/undefined
+                ...(existingSite.override_active !== undefined && { override_active: existingSite.override_active }),
+                ...(existingSite.override_initiated_by && { override_initiated_by: existingSite.override_initiated_by }),
+                ...(existingSite.override_initiated_at && { override_initiated_at: existingSite.override_initiated_at }),
+                ...(existingSite.blocked_until && { blocked_until: existingSite.blocked_until }),
+                ...(existingSite.last_accessed && { last_accessed: existingSite.last_accessed }),
+                // Set as inactive - this is what other devices will detect
+                is_active: false,
+                updated_at: new Date().toISOString()
+              };
+              
+              await realtimeDB.addBlockedSite(siteId, updatedSiteData);
+              console.log(`Successfully set is_active: false for ${domain} in Realtime Database`);
+            } else {
+              console.log(`No existing site found for ${domain} in Realtime Database`);
+            }
+          } catch (error) {
+            console.error(`Error setting is_active: false for ${domain} in Realtime Database:`, error);
+            // Don't throw here - we still want to continue with other cleanup
+          }
+        })()
+      ]);
+
+      // Clear local timer states
+      clearDailyBlock(domain);
+      stopTrackingDomain(domain);
+
+      // Notify background script to reload tabs for this domain across all devices
+      // This ensures inactive tabs also stop tracking the removed domain
+      safeChromeCall(() => {
+        chrome.runtime.sendMessage({ 
+          action: 'domainRemoved', 
+          domain: domain 
+        });
       });
-    });
-    
-    renderDomainsList();
-    updateStats();
-    showFeedback(`Removed ${domain} - all tabs will be refreshed`);
+
+      renderDomainsList();
+      updateStats();
+      showFeedback(`Deactivated ${domain} - all devices will immediately stop tracking this domain`);
+      
+    } catch (error) {
+      console.error('Error removing domain:', error);
+      showError(`Failed to remove ${domain}. Please try again.`);
+    }
   }
 
   async function handleOverrideClick(domain) {
@@ -1853,99 +2040,6 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 }
 
-// Active Timer Display Functions
-function updateActiveTimerDisplay(timerData) {
-  const activeTimerCard = document.getElementById('activeTimerCard');
-  const timerDomain = document.getElementById('timerDomain');
-  const timerStatus = document.getElementById('timerStatus');
-  const timerCountdown = document.getElementById('timerCountdown');
-  const timerProgressFill = document.getElementById('timerProgressFill');
-  const timerIcon = document.querySelector('.timer-icon');
-  
-  if (!activeTimerCard || !timerData) return;
-  
-  // Show the timer card
-  activeTimerCard.style.display = 'block';
-  
-  // Update domain name
-  if (timerDomain) {
-    timerDomain.textContent = timerData.domain;
-  }
-  
-  // Update countdown
-  if (timerCountdown) {
-    timerCountdown.textContent = formatTime(timerData.timeRemaining);
-  }
-  
-  // Update status and styling based on timer state
-  if (timerData.isResetting) {
-    activeTimerCard.classList.add('resetting');
-    activeTimerCard.classList.remove('paused');
-    if (timerIcon) {
-      timerIcon.classList.add('resetting');
-      timerIcon.classList.remove('paused');
-    }
-    if (timerStatus) {
-      timerStatus.innerHTML = `🔄 <span class="resetting-text">Resetting Timer...</span>`;
-      timerStatus.classList.remove('paused');
-      timerStatus.classList.add('resetting');
-    }
-  } else if (timerData.isPaused) {
-    activeTimerCard.classList.add('paused');
-    activeTimerCard.classList.remove('resetting');
-    if (timerIcon) {
-      timerIcon.classList.add('paused');
-      timerIcon.classList.remove('resetting');
-    }
-    if (timerStatus) {
-      timerStatus.textContent = `⏸️ Paused - ${formatTime(timerData.timeRemaining)} remaining`;
-      timerStatus.classList.add('paused');
-      timerStatus.classList.remove('resetting');
-    }
-  } else {
-    activeTimerCard.classList.remove('paused', 'resetting');
-    if (timerIcon) {
-      timerIcon.classList.remove('paused', 'resetting');
-    }
-    if (timerStatus) {
-      timerStatus.innerHTML = `Blocking in <span class="countdown">${formatTime(timerData.timeRemaining)}</span>`;
-      timerStatus.classList.remove('paused', 'resetting');
-    }
-  }
-  
-  // Update progress bar
-  if (timerProgressFill && timerData.gracePeriod) {
-    const progressPercentage = (timerData.timeRemaining / timerData.gracePeriod) * 100;
-    timerProgressFill.style.width = Math.max(0, progressPercentage) + '%';
-  }
-}
-
-function hideActiveTimerDisplay() {
-  const activeTimerCard = document.getElementById('activeTimerCard');
-  if (activeTimerCard) {
-    activeTimerCard.style.display = 'none';
-  }
-}
-
-// Listen for timer updates from content scripts
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'TIMER_UPDATE') {
-    // Only show timer for currently active tab
-    chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
-      if (tabs.length > 0 && sender.tab && sender.tab.id === tabs[0].id) {
-        updateActiveTimerDisplay(message.data);
-      }
-    });
-  } else if (message.type === 'TIMER_STOPPED') {
-    // Only hide timer if it's from the currently active tab
-    chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
-      if (tabs.length > 0 && sender.tab && sender.tab.id === tabs[0].id) {
-        hideActiveTimerDisplay();
-      }
-    });
-  }
-});
-
 // Listen for tab changes and request timer update from new active tab
 chrome.tabs.onActivated.addListener((activeInfo) => {
   // Clear current timer display when switching tabs
@@ -1997,15 +2091,21 @@ document.addEventListener('DOMContentLoaded', () => {
   // When popup opens, request timer update from current active tab
   chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
     if (tabs.length > 0) {
+      console.log('Popup: DOM loaded, requesting timer update from tab:', tabs[0].id);
       chrome.tabs.sendMessage(tabs[0].id, {
         action: 'requestTimerUpdate'
+      }).then((response) => {
+        console.log('Popup: Timer update request response:', response);
       }).catch((error) => {
+        console.log('Popup: Timer update request error:', error);
         // Content script might not be loaded or no timer running, which is fine
         if (error.message && (error.message.includes('Could not establish connection') || 
             error.message.includes('Receiving end does not exist'))) {
           showContentScriptError('timer update');
         }
       });
+    } else {
+      console.log('Popup: No active tabs found');
     }
   });
 });
