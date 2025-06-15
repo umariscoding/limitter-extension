@@ -1564,9 +1564,9 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-      // Format domain for Firebase
-      const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-      const siteId = `${userId}_${formattedDomain}`;
+    // Format domain for Firebase
+    const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+    const siteId = `${userId}_${formattedDomain}`;
 
     // Get existing site data
     const existingSite = await realtimeDB.getBlockedSite(siteId);
@@ -1575,21 +1575,42 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-      // Create updated site data with reset timer and override active
-      const now = new Date();
-      const updatedSiteData = {
-        ...existingSite,
-        time_remaining: originalTimeLimit, // Reset to original time limit
-        time_limit: originalTimeLimit,
-        override_active: true, // Set override active
-        is_blocked: false, // Unblock the site
-        blocked_until: null, // Clear blocked until
-        updated_at: now.toISOString(),
-        last_accessed: now.toISOString()
-      };
+    console.log("setting override")
+    // Create updated site data with reset timer and override active
+    const now = new Date();
+    const updatedSiteData = {
+      ...existingSite,
+      time_remaining: originalTimeLimit, // Reset to original time limit
+      time_limit: originalTimeLimit,
+      override_active: true, // Set override active
+      override_initiated_by: userId,
+      override_initiated_at: now.toISOString(),
+      is_blocked: false, // Unblock the site
+      blocked_until: null, // Clear blocked until
+      updated_at: now.toISOString(),
+      last_accessed: now.toISOString()
+    };
 
     // Update Firebase Realtime Database
     await realtimeDB.addBlockedSite(siteId, updatedSiteData);
+
+    // Set timeout to clear override after 3 seconds
+    setTimeout(async () => {
+      try {
+        console.log("clearing override")
+        const clearedOverrideData = {
+          ...updatedSiteData,
+          override_active: false,
+          override_initiated_by: null,
+          override_initiated_at: null,
+          updated_at: new Date().toISOString()
+        };
+        await realtimeDB.addBlockedSite(siteId, clearedOverrideData);
+        console.log(`Override cleared for ${domain} after 3 seconds`);
+      } catch (error) {
+        console.error('Error clearing override:', error);
+      }
+    }, 3000);
 
     // Create override history record
     const historyId = crypto.randomUUID();

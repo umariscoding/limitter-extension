@@ -953,13 +953,11 @@ class FirebaseRealtimeDB {
         tab_switch_timestamp: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         time_remaining: tabSwitchData.timeRemaining,
-        deviceId: tabSwitchData.deviceId
       };
       console.log("tabSwitchData", tabSwitchData)
       // Always include time_remaining, even if it's null/undefined for debugging
       updateData.time_remaining = tabSwitchData.timeRemaining;
       console.log(`Always including time_remaining: ${tabSwitchData.timeRemaining} (type: ${typeof tabSwitchData.timeRemaining})`);
-      console.log(`Including deviceId: ${tabSwitchData.deviceId}`);
       
       console.log("Final updateData being sent to Firebase:", updateData);
       
@@ -1060,15 +1058,12 @@ class FirebaseRealtimeDB {
         site_opened_timestamp: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         time_remaining: siteOpenedData.timeRemaining,
-        deviceId: siteOpenedData.deviceId
       };
       
       console.log("siteOpenedData", siteOpenedData);
       // Always include time_remaining, even if it's null/undefined for debugging
       updateData.time_remaining = siteOpenedData.timeRemaining;
       console.log(`Site opened - including time_remaining: ${siteOpenedData.timeRemaining} (type: ${typeof siteOpenedData.timeRemaining})`);
-      console.log(`Site opened - including deviceId: ${siteOpenedData.deviceId}`);
-      
       console.log("Final site opened updateData being sent to Firebase:", updateData);
       
       const response = await fetch(url, {

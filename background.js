@@ -1125,20 +1125,7 @@ function handleOverrideChange(domain, updatedData) {
 async function handleTabSwitchSync(domain, updatedData) {
   console.log(`🔄 TAB SWITCH: Tab switch detected for ${domain}`);
   console.log("updatedData", updatedData);
-  
-  // Check if this tab switch event is from our own device - if so, ignore it
-  const currentDeviceId = await getDeviceId();
-  const eventDeviceId = updatedData.deviceId;
-  
-  console.log(`🔍 Device check: Current=${currentDeviceId}, Event=${eventDeviceId}`);
-  
-  if (eventDeviceId && eventDeviceId === currentDeviceId) {
-    console.log(`⏭️ Ignoring tab switch from our own device (${currentDeviceId})`);
-    return;
-  }
-  
-  console.log(`✅ Processing tab switch from different device: ${eventDeviceId}`);
-  
+
   // Timer synchronization logic
   const firebaseTimeRemaining = updatedData.time_remaining;
   console.log(`Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
@@ -1298,7 +1285,6 @@ async function syncTimerStates(domain, localTime, firebaseTime, siteId, options 
   const { 
     updateFirebase = true, 
     updateLocal = true, 
-    deviceId = null,
     timeDifferenceThreshold = 5,
     source = 'unknown'
   } = options;
@@ -1321,11 +1307,8 @@ async function syncTimerStates(domain, localTime, firebaseTime, siteId, options 
   
     try {
       if (timeDifference <= timeDifferenceThreshold) {
-        // Small difference - use tab switch update if deviceId provided
-        if (deviceId) {
-          console.log(`🔄 Small difference (${timeDifference}s) - using tab switch update`);
-          await realtimeDB.updateSiteTabSwitch(siteId, { deviceId, timeRemaining: minTime });
-        }
+        await realtimeDB.updateSiteTabSwitch(siteId, { timeRemaining: minTime });
+
       } else {
         // Large difference - use synced timer update
         console.log(`⚠️ Large difference (${timeDifference}s) - using synced timer update`);
@@ -1416,11 +1399,8 @@ async function handleTabSwitch(tabId) {
     
     console.log(`✅ Processing tab switch for tracked domain: ${domainInfo.domain}`);
     
-    const deviceId = await getDeviceId();
     const formattedDomain = realtimeDB.formatDomainForFirebase(domainInfo.domain);
     const siteId = `${user.uid}_${formattedDomain}`;
-    
-    console.log(`Site ID: ${siteId}, Device ID: ${deviceId}`);
     
     // Get current Firebase state
     console.log(`🔍 Getting current Firebase state for ${domainInfo.domain}`);
@@ -1442,7 +1422,6 @@ async function handleTabSwitch(tabId) {
         const syncedTime = await syncTimerStates(domainInfo.domain, localTimeRemaining, firebaseTimeRemaining, siteId, {
           updateFirebase: true,
           updateLocal: true,
-          deviceId: deviceId,
           timeDifferenceThreshold: 5,
           source: 'individual-tab-switch'
         });
@@ -1451,14 +1430,13 @@ async function handleTabSwitch(tabId) {
       } else {
         // No Firebase time, just send tab switch update with local time
         console.log(`📤 No Firebase time found, sending tab switch with local time: ${localTimeRemaining}s`);
-        await realtimeDB.updateSiteTabSwitch(siteId, { deviceId, timeRemaining: localTimeRemaining });
+        await realtimeDB.updateSiteTabSwitch(siteId, { timeRemaining: localTimeRemaining });
       }
     } else {
       console.log(`❌ No timer state found for ${domainInfo.domain}, just creating tab switch event`);
       
-      console.log(`🚀 Calling updateSiteTabSwitch with:`, { deviceId, timeRemaining: undefined });
+      console.log(`🚀 Calling updateSiteTabSwitch with:`, { timeRemaining: undefined });
       await realtimeDB.updateSiteTabSwitch(siteId, { 
-        deviceId,
         timeRemaining: undefined // Explicitly pass undefined 
       });
       console.log(`✅ updateSiteTabSwitch completed successfully`);
@@ -1502,11 +1480,8 @@ async function handleSiteOpened(domain, localTimeRemaining) {
       return { success: false, message: 'No authenticated user' };
     }
     
-    const deviceId = await getDeviceId();
     const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
     const siteId = `${user.uid}_${formattedDomain}`;
-    
-    console.log(`Site ID: ${siteId}, Device ID: ${deviceId}`);
     
     // Get current Firebase state
     console.log(`🔍 Getting current Firebase state for ${domain}`);
@@ -1522,7 +1497,6 @@ async function handleSiteOpened(domain, localTimeRemaining) {
       
       // Send site opened signal with local time
       await realtimeDB.updateSiteOpened(siteId, { 
-        deviceId, 
         timeRemaining: localTimeRemaining , 
         site_opened_active: true
       });
@@ -1540,7 +1514,6 @@ async function handleSiteOpened(domain, localTimeRemaining) {
             await syncTimerStates(domain, localTimeRemaining, updatedFirebaseTime, siteId, {
               updateFirebase: true,
               updateLocal: true,
-              deviceId: deviceId,
               timeDifferenceThreshold: 2, // More sensitive for fresh opens
               source: 'site-opened'
             });
@@ -1555,7 +1528,6 @@ async function handleSiteOpened(domain, localTimeRemaining) {
       // Only local time available, send signal anyway
       console.log(`📤 Only local time available, sending site opened signal: ${localTimeRemaining}s`);
       await realtimeDB.updateSiteOpened(siteId, { 
-        deviceId, 
         timeRemaining: localTimeRemaining ,
         site_opened_active: true
       });
@@ -1576,19 +1548,6 @@ async function handleSiteOpened(domain, localTimeRemaining) {
 async function handleSiteOpenedSync(domain, updatedData) {
   console.log(`🔄 SITE OPENED SYNC: Site opened detected from another device for ${domain}`);
   console.log("updatedData", updatedData);
-  
-  // Check if this site opened event is from our own device - if so, ignore it
-  const currentDeviceId = await getDeviceId();
-  const eventDeviceId = updatedData.deviceId;
-  
-  console.log(`🔍 Device check: Current=${currentDeviceId}, Event=${eventDeviceId}`);
-  
-  if (eventDeviceId && eventDeviceId === currentDeviceId) {
-    console.log(`⏭️ Ignoring site opened from our own device (${currentDeviceId})`);
-    return;
-  }
-  
-  console.log(`✅ Processing site opened from different device: ${eventDeviceId}`);
   
   // Timer synchronization logic
   const firebaseTimeRemaining = updatedData.time_remaining;
