@@ -494,92 +494,86 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break;
       
     case 'syncTimerToFirebase':
-      // Content script requesting to sync timer state to Firebase
-      if (!firebaseSyncService || !realtimeDB) {
-        console.error('Smart Tab Blocker Background: Sync request denied - Services not available');
-        console.error('Smart Tab Blocker Background: Debug info:', {
-          isAuthenticated,
-          hasFirebaseAuth: !!firebaseAuth,
-          hasFirestore: !!firestore,
-          hasRealtimeDB: !!realtimeDB,
-          hasSyncService: !!firebaseSyncService
-        });
-        
-        // Try to reinitialize the services
-        console.log('Smart Tab Blocker Backgrouilable');
-
-        try {
-          if (firebaseAuth && firestore) {
-            firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
-            firebaseSyncService.init();
-            realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
-          } else {
-            console.error('Smart Tab Blocker Background: Cannot reinitialize - missing dependencies');
-            sendResponse({ success: false, error: 'Services not available and cannot reinitialize' });
-            break;
-          }
-        } catch (reinitError) {
-          console.error('Smart Tab Blocker Background: Failed to reinitialize services:', reinitError);
-          sendResponse({ success: false, error: 'Services not available and reinitialize failed' });
-          break;
-        }
-      }
-      
-      // Get current user
-      const currentUser = firebaseAuth.getCurrentUser();
-      if (!currentUser) {
-        console.log('Smart Tab Blocker Background: No authenticated user');
+      // Sync timer state to Firebase for cross-device syncing
+      if (!firebaseSyncService) {
+        console.log('Smart Tab Blocker Background: Not authenticated or sync service not available');
         sendResponse({ success: false, error: 'Not authenticated' });
         break;
       }
-      console.log('Smart Tab Blocker Background: Sync request denied - Services not available');
 
       // Format domain and create site ID
       const timerDomain = request.domain.replace(/^www\./, '').toLowerCase();
       const formattedTimerDomain = realtimeDB.formatDomainForFirebase(timerDomain);
       const timerSiteId = `${currentUser.uid}_${formattedTimerDomain}`;
 
-      // Create site data for Realtime Database
-      const now = new Date();
-      const siteData = {
-        user_id: currentUser.uid,
-        url: timerDomain,
-        time_remaining: request.timeRemaining,
-        time_limit: request.time_limit || request.gracePeriod,
-        is_active: true,
-        override_active: request.override_active || false,
-        override_initiated_by: request.override_initiated_by || null,
-        override_initiated_at: request.override_initiated_at || null,
-        is_blocked: request.timeRemaining <= 0,
-        last_accessed: now.toISOString(),
-        updated_at: now.toISOString(),
-        last_reset_date: new Date().toLocaleDateString('en-US'),
-        is_paused: request.isPaused || false
-      };
+      // First get existing site data to compare times
+      realtimeDB.getBlockedSite(timerSiteId).then(existingSite => {
+        // Only proceed if:
+        // 1. No existing site (new site)
+        // 2. Override is active (allowed to increase time)
+        // 3. New time is less than existing time (normal decrease)
+        if (!existingSite || 
+            request.override_active || 
+            !existingSite.time_remaining || 
+            request.timeRemaining <= existingSite.time_remaining) {
+            
+          // Create site data for Realtime Database
+          const now = new Date();
+          const siteData = {
+            user_id: currentUser.uid,
+            url: timerDomain,
+            time_remaining: request.timeRemaining,
+            time_limit: request.time_limit || request.gracePeriod,
+            is_active: true,
+            override_active: request.override_active || false,
+            override_initiated_by: request.override_initiated_by || null,
+            override_initiated_at: request.override_initiated_at || null,
+            is_blocked: request.timeRemaining <= 0,
+            last_accessed: now.toISOString(),
+            updated_at: now.toISOString(),
+            last_reset_date: getTodayString(),
+            is_paused: request.isPaused || false
+          };
 
-      // If timer has reached zero, mark as blocked
-      if (request.timeRemaining <= 0) {
-        siteData.is_blocked = true;
-        siteData.blocked_until = new Date(now.setHours(23, 59, 59, 999)).toISOString();
-      }
-      console.log("wokring")
-      // Sync to both Firestore and Realtime Database
-      Promise.all([
-        realtimeDB.addBlockedSite(timerSiteId, siteData)
-      ]).then(([realtimeSuccess]) => {
-        sendResponse({ success: realtimeSuccess });
-      }).catch(async (error) => {
-        console.error('Smart Tab Blocker Background: Error syncing timer:', error);
-        
-        // If error contains authentication issue, debug auth status
-        if (error.message.includes('authenticated') || error.message.includes('auth')) {
-          console.log('Smart Tab Blocker Background: Authentication error detected, debugging...');
-          const authStatus = await firebaseSyncService.checkAuthStatus();
-          console.log('Smart Tab Blocker Background: Auth debug result:', authStatus);
+          // If timer has reached zero, mark as blocked
+          if (request.timeRemaining <= 0) {
+            siteData.is_blocked = true;
+            siteData.blocked_until = new Date(now.setHours(23, 59, 59, 999)).toISOString();
+          }
+
+          // Preserve any existing fields we want to keep
+          if (existingSite) {
+            siteData.created_at = existingSite.created_at;
+            siteData.name = existingSite.name;
+            if (existingSite.schedule) siteData.schedule = existingSite.schedule;
+            if (existingSite.time_spent_today !== undefined) {
+              siteData.time_spent_today = existingSite.time_spent_today;
+            }
+          }
+
+          // Sync to Realtime Database
+          realtimeDB.addBlockedSite(timerSiteId, siteData)
+            .then(() => {
+              sendResponse({ success: true });
+            })
+            .catch(error => {
+              console.error('Smart Tab Blocker Background: Error syncing timer:', error);
+              sendResponse({ success: false, error: error.message });
+            });
+        } else {
+          // Time increase detected - reject update
+          console.log(`Smart Tab Blocker Background: Rejected time increase - Current: ${existingSite.time_remaining}s, New: ${request.timeRemaining}s`);
+          sendResponse({ 
+            success: false, 
+            error: 'Time increase not allowed',
+            currentTime: existingSite.time_remaining 
+          });
         }
-        
+      }).catch(error => {
+        console.error('Smart Tab Blocker Background: Error checking existing site:', error);
         sendResponse({ success: false, error: error.message });
       });
+      
       return true; // Keep message channel open for async response
       
     case 'debugFirebaseAuth':
@@ -1131,20 +1125,7 @@ function handleOverrideChange(domain, updatedData) {
 async function handleTabSwitchSync(domain, updatedData) {
   console.log(`🔄 TAB SWITCH: Tab switch detected for ${domain}`);
   console.log("updatedData", updatedData);
-  
-  // Check if this tab switch event is from our own device - if so, ignore it
-  const currentDeviceId = await getDeviceId();
-  const eventDeviceId = updatedData.deviceId;
-  
-  console.log(`🔍 Device check: Current=${currentDeviceId}, Event=${eventDeviceId}`);
-  
-  if (eventDeviceId && eventDeviceId === currentDeviceId) {
-    console.log(`⏭️ Ignoring tab switch from our own device (${currentDeviceId})`);
-    return;
-  }
-  
-  console.log(`✅ Processing tab switch from different device: ${eventDeviceId}`);
-  
+
   // Timer synchronization logic
   const firebaseTimeRemaining = updatedData.time_remaining;
   console.log(`Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
@@ -1304,7 +1285,6 @@ async function syncTimerStates(domain, localTime, firebaseTime, siteId, options 
   const { 
     updateFirebase = true, 
     updateLocal = true, 
-    deviceId = null,
     timeDifferenceThreshold = 5,
     source = 'unknown'
   } = options;
@@ -1325,15 +1305,10 @@ async function syncTimerStates(domain, localTime, firebaseTime, siteId, options 
     console.log(`✅ Local timer already at minimum: ${minTime}s`);
   }
   
-  // Update Firebase based on difference threshold
-  if (updateFirebase) {
     try {
       if (timeDifference <= timeDifferenceThreshold) {
-        // Small difference - use tab switch update if deviceId provided
-        if (deviceId) {
-          console.log(`🔄 Small difference (${timeDifference}s) - using tab switch update`);
-          await realtimeDB.updateSiteTabSwitch(siteId, { deviceId, timeRemaining: minTime });
-        }
+        await realtimeDB.updateSiteTabSwitch(siteId, { timeRemaining: minTime });
+
       } else {
         // Large difference - use synced timer update
         console.log(`⚠️ Large difference (${timeDifference}s) - using synced timer update`);
@@ -1342,7 +1317,6 @@ async function syncTimerStates(domain, localTime, firebaseTime, siteId, options 
     } catch (error) {
       console.error('❌ Error updating Firebase:', error);
     }
-  }
   
   return minTime;
 }
@@ -1425,11 +1399,8 @@ async function handleTabSwitch(tabId) {
     
     console.log(`✅ Processing tab switch for tracked domain: ${domainInfo.domain}`);
     
-    const deviceId = await getDeviceId();
     const formattedDomain = realtimeDB.formatDomainForFirebase(domainInfo.domain);
     const siteId = `${user.uid}_${formattedDomain}`;
-    
-    console.log(`Site ID: ${siteId}, Device ID: ${deviceId}`);
     
     // Get current Firebase state
     console.log(`🔍 Getting current Firebase state for ${domainInfo.domain}`);
@@ -1451,7 +1422,6 @@ async function handleTabSwitch(tabId) {
         const syncedTime = await syncTimerStates(domainInfo.domain, localTimeRemaining, firebaseTimeRemaining, siteId, {
           updateFirebase: true,
           updateLocal: true,
-          deviceId: deviceId,
           timeDifferenceThreshold: 5,
           source: 'individual-tab-switch'
         });
@@ -1460,14 +1430,13 @@ async function handleTabSwitch(tabId) {
       } else {
         // No Firebase time, just send tab switch update with local time
         console.log(`📤 No Firebase time found, sending tab switch with local time: ${localTimeRemaining}s`);
-        await realtimeDB.updateSiteTabSwitch(siteId, { deviceId, timeRemaining: localTimeRemaining });
+        await realtimeDB.updateSiteTabSwitch(siteId, { timeRemaining: localTimeRemaining });
       }
     } else {
       console.log(`❌ No timer state found for ${domainInfo.domain}, just creating tab switch event`);
       
-      console.log(`🚀 Calling updateSiteTabSwitch with:`, { deviceId, timeRemaining: undefined });
+      console.log(`🚀 Calling updateSiteTabSwitch with:`, { timeRemaining: undefined });
       await realtimeDB.updateSiteTabSwitch(siteId, { 
-        deviceId,
         timeRemaining: undefined // Explicitly pass undefined 
       });
       console.log(`✅ updateSiteTabSwitch completed successfully`);
@@ -1511,11 +1480,8 @@ async function handleSiteOpened(domain, localTimeRemaining) {
       return { success: false, message: 'No authenticated user' };
     }
     
-    const deviceId = await getDeviceId();
     const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
     const siteId = `${user.uid}_${formattedDomain}`;
-    
-    console.log(`Site ID: ${siteId}, Device ID: ${deviceId}`);
     
     // Get current Firebase state
     console.log(`🔍 Getting current Firebase state for ${domain}`);
@@ -1531,7 +1497,6 @@ async function handleSiteOpened(domain, localTimeRemaining) {
       
       // Send site opened signal with local time
       await realtimeDB.updateSiteOpened(siteId, { 
-        deviceId, 
         timeRemaining: localTimeRemaining , 
         site_opened_active: true
       });
@@ -1549,7 +1514,6 @@ async function handleSiteOpened(domain, localTimeRemaining) {
             await syncTimerStates(domain, localTimeRemaining, updatedFirebaseTime, siteId, {
               updateFirebase: true,
               updateLocal: true,
-              deviceId: deviceId,
               timeDifferenceThreshold: 2, // More sensitive for fresh opens
               source: 'site-opened'
             });
@@ -1564,7 +1528,6 @@ async function handleSiteOpened(domain, localTimeRemaining) {
       // Only local time available, send signal anyway
       console.log(`📤 Only local time available, sending site opened signal: ${localTimeRemaining}s`);
       await realtimeDB.updateSiteOpened(siteId, { 
-        deviceId, 
         timeRemaining: localTimeRemaining ,
         site_opened_active: true
       });
@@ -1585,19 +1548,6 @@ async function handleSiteOpened(domain, localTimeRemaining) {
 async function handleSiteOpenedSync(domain, updatedData) {
   console.log(`🔄 SITE OPENED SYNC: Site opened detected from another device for ${domain}`);
   console.log("updatedData", updatedData);
-  
-  // Check if this site opened event is from our own device - if so, ignore it
-  const currentDeviceId = await getDeviceId();
-  const eventDeviceId = updatedData.deviceId;
-  
-  console.log(`🔍 Device check: Current=${currentDeviceId}, Event=${eventDeviceId}`);
-  
-  if (eventDeviceId && eventDeviceId === currentDeviceId) {
-    console.log(`⏭️ Ignoring site opened from our own device (${currentDeviceId})`);
-    return;
-  }
-  
-  console.log(`✅ Processing site opened from different device: ${eventDeviceId}`);
   
   // Timer synchronization logic
   const firebaseTimeRemaining = updatedData.time_remaining;

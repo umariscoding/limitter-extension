@@ -944,20 +944,20 @@ class FirebaseRealtimeDB {
       }
 
       const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
-      
+      const siteData = await this.getBlockedSite(siteId);
+      console.log("siteData", siteData)
       // First set the tab switch event
       const updateData = {
+        ...siteData,
         tab_switch_active: true,
         tab_switch_timestamp: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         time_remaining: tabSwitchData.timeRemaining,
-        deviceId: tabSwitchData.deviceId
       };
       console.log("tabSwitchData", tabSwitchData)
       // Always include time_remaining, even if it's null/undefined for debugging
       updateData.time_remaining = tabSwitchData.timeRemaining;
       console.log(`Always including time_remaining: ${tabSwitchData.timeRemaining} (type: ${typeof tabSwitchData.timeRemaining})`);
-      console.log(`Including deviceId: ${tabSwitchData.deviceId}`);
       
       console.log("Final updateData being sent to Firebase:", updateData);
       
@@ -983,6 +983,7 @@ class FirebaseRealtimeDB {
             method: "PATCH",
             headers: this.getAuthHeaders(),
             body: JSON.stringify({
+              ...siteData,
               tab_switch_active: false,
               updated_at: new Date().toISOString()
             })
@@ -1011,8 +1012,10 @@ class FirebaseRealtimeDB {
       const siteData = await this.getBlockedSite(siteId);
       console.log("Sited Data", siteData)
       const updateData = {
+        ...siteData,
         tab_switch_active: true,
         time_remaining: timeRemaining,
+        synced_timer_active: true,
         updated_at: new Date().toISOString()
       };
       
@@ -1046,22 +1049,21 @@ class FirebaseRealtimeDB {
       }
 
       const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
-      
+      const siteData = await this.getBlockedSite(siteId);
+      console.log("siteData", siteData)
       // First set the site opened event
       const updateData = {
+        ...siteData,
         site_opened_active: true,
         site_opened_timestamp: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         time_remaining: siteOpenedData.timeRemaining,
-        deviceId: siteOpenedData.deviceId
       };
       
       console.log("siteOpenedData", siteOpenedData);
       // Always include time_remaining, even if it's null/undefined for debugging
       updateData.time_remaining = siteOpenedData.timeRemaining;
       console.log(`Site opened - including time_remaining: ${siteOpenedData.timeRemaining} (type: ${typeof siteOpenedData.timeRemaining})`);
-      console.log(`Site opened - including deviceId: ${siteOpenedData.deviceId}`);
-      
       console.log("Final site opened updateData being sent to Firebase:", updateData);
       
       const response = await fetch(url, {
@@ -1086,6 +1088,7 @@ class FirebaseRealtimeDB {
             method: "PATCH",
             headers: this.getAuthHeaders(),
             body: JSON.stringify({
+              ...siteData,
               site_opened_active: false,
               updated_at: new Date().toISOString()
             })
