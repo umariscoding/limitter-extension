@@ -1352,22 +1352,10 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log(`Reactivating inactive site: ${cleanDomain}`);
         const now = new Date();
         const reactivatedSiteData = {
-          // Preserve essential existing data but be selective
-          user_id: existingSite.user_id,
-          url: existingSite.url,
-          time_limit: existingSite.time_limit,
-          time_remaining: existingSite.time_remaining,
-          last_reset_date: existingSite.last_reset_date,
-          // Only include these if they exist and are not null/undefined
-          ...(existingSite.override_active !== undefined && { override_active: existingSite.override_active }),
-          ...(existingSite.override_initiated_by && { override_initiated_by: existingSite.override_initiated_by }),
-          ...(existingSite.override_initiated_at && { override_initiated_at: existingSite.override_initiated_at }),
-          ...(existingSite.blocked_until && { blocked_until: existingSite.blocked_until }),
-          ...(existingSite.last_accessed && { last_accessed: existingSite.last_accessed }),
-          // Override the fields we're specifically updating
+          ...existingSite,
           is_active: true,
-          updated_at: now
-          // Don't change time_limit or time_remaining
+          updated_at: now,
+          last_accessed: now.toISOString()
         };
         
         await realtimeDB.addBlockedSite(siteId, reactivatedSiteData);
@@ -1473,19 +1461,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const existingSite = await realtimeDB.getBlockedSite(siteId);
             if (existingSite) {
               const updatedSiteData = {
-                // Preserve essential existing data but be selective
-                user_id: existingSite.user_id,
-                url: existingSite.url,
-                time_limit: existingSite.time_limit,
-                time_remaining: existingSite.time_remaining,
-                last_reset_date: existingSite.last_reset_date,
-                // Only include these if they exist and are not null/undefined
-                ...(existingSite.override_active !== undefined && { override_active: existingSite.override_active }),
-                ...(existingSite.override_initiated_by && { override_initiated_by: existingSite.override_initiated_by }),
-                ...(existingSite.override_initiated_at && { override_initiated_at: existingSite.override_initiated_at }),
-                ...(existingSite.blocked_until && { blocked_until: existingSite.blocked_until }),
-                ...(existingSite.last_accessed && { last_accessed: existingSite.last_accessed }),
-                // Set as inactive - this is what other devices will detect
+                ...existingSite,
                 is_active: false,
                 updated_at: new Date().toISOString()
               };
@@ -1602,13 +1578,7 @@ document.addEventListener('DOMContentLoaded', function() {
       // Create updated site data with reset timer and override active
       const now = new Date();
       const updatedSiteData = {
-        // Preserve essential existing data but be selective
-        user_id: existingSite.user_id,
-        url: existingSite.url,
-        last_reset_date: existingSite.last_reset_date,
-        // Only include these if they exist and are not null/undefined  
-        ...(existingSite.last_accessed && { last_accessed: existingSite.last_accessed }),
-        // Override the fields we're specifically updating
+        ...existingSite,
         time_remaining: originalTimeLimit, // Reset to original time limit
         time_limit: originalTimeLimit,
         override_active: true, // Set override active

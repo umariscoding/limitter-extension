@@ -54,7 +54,6 @@ class FirebaseSyncService {
       if (!realtimeDB) {
         throw new Error('Realtime Database not available');
       }
-
       const normalizedDomain = this.normalizeDomain(timerState.domain);
       const formattedDomain = realtimeDB.formatDomainForFirebase(normalizedDomain);
       const siteId = `${userId}_${formattedDomain}`;

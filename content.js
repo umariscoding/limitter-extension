@@ -381,6 +381,7 @@
             
             // First, try to load from Firebase for cross-device syncing
             loadTimerStateFromFirebase().then(firebaseState => {
+                console.log("firebaseState", firebaseState)
                 if (firebaseState && firebaseState.timeRemaining > 0) {
                     console.log(`Smart Tab Blocker: Loaded timer state from Firebase (cross-device) with ${firebaseState.timeRemaining}s remaining`);
                     resolve(firebaseState);
@@ -828,10 +829,10 @@
                 // If we have both Firebase and local time, or just local time, send site opened signal
                 if (localTimeRemaining !== null || (firebaseState && firebaseState.timeRemaining > 0)) {
                     const timeToSend = localTimeRemaining || (firebaseState ? firebaseState.timeRemaining : null);
-                    
+                    console.log("timeToSend", timeToSend, "firebaseState", firebaseState)
                     if (timeToSend && timeToSend > 0) {
                         console.log(`Smart Tab Blocker: Sending site opened signal with time: ${timeToSend}s`);
-                        
+                        if(firebaseState!=null){
                         // Send site opened signal for cross-device sync
                         chrome.runtime.sendMessage({
                             action: 'siteOpened',
@@ -844,9 +845,12 @@
                                 console.log('Smart Tab Blocker: Site opened signal failed:', response?.error);
                             }
                         });
-                        
+                    }
+                    console.log("localTimeRemaining", localTimeRemaining, "firebaseState", firebaseState)
                         // Use the local time if available, otherwise use Firebase time
+                        if(firebaseState?.timeRemaining != 3600){
                         timeRemaining = localTimeRemaining || firebaseState.timeRemaining;
+                        }
                         gracePeriod = (domainConfig.savedState?.gracePeriod) || 
                                      (firebaseState?.gracePeriod) || 
                                      gracePeriod;
@@ -1498,13 +1502,24 @@
     function startCountdownTimer(isResuming = false) {
         if (!isEnabled || !checkExtensionContext()) return;
         
-        stopCountdownTimer();
-        
-        if (!isResuming) {
-            timeRemaining = gracePeriod;
-            // If starting fresh, enable Firebase sync after a delay
-            enableFirebaseSync();
+        // If timer is already running, don't start a new one
+        if (countdownTimer) {
+            console.log('Smart Tab Blocker: Timer already running, not starting new one');
+            return;
         }
+        
+        // Only set initial time if we're not resuming and haven't loaded from Firebase
+        if (!isResuming && !hasLoadedFromFirebase) {
+            console.log('Smart Tab Blocker: Starting fresh timer - waiting for Firebase load');
+            return; // Don't start timer until we've loaded from Firebase
+        }
+        
+        // If starting fresh (not resuming), set initial time
+        // if (!isResuming) {
+        //     // timeRemaining = gracePeriod;
+        //     // If starting fresh, enable Firebase sync after a delay
+        //     // enableFirebaseSync();
+        // }
         
         isTimerPaused = document.hidden;
         isActiveTab = !document.hidden; // Set active status based on visibility
@@ -1540,7 +1555,7 @@
             }
         }, 1000);
         
-        // Immediate save when timer starts (but won't sync to Firebase until enabled)
+        // Immediate save when timer starts
         saveTimerState();
     }
     
@@ -2017,6 +2032,45 @@
             }
         }).catch(error => {
             console.log('Smart Tab Blocker: Error checking for cross-device updates:', error);
+        });
+    }
+    
+    function updateTimerState(newTimeRemaining, override = false) {
+        if (!currentDomain) return;
+        
+        const storageKey = getStorageKey();
+        if (!storageKey) return;
+
+        // Update local state
+        timeRemaining = newTimeRemaining;
+        
+        // Save to Chrome storage
+        chrome.storage.local.set({
+            [storageKey]: {
+                timeRemaining: newTimeRemaining,
+                timestamp: Date.now()
+            }
+        });
+
+        // Sync to Firebase if available
+        chrome.runtime.sendMessage({
+            action: 'syncTimerToFirebase',
+            domain: currentDomain,
+            timeRemaining: newTimeRemaining,
+            time_limit: currentTimeLimit,
+            override_active: override,
+            isPaused: !isActiveTab
+        }, response => {
+            if (response && !response.success) {
+                console.log('Smart Tab Blocker: Firebase sync failed:', response.error);
+                
+                // If time increase was rejected, use the server's time
+                if (response.error === 'Time increase not allowed' && response.currentTime !== undefined) {
+                    console.log('Smart Tab Blocker: Using server time:', response.currentTime);
+                    timeRemaining = response.currentTime;
+                    updateDisplay();
+                }
+            }
         });
     }
     
