@@ -1912,7 +1912,7 @@ async function syncTimerStateToFirestore(domain, timerState) {
     if (existingSites && existingSites.length > 0) {
       // Update existing document using updateBlockedSite
       const docId = existingSites[0].id;
-      await firestore.updateBlockedSite(docId, siteData);
+      await firestore.updateBlockedSite(docId, siteData, ['is_active', 'override_active', 'override_initiated_by', 'override_initiated_at', 'last_reset_timestamp']);
     } else {
       // Create new document using updateBlockedSite with a new ID
       const newDocId = `${user.uid}_${normalizedDomain}`;
