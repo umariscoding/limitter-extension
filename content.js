@@ -56,6 +56,9 @@
     let currentTimeLimit = null;
     let overrideClearTimeout = null; 
     
+    // Add at the top with other variables
+    let lastResetTimestamp = 0;
+    
     // Get unique tab identifier
     function getTabId() {
         if (!tabId) {
@@ -196,8 +199,6 @@
                 return;
             }
             
-            // console.log('Limitter: Tab became active - loading from Firebase first');
-            
             // Step 1: Load current state from Firebase
             loadTimerStateFromFirebase().then(firebaseState => {
                 const storageKey = getStorageKey();
@@ -205,7 +206,6 @@
                     if (firebaseState && firebaseState.timeRemaining >= 0) {
                         timeRemaining = firebaseState.timeRemaining;
                         gracePeriod = firebaseState.gracePeriod || gracePeriod;
-                        console.log(`Limitter: Using Firebase time: ${timeRemaining}s (no Chrome storage key)`);
                         updateTimerDisplay();
                     }
                     resolve();
@@ -239,37 +239,59 @@
                     }
                     
                     // Step 3: Compare and decide
-                    if (firebaseState && firebaseState.timeRemaining >= 0 && chromeTimeRemaining !== null) {
+                    if (firebaseState && firebaseState.timeRemaining >= 0) {
                         const firebaseTime = firebaseState.timeRemaining;
                         
-                        // console.log(`Limitter: Tab switch comparison - Firebase: ${firebaseTime}s, Chrome: ${chromeTimeRemaining}s`);
+                        // Get timestamps
+                        const firebaseResetTime = firebaseState.last_reset_timestamp || 0;
+                        const chromeResetTime = chromeState?.last_reset_timestamp || 0;
+                        const now = Date.now();
                         
-                        if (firebaseTime <= chromeTimeRemaining) {
-                            // Firebase has lower or equal time - use Firebase
-                            // console.log(`Limitter: Using Firebase time (${firebaseTime}s) - lower than Chrome (${chromeTimeRemaining}s)`);
+                        console.log('Timer State Comparison:', {
+                            firebaseTime,
+                            chromeTimeRemaining,
+                            firebaseResetTime: new Date(firebaseResetTime).toISOString(),
+                            chromeResetTime: chromeResetTime ? new Date(chromeResetTime).toISOString() : 'none',
+                            timeDifference: Math.abs(firebaseTime - chromeTimeRemaining),
+                            resetTimeDifference: Math.abs(firebaseResetTime - chromeResetTime)
+                        });
+                        console.log("lastResetTimestamp", lastResetTimestamp, chromeResetTime)
+                        // Case 1: Firebase has a more recent reset
+                        if (firebaseResetTime > chromeResetTime) {
+                            console.log('Using Firebase time due to more recent reset');
                             timeRemaining = firebaseTime;
-                            gracePeriod = firebaseState.gracePeriod || gracePeriod;
-                        } else {
-                            // Chrome storage has lower time - use Chrome and update Firebase
-                            // console.log(`Limitter: Using Chrome time (${chromeTimeRemaining}s) and updating Firebase - lower than Firebase (${firebaseTime}s)`);
+                            lastResetTimestamp = firebaseResetTime;
+                        }
+                        // Case 2: Chrome has a more recent reset
+                        else if (chromeResetTime > firebaseResetTime) {
+                            console.log('Using Chrome time due to more recent reset');
                             timeRemaining = chromeTimeRemaining;
-                            gracePeriod = chromeState.gracePeriod || gracePeriod;
-                            
-                            // Update Firebase with the lower Chrome storage time
+                            // Update Firebase with our more recent reset
                             setTimeout(() => {
                                 syncTimerToFirebase();
                             }, 500);
                         }
-                    } else if (firebaseState && firebaseState.timeRemaining >= 0) {
-                        // Only Firebase has data
-                        // console.log(`Limitter: Using Firebase time only: ${firebaseState.timeRemaining}s`);
-                        timeRemaining = firebaseState.timeRemaining;
+                        // Case 3: Same reset time or no resets - use minimum time
+                        else {
+                            if (firebaseTime <= chromeTimeRemaining) {
+                                console.log('Using Firebase time (lower value)');
+                                timeRemaining = firebaseTime;
+                            } else {
+                                console.log('Using Chrome time (lower value)');
+                                timeRemaining = chromeTimeRemaining;
+                                // Update Firebase with the lower time
+                                setTimeout(() => {
+                                    syncTimerToFirebase();
+                                }, 500);
+                            }
+                        }
+                        
+                        // Always update grace period from Firebase if available
                         gracePeriod = firebaseState.gracePeriod || gracePeriod;
                     } else if (chromeTimeRemaining !== null) {
                         // Only Chrome storage has data
-                        // console.log(`Limitter: Using Chrome time only: ${chromeTimeRemaining}s`);
+                        console.log('Using Chrome time (no Firebase data)');
                         timeRemaining = chromeTimeRemaining;
-                        gracePeriod = chromeState.gracePeriod || gracePeriod;
                         
                         // Update Firebase with Chrome storage data
                         setTimeout(() => {
@@ -511,7 +533,13 @@
                     
                     if (response && response.success && response.timerState) {
                         const firebaseState = response.timerState;
-                       
+                        
+                        // Update reset timestamp if Firebase has a more recent one
+                        if (firebaseState.last_reset_timestamp > lastResetTimestamp) {
+                            lastResetTimestamp = firebaseState.last_reset_timestamp;
+                            // If Firebase has a more recent reset, use its time
+                            timeRemaining = firebaseState.timeRemaining;
+                        }
                         
                         // Update override state variables
                         if (firebaseState.override_active) {
@@ -525,7 +553,7 @@
                         
                         resolve({
                             ...firebaseState,
-                            timeRemaining:  firebaseState.timeRemaining 
+                            timeRemaining: firebaseState.timeRemaining
                         });
                     } else {
                         console.log('Limitter: No timer state found in Firebase');
@@ -557,9 +585,10 @@
             override_active: currentOverrideActive, // Preserve override state
             override_initiated_by: currentOverrideInitiatedBy,
             override_initiated_at: currentOverrideInitiatedAt,
-            time_limit: currentTimeLimit
+            time_limit: currentTimeLimit,
+            last_reset_timestamp: lastResetTimestamp // Add reset timestamp
         };
-        
+        console.log("state", state)
         console.log(`Limitter: Saving timer state with ${timeRemaining}s remaining (active: ${isActiveTab}, hasLoadedFromFirebase: ${hasLoadedFromFirebase})`);
         
         try {
@@ -1594,8 +1623,10 @@
                     override_active: currentOverrideActive,
                     override_initiated_by: currentOverrideInitiatedBy,
                     override_initiated_at: currentOverrideInitiatedAt,
-                    time_limit: currentTimeLimit
+                    time_limit: currentTimeLimit,
+                    last_reset_timestamp: lastResetTimestamp // Add reset timestamp
                 }, (response) => {
+                    console.log("response", response)
                     if (chrome.runtime.lastError) {
                         console.log('Limitter: Error syncing timer to Firebase:', chrome.runtime.lastError);
                         resolve();
@@ -2072,6 +2103,29 @@
                 }
             }
         });
+    }
+    
+    // Update the resetTimer function
+    function resetTimer() {
+        if (!currentDomain) return;
+        
+        // Update reset timestamp
+        lastResetTimestamp = Date.now();
+        
+        // Reset timer state
+        timeRemaining = currentTimeLimit;
+        gracePeriod = DEFAULT_GRACE_PERIOD;
+        isTimerPaused = false;
+        
+        // Save and sync state
+        saveTimerState();
+        if (hasLoadedFromFirebase && !isInitializing) {
+            syncTimerToFirebase();
+        }
+        
+        // Update display
+        updateTimerDisplay();
+        startCountdownTimer();
     }
     
 })(); 

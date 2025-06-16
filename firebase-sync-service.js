@@ -69,7 +69,9 @@ class FirebaseSyncService {
         is_blocked: timerState.actualTimeRemaining <= 0,
         last_accessed: now.toISOString(),
         updated_at: now.toISOString(),
-        last_reset_date: this.getTodayString()
+        last_reset_date: this.getTodayString(),
+        last_reset_timestamp: timerState.lastResetTimestamp || 0,
+        last_sync_timestamp: Date.now()
       };
 
       // If timer has reached zero, mark as blocked

@@ -954,6 +954,7 @@ class FirebaseRealtimeDB {
         tab_switch_timestamp: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         time_remaining: tabSwitchData.timeRemaining,
+        last_reset_timestamp: siteData?.last_reset_timestamp,
       };
       console.log("tabSwitchData", tabSwitchData)
       // Always include time_remaining, even if it's null/undefined for debugging
@@ -1002,7 +1003,7 @@ class FirebaseRealtimeDB {
   }
 
   // Update site with synchronized timer value
-  async updateSiteSyncedTimer(siteId, timeRemaining) {
+  async updateSiteSyncedTimer(siteId, timeRemaining, lastResetTimestamp = 0) {
     try {
       const user = this.auth.getCurrentUser();
       if (!user) {
@@ -1011,16 +1012,18 @@ class FirebaseRealtimeDB {
 
       const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
       const siteData = await this.getBlockedSite(siteId);
-      console.log("Sited Data", siteData)
+      console.log("Site Data", siteData);
+      
       const updateData = {
         ...siteData,
         tab_switch_active: true,
         time_remaining: timeRemaining,
         synced_timer_active: true,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        last_reset_timestamp: siteData?.last_reset_timestamp,
       };
       
-      console.log(`🔄 Updating Firebase timer for ${siteId} to ${timeRemaining}s`);
+      console.log(`🔄 Updating Firebase timer for ${siteId} to ${timeRemaining}s with reset timestamp ${lastResetTimestamp}`);
       
       const response = await fetch(url, {
         method: "PATCH",
@@ -1059,6 +1062,7 @@ class FirebaseRealtimeDB {
         site_opened_timestamp: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         time_remaining: siteOpenedData.timeRemaining,
+        last_reset_timestamp: siteData?.last_reset_timestamp,
       };
       
       console.log("siteOpenedData", siteOpenedData);

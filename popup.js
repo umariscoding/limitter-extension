@@ -412,55 +412,57 @@ document.addEventListener('DOMContentLoaded', function() {
 
   async function syncDomainToFirestore(domain, timer) {
     try {
-      const user = firebaseAuth.getCurrentUser();
-      if (!user) return;
+        const user = firebaseAuth.getCurrentUser();
+        if (!user) return;
 
-      const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-      const siteId = `${user.uid}_${formattedDomain}`;
-      const now = new Date();
-      const todayString = getTodayString();
-      
-      // This function now only handles creating new sites
-      console.log(`Creating new site ${domain} in Firebase`);
-      
-      const siteData = {
-        user_id: user.uid,
-        url: domain,
-        name: domain,
-        time_limit: timer,
-        time_remaining: timer,
-        time_spent_today: 0,
-        last_reset_date: todayString,
-        is_blocked: false,
-        override_active: false,
-        is_active: true,
-        blocked_until: null,
-        schedule: null,
-        created_at: now,
-        updated_at: now
-      };
+        const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+        const siteId = `${user.uid}_${formattedDomain}`;
+        const now = new Date();
+        const todayString = getTodayString();
+        
+        // This function now only handles creating new sites
+        console.log(`Creating new site ${domain} in Firebase`);
+        
+        const siteData = {
+            user_id: user.uid,
+            url: domain,
+            name: domain,
+            time_limit: timer,
+            time_remaining: timer,
+            time_spent_today: 0,
+            last_reset_date: todayString,
+            last_reset_timestamp: Date.now(),
+            last_sync_timestamp: Date.now(),
+            is_blocked: false,
+            override_active: false,
+            is_active: true,
+            blocked_until: null,
+            schedule: null,
+            created_at: now,
+            updated_at: now
+        };
 
-      console.log('Syncing site data:', {
-        siteId,
-        data: siteData
-      });
+        console.log('Syncing site data:', {
+            siteId,
+            data: siteData
+        });
 
-      // Add to both Firestore and Realtime Database
-      await Promise.all([
-        // firestore.updateBlockedSite(siteId, siteData),
-        realtimeDB.addBlockedSite(siteId, siteData)
-      ]);
+        // Add to both Firestore and Realtime Database
+        await Promise.all([
+            // firestore.updateBlockedSite(siteId, siteData),
+            realtimeDB.addBlockedSite(siteId, siteData)
+        ]);
 
-      // Update user profile stats if we have one
-      if (userProfile) {
-        userProfile.total_sites_blocked = Object.keys(domains).length;
-        userProfile.updated_at = now;
-        await firestore.updateUserProfile(user.uid, userProfile);
-      }
+        // Update user profile stats if we have one
+        if (userProfile) {
+            userProfile.total_sites_blocked = Object.keys(domains).length;
+            userProfile.updated_at = now;
+            await firestore.updateUserProfile(user.uid, userProfile);
+        }
     } catch (error) {
-      console.error('Error syncing domain to Firebase:', error);
+        console.error('Error syncing domain to Firebase:', error);
     }
-  }
+}
 
   async function removeDomainFromFirestore(domain) {
     try {
@@ -486,6 +488,7 @@ document.addEventListener('DOMContentLoaded', function() {
         time_limit: existingSite.time_limit,
         time_remaining: existingSite.time_remaining,
         last_reset_date: existingSite.last_reset_date,
+        last_reset_timestamp: existingSite.last_reset_timestamp,
         // Only include these if they exist and are not null/undefined
         ...(existingSite.override_active !== undefined && { override_active: existingSite.override_active }),
         ...(existingSite.override_initiated_by && { override_initiated_by: existingSite.override_initiated_by }),
@@ -1397,7 +1400,8 @@ document.addEventListener('DOMContentLoaded', function() {
           ...existingSite,
           is_active: true,
           updated_at: now,
-          last_accessed: now.toISOString()
+          last_accessed: now.toISOString(),
+          last_reset_timestamp: existingSite.last_reset_timestamp
         };
         
         await realtimeDB.addBlockedSite(siteId, reactivatedSiteData);
@@ -1505,7 +1509,8 @@ document.addEventListener('DOMContentLoaded', function() {
               const updatedSiteData = {
                 ...existingSite,
                 is_active: false,
-                updated_at: new Date().toISOString()
+                updated_at: new Date().toISOString(),
+                last_reset_timestamp: existingSite.last_reset_timestamp
               };
               
               await realtimeDB.addBlockedSite(siteId, updatedSiteData);
@@ -1635,7 +1640,8 @@ document.addEventListener('DOMContentLoaded', function() {
         is_blocked: false, // Unblock the site
         blocked_until: null, // Clear blocked until
         updated_at: now.toISOString(),
-        last_accessed: now.toISOString()
+        last_accessed: now.toISOString(), 
+        last_reset_timestamp: existingSite.last_reset_timestamp
       };
 
       // First update local state
@@ -1652,7 +1658,8 @@ document.addEventListener('DOMContentLoaded', function() {
         override_active: true,
         override_initiated_by: userId,
         override_initiated_at: now.toISOString(),
-        time_limit: originalTimeLimit
+        time_limit: originalTimeLimit,
+        lastResetTimestamp: existingSite.last_reset_timestamp
       };
 
       // Update Chrome storage first
@@ -1731,10 +1738,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
       // Set timeout to clear override after 3 seconds
       setTimeout(async () => {
+        const time = now.getTime()
         try {
           console.log("clearing override");
           const clearedOverrideData = {
             ...updatedSiteData,
+            last_reset_timestamp: time,
             override_active: false,
             override_initiated_by: null,
             override_initiated_at: null,
@@ -1754,7 +1763,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     override_active: false,
                     override_initiated_by: null,
                     override_initiated_at: null,
-                    timestamp: Date.now()
+                    timestamp: time,
+                    last_reset_timestamp: time
                   };
                   
                   chrome.storage.local.set({
@@ -1842,7 +1852,6 @@ document.addEventListener('DOMContentLoaded', function() {
               ${domain}
               ${isActive ? '<span class="active-indicator">● Active</span>' : ''}
             </div>
-            <div class="domain-timer ${statusClass}">${statusText}</div>
           </div>
           <div class="domain-buttons">
             <button class="override-btn" data-domain="${domain}" title="Reset timer and override block">Override</button>

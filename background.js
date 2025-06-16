@@ -541,7 +541,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             last_accessed: now.toISOString(),
             updated_at: now.toISOString(),
             last_reset_date: getTodayString(),
-            is_paused: request.isPaused || false
+            is_paused: request.isPaused || false,
+            last_reset_timestamp: existingSite?.last_reset_timestamp 
           };
 
           // If timer has reached zero, mark as blocked
