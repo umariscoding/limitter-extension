@@ -2110,9 +2110,10 @@
         if (pollingInterval) {
             clearInterval(pollingInterval);
         }
-        if(document.URL.includes(currentDomain)) {
-        console.log("starting timer polling")
             pollingInterval = setInterval(async () => {
+                if(document.visibilityState == "hidden") {
+                    return;
+                }
                 if (!currentDomain || !isEnabled || isInitializing || !hasLoadedFromFirebase) {
                     return;
                 }
@@ -2178,8 +2179,8 @@
                 } catch (error) {
                     console.error('Timer polling error:', error);
                 }
-            }, 5000); // 5 seconds interval
-        }
+        }, 5000); // 5 seconds interval
+        
     }
     
     function stopTimerPolling() {
