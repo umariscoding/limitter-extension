@@ -677,7 +677,7 @@ class FirebaseRealtimeDB {
     return domain.replace(/^www\./, '').toLowerCase().replace(/\./g, '_');
   }
 
-  // Get all blocked sites
+  // Get blocked sites for current user using indexed query
   async getBlockedSites() {
     try {
       const user = this.auth.getCurrentUser();
@@ -685,7 +685,8 @@ class FirebaseRealtimeDB {
         throw new Error("User not authenticated");
       }
 
-      const url = `${this.databaseURL}/blockedSites.json?auth=${user.idToken}`;
+      // Use indexed query to filter by user_id
+      const url = `${this.databaseURL}/blockedSites.json?auth=${user.idToken}&orderBy="user_id"&equalTo="${user.uid}"`;
       const response = await fetch(url, {
         method: "GET",
         headers: this.getAuthHeaders()
@@ -698,7 +699,7 @@ class FirebaseRealtimeDB {
       const data = await response.json();
       if (!data) return [];
 
-      // Convert the data to an array and decode the site IDs
+      // Convert the filtered data to an array and decode the site IDs
       return Object.entries(data).map(([encodedId, siteData]) => ({
         ...siteData,
         id: encodedId,

@@ -397,7 +397,7 @@ document.addEventListener('DOMContentLoaded', function() {
       console.log('User data loaded successfully, domains:', domains);
       
       // Update subscription UI
-      updateSubscriptionUI();
+      await updateSubscriptionUI();
       
       // Update timer inputs for plan
       updateTimerInputsForPlan();
@@ -531,7 +531,28 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Now show the full authenticated state
         showAuthenticatedState(storedUser);
-        startPeriodicUpdates();
+        // startPeriodicUpdates();
+          updateDomainStates();
+      if (!isExtensionContextValid()) {
+        console.warn('Extension context invalid, clearing interval');
+        if (updateInterval) {
+          clearInterval(updateInterval);
+          updateInterval = null;
+        }
+        return;
+      }
+      
+      // Only update if user is authenticated
+      if (!isUserAuthenticated()) {
+        console.warn('User not authenticated, stopping timer updates');
+        if (updateInterval) {
+          clearInterval(updateInterval);
+          updateInterval = null;
+        }
+        return;
+      }
+      
+      updateDomainStates();
       } else {
         showUnauthenticatedState();
       }
@@ -560,13 +581,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
   
-  function showAuthenticatedState(user) {
+  async function showAuthenticatedState(user) {
     authContent.classList.add('authenticated');
     userSection.style.display = 'block';
     mainContent.classList.add('authenticated');
     userEmail.textContent = user.email;
     hideAuthError();
-    updateSubscriptionUI();
+    await updateSubscriptionUI();
     updateTimerInputsForPlan();
   }
   
@@ -638,8 +659,29 @@ document.addEventListener('DOMContentLoaded', function() {
       ]);
       
       // Now show the full authenticated state
+      updateDomainStates();
       showAuthenticatedState(user);
-      startPeriodicUpdates();
+      if (!isExtensionContextValid()) {
+        console.warn('Extension context invalid, clearing interval');
+        if (updateInterval) {
+          clearInterval(updateInterval);
+          updateInterval = null;
+        }
+        return;
+      }
+      
+      // Only update if user is authenticated
+      if (!isUserAuthenticated()) {
+        console.warn('User not authenticated, stopping timer updates');
+        if (updateInterval) {
+          clearInterval(updateInterval);
+          updateInterval = null;
+        }
+        return;
+      }
+      
+      updateDomainStates();
+      // startPeriodicUpdates();
       
     } catch (error) {
       console.error('Login error:', error);
@@ -1068,9 +1110,9 @@ document.addEventListener('DOMContentLoaded', function() {
             
             try {
               realtimeDB.listenToBlockedSite(siteId, (updatedSiteData) => {
-                console.log(`Firebase Realtime Update - Site: ${site.url}, override_active: ${updatedSiteData.override_active}`);
+                console.log(`🔥 Firebase Update: ${site.url}`, updatedSiteData);
                 
-                // Check if override_active property changed
+                // Handle override changes
                 if (updatedSiteData.override_active !== undefined) {
                   console.log(`Override active changed for ${site.url}: ${updatedSiteData.override_active}`);
                   
@@ -1116,8 +1158,8 @@ document.addEventListener('DOMContentLoaded', function() {
                       isActive: true
                     };
                     
-                    // Re-render the domains list to show updated state
-                    renderDomainsList();
+                    // Re-render the domains list with skipSubscriptionUpdate=true to prevent loops
+                    renderDomainsList(true);
                     
                     console.log(`Domains object and Chrome sync storage updated for ${site.url}`);
                     
@@ -1538,10 +1580,14 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
-      // Check if user has overrides available
+      // Check if user has overrides availabl
+      // e
+      console.log("userOverrides", userOverrides)
       if (userOverrides.overrides <= 0) {
         // No overrides available - redirect to checkout
-        window.location.href = 'http://localhost:3000/checkout?overrides=1';
+        console.log("No overrides available - opening checkout in new tab")
+        chrome.tabs.create({ url: 'http://localhost:3001/checkout?overrides=1' });
+        window.close(); // Close the popup after opening the new tab
         return;
       }
 
@@ -1568,91 +1614,31 @@ document.addEventListener('DOMContentLoaded', function() {
     const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
     const siteId = `${userId}_${formattedDomain}`;
 
-    // Get existing site data
-    const existingSite = await realtimeDB.getBlockedSite(siteId);
-    if (!existingSite) {
-      showError('Site not found in database');
-      return;
-    }
-
-    console.log("setting override")
-    // Create updated site data with reset timer and override active
-    const now = new Date();
-    const updatedSiteData = {
-      ...existingSite,
-      time_remaining: originalTimeLimit, // Reset to original time limit
-      time_limit: originalTimeLimit,
-      override_active: true, // Set override active
-      override_initiated_by: userId,
-      override_initiated_at: now.toISOString(),
-      is_blocked: false, // Unblock the site
-      blocked_until: null, // Clear blocked until
-      updated_at: now.toISOString(),
-      last_accessed: now.toISOString()
-    };
-
-    // Update Firebase Realtime Database
-    await realtimeDB.addBlockedSite(siteId, updatedSiteData);
-
-    // Set timeout to clear override after 3 seconds
-    setTimeout(async () => {
-      try {
-        console.log("clearing override")
-        const clearedOverrideData = {
-          ...updatedSiteData,
-          override_active: false,
-          override_initiated_by: null,
-          override_initiated_at: null,
-          updated_at: new Date().toISOString()
-        };
-        await realtimeDB.addBlockedSite(siteId, clearedOverrideData);
-        console.log(`Override cleared for ${domain} after 3 seconds`);
-      } catch (error) {
-        console.error('Error clearing override:', error);
+    try {
+      // Get existing site data
+      const existingSite = await realtimeDB.getBlockedSite(siteId);
+      if (!existingSite) {
+        showError('Site not found in database');
+        return;
       }
-    }, 3000);
 
-    // Create override history record
-    const historyId = crypto.randomUUID();
-    const historyData = {
-      user_id: userId,
-      site_url: domain,
-      timestamp: now.toISOString(),
-      month: now.toISOString().slice(0, 7),
-      override_type: userPlan === 'elite' ? 'unlimited' : 'override',
-      plan: userPlan,
-      created_at: now.toISOString()
-    };
-
-    await firestore.createOverrideHistory(historyId, historyData);
-
-    // Update user overrides if not elite
-    if (userPlan !== 'elite') {
-      const userOverrides = await firestore.getUserOverrides(userId);
-      const currentMonth = now.toISOString().slice(0, 7);
-      const monthlyStats = userOverrides?.monthly_stats || {};
-      const thisMonthStats = monthlyStats[currentMonth] || {
-        overrides_used: 0,
-        total_spent_this_month: 0
+      console.log("setting override");
+      // Create updated site data with reset timer and override active
+      const now = new Date();
+      const updatedSiteData = {
+        ...existingSite,
+        time_remaining: originalTimeLimit, // Reset to original time limit
+        time_limit: originalTimeLimit,
+        override_active: true, // Set override active
+        override_initiated_by: userId,
+        override_initiated_at: now.toISOString(),
+        is_blocked: false, // Unblock the site
+        blocked_until: null, // Clear blocked until
+        updated_at: now.toISOString(),
+        last_accessed: now.toISOString()
       };
 
-      // Update stats
-      thisMonthStats.overrides_used++;
-      
-      await firestore.updateUserOverrides(userId, {
-        overrides: Math.max(0, (userOverrides?.overrides || 0) - 1),
-        overrides_used_total: (userOverrides?.overrides_used_total || 0) + 1,
-        monthly_stats: {
-          ...monthlyStats,
-          [currentMonth]: thisMonthStats
-        },
-        updated_at: now.toISOString()
-      });
-    }
-
-    // Clear daily block in Chrome storage
-    clearDailyBlock(domain);
-
+      // First update local state
       // Reset timer state in Chrome storage
       const timerKey = `timerState_${domain}`;
       const resetTimerState = {
@@ -1669,15 +1655,62 @@ document.addEventListener('DOMContentLoaded', function() {
         time_limit: originalTimeLimit
       };
 
-      safeChromeCall(() => {
-        chrome.storage.local.set({
-          [timerKey]: resetTimerState
+      // Update Chrome storage first
+      await new Promise((resolve) => {
+        safeChromeCall(() => {
+          chrome.storage.local.set({
+            [timerKey]: resetTimerState
+          }, resolve);
         });
       });
 
+      // Clear daily block in Chrome storage
+      await clearDailyBlock(domain);
+
+      // Update Firebase Realtime Database
+      await realtimeDB.addBlockedSite(siteId, updatedSiteData);
+
+      // Create override history record
+      const historyId = crypto.randomUUID();
+      const historyData = {
+        user_id: userId,
+        site_url: domain,
+        timestamp: now.toISOString(),
+        month: now.toISOString().slice(0, 7),
+        override_type: userPlan === 'elite' ? 'unlimited' : 'override',
+        plan: userPlan,
+        created_at: now.toISOString()
+      };
+
+      await firestore.createOverrideHistory(historyId, historyData);
+
+      // Update user overrides if not elite
+      if (userPlan !== 'elite') {
+        const userOverrides = await firestore.getUserOverrides(userId);
+        const currentMonth = now.toISOString().slice(0, 7);
+        const monthlyStats = userOverrides?.monthly_stats || {};
+        const thisMonthStats = monthlyStats[currentMonth] || {
+          overrides_used: 0,
+          total_spent_this_month: 0
+        };
+
+        // Update stats
+        thisMonthStats.overrides_used++;
+        
+        await firestore.updateUserOverrides(userId, {
+          overrides: Math.max(0, (userOverrides?.overrides || 0) - 1),
+          overrides_used_total: (userOverrides?.overrides_used_total || 0) + 1,
+          monthly_stats: {
+            ...monthlyStats,
+            [currentMonth]: thisMonthStats
+          },
+          updated_at: now.toISOString()
+        });
+      }
+
       // Update the domains object and save to Chrome sync storage
       domains[domain] = originalTimeLimit;
-      saveDomains();
+      await saveDomains();
 
       domainStates[domain] = {
         status: 'running',
@@ -1685,20 +1718,73 @@ document.addEventListener('DOMContentLoaded', function() {
         isActive: true
       };
 
-      safeChromeCall(() => {
-        chrome.runtime.sendMessage({
-          action: 'domainOverrideActivated',
-          domain: domain,
-          timeLimit: originalTimeLimit
+      // Notify content script about override
+      await new Promise((resolve) => {
+        safeChromeCall(() => {
+          chrome.runtime.sendMessage({
+            action: 'domainOverrideActivated',
+            domain: domain,
+            timeLimit: originalTimeLimit
+          }, resolve);
         });
       });
+
+      // Set timeout to clear override after 3 seconds
+      setTimeout(async () => {
+        try {
+          console.log("clearing override");
+          const clearedOverrideData = {
+            ...updatedSiteData,
+            override_active: false,
+            override_initiated_by: null,
+            override_initiated_at: null,
+            updated_at: new Date().toISOString()
+          };
+
+          // Update Firebase first
+          await realtimeDB.addBlockedSite(siteId, clearedOverrideData);
+
+          // Then update local storage
+          await new Promise((resolve) => {
+            safeChromeCall(() => {
+              chrome.storage.local.get([timerKey], (result) => {
+                if (result[timerKey]) {
+                  const updatedState = {
+                    ...result[timerKey],
+                    override_active: false,
+                    override_initiated_by: null,
+                    override_initiated_at: null,
+                    timestamp: Date.now()
+                  };
+                  
+                  chrome.storage.local.set({
+                    [timerKey]: updatedState
+                  }, () => {
+                    console.log(`Chrome local storage updated for ${domain} - override cleared`);
+                    resolve();
+                  });
+                } else {
+                  resolve();
+                }
+              });
+            });
+          });
+
+          console.log(`Override cleared for ${domain} after 3 seconds`);
+        } catch (error) {
+          console.error('Error clearing override:', error);
+        }
+      }, 2000);
 
       renderDomainsList();
       updateStats();
       
       showFeedback(`Override activated for ${domain} - timer reset to ${formatTime(originalTimeLimit)}`);
 
-   
+    } catch (error) {
+      console.error('Error in processOverride:', error);
+      showError('Failed to process override');
+    }
   }
 
 
@@ -1707,7 +1793,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
   
-  async function renderDomainsList() {
+  async function renderDomainsList(skipSubscriptionUpdate = false) {
+    console.log("rendering domains list")
     const domainKeys = Object.keys(domains);
     
     if (domainKeys.length === 0) {
@@ -1730,37 +1817,22 @@ document.addEventListener('DOMContentLoaded', function() {
     const newDomains = sortedDomains.filter(domain => !previousDomainOrder.includes(domain));
     
     domainsList.innerHTML = sortedDomains.map(domain => {
-      const state = domainStates[domain] || { status: 'ready', timeRemaining: domains[domain], isActive: false };
+      const state = domainStates[domain] || { status: 'unknown', timeRemaining: 0 };
       const isActive = domain === activeDomain;
       const isNewlyAdded = newDomains.includes(domain);
-      
-      // console.log('Domain state:', state);
       
       let statusText = '';
       let statusClass = '';
       
-      switch (state.status) {
-        case 'blocked':
-          statusText = 'Blocked today';
-          statusClass = 'status-blocked';
-          break;
-        case 'running':
-          statusText = `⏱️ ${formatTime(state.timeRemaining)} left`;
-          statusClass = 'status-running';
-          break;
-        case 'paused':
-          statusText = `⏸️ ${formatTime(state.timeRemaining)} (paused)`;
-          statusClass = 'status-paused';
-          break;
-        case 'resetting':
-          statusText = '🔄 Resetting Timer...';
-          statusClass = 'status-resetting';
-          break;
-        default:
-          // console.log(state);
-          // For ready state, show the remaining time (which could be full limit or partial if previously used)
-          statusText = `⏰ ${formatTime(state.timeRemaining)}`;
-          statusClass = 'status-ready';
+      if (state.status === 'blocked') {
+        statusText = 'Blocked';
+        statusClass = 'blocked';
+      } else if (state.status === 'running') {
+        statusText = formatTime(state.timeRemaining);
+        statusClass = state.timeRemaining <= 300 ? 'warning' : '';
+      } else {
+        statusText = 'Unknown';
+        statusClass = 'unknown';
       }
       
       return `
@@ -1783,8 +1855,10 @@ document.addEventListener('DOMContentLoaded', function() {
     // Update previous order
     previousDomainOrder = [...sortedDomains];
     
-    // Update subscription UI to reflect domain count changes
-    updateSubscriptionUI();
+    // Update subscription UI only if not skipped
+    if (!skipSubscriptionUpdate) {
+      await updateSubscriptionUI();
+    }
     
     // Remove 'new' class after animation
     setTimeout(() => {

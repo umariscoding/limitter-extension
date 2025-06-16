@@ -21,6 +21,10 @@ console.log('Smart Tab Blocker Background: Checking class availability:', {
   FirebaseSyncService: typeof FirebaseSyncService
 });
 
+// Add at the top with other variables
+const lastUpdateTimestamps = new Map();
+const UPDATE_DEBOUNCE_INTERVAL = 2000; // 2 seconds
+
 async function initializeAuth() {
   try {
     try {
@@ -504,7 +508,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       // Format domain and create site ID
       const timerDomain = request.domain.replace(/^www\./, '').toLowerCase();
       const formattedTimerDomain = realtimeDB.formatDomainForFirebase(timerDomain);
-      const timerSiteId = `${currentUser.uid}_${formattedTimerDomain}`;
+      const user = firebaseAuth.getCurrentUser();
+      if (!user) {
+        sendResponse({ success: false, error: 'Not authenticated' });
+        break;
+      }
+      const timerSiteId = `${user.uid}_${formattedTimerDomain}`;
 
       // First get existing site data to compare times
       realtimeDB.getBlockedSite(timerSiteId).then(existingSite => {
@@ -520,7 +529,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           // Create site data for Realtime Database
           const now = new Date();
           const siteData = {
-            user_id: currentUser.uid,
+            user_id: user.uid,
             url: timerDomain,
             time_remaining: request.timeRemaining,
             time_limit: request.time_limit || request.gracePeriod,
@@ -1059,6 +1068,8 @@ function setupDomainListener(domain) {
       // Handle override changes
       if (updatedData.override_active !== undefined) {
         handleOverrideChange(cleanDomain, updatedData);
+        // Skip other handlers when handling override to prevent loops
+        return;
       }
       
       // Handle tab switch changes
@@ -1091,34 +1102,40 @@ function setupDomainListener(domain) {
 }
 
 // Handle override changes
-function handleOverrideChange(domain, updatedData) {
-  console.log(`🔄 Override change for ${domain}:`, updatedData.override_active);
+async function handleOverrideChange(domain, updatedData) {
+  const now = Date.now();
+  const lastUpdate = lastUpdateTimestamps.get(domain) || 0;
   
-  // Notify content scripts on tabs with this domain
-  chrome.tabs.query({}, (tabs) => {
-    tabs.forEach(tab => {
-      if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
-        try {
-          const hostname = new URL(tab.url).hostname.toLowerCase();
-          const cleanHostname = hostname.replace(/^www\./, '');
-          
-          if (cleanHostname === domain || hostname === domain) {
-            console.log(`Notifying tab ${tab.id} of override_active change for ${domain}`);
-            chrome.tabs.sendMessage(tab.id, {
-              action: 'overrideActiveChanged',
-              domain: domain,
-              override_active: updatedData.override_active,
-              data: updatedData
-            }).catch((error) => {
-              console.log(`Could not notify tab ${tab.id}:`, error);
-            });
-          }
-        } catch (error) {
-          // Invalid URL, ignore
-        }
-      }
-    });
-  });
+  // Debounce updates
+  if (now - lastUpdate < UPDATE_DEBOUNCE_INTERVAL) {
+    console.log(`🔄 Skipping override update for ${domain}, too soon after last update`);
+    return;
+  }
+  
+  lastUpdateTimestamps.set(domain, now);
+  
+  // Rest of override handling logic
+  console.log(`🔄 OVERRIDE: Override change detected for ${domain}`);
+  console.log("updatedData", updatedData);
+  
+  // Get local timer state
+  const localTimerState = await getTimerStateForDomain(domain);
+  
+  if (localTimerState) {
+    // Update local timer state with override data
+    localTimerState.override_active = updatedData.override_active;
+    localTimerState.override_initiated_by = updatedData.override_initiated_by;
+    localTimerState.override_initiated_at = updatedData.override_initiated_at;
+    
+    // Update time remaining only if override is active
+    if (updatedData.override_active) {
+      localTimerState.timeRemaining = updatedData.time_limit;
+      localTimerState.gracePeriod = updatedData.time_limit;
+    }
+    
+    // Update local timer state
+    await updateLocalTimers(domain, localTimerState.timeRemaining);
+  }
 }
 
 // Handle tab switch synchronization (simplified with unified functions)
@@ -1280,45 +1297,57 @@ async function updateLocalTimers(domain, timeRemaining) {
   });
 }
 
-// Unified timer synchronization logic
+// Sync timer states between local and Firebase
 async function syncTimerStates(domain, localTime, firebaseTime, siteId, options = {}) {
-  const { 
-    updateFirebase = true, 
-    updateLocal = true, 
+  const {
+    updateFirebase = true,
+    updateLocal = true,
     timeDifferenceThreshold = 5,
     source = 'unknown'
   } = options;
-  
-  console.log(`🔍 Timer sync (${source}): Domain=${domain}`);
-  console.log(`  Local: ${localTime}s, Firebase: ${firebaseTime}s`);
-  
-  const minTime = Math.min(Math.max(0, localTime), Math.max(0, firebaseTime));
-  const timeDifference = Math.abs(firebaseTime - localTime);
-  
-  console.log(`  Minimum: ${minTime}s, Difference: ${timeDifference}s`);
-  
-  // Update local if needed
-  if (updateLocal && minTime !== localTime) {
-    console.log(`✅ Syncing local timer to minimum: ${minTime}s`);
-    await updateLocalTimers(domain, minTime);
-  } else if (updateLocal) {
-    console.log(`✅ Local timer already at minimum: ${minTime}s`);
-  }
-  
-    try {
-      if (timeDifference <= timeDifferenceThreshold) {
-        await realtimeDB.updateSiteTabSwitch(siteId, { timeRemaining: minTime });
 
-      } else {
-        // Large difference - use synced timer update
-        console.log(`⚠️ Large difference (${timeDifference}s) - using synced timer update`);
+  console.log(`🔄 SYNC: Syncing timers for ${domain} (source: ${source})`);
+  console.log(`Local: ${localTime}s, Firebase: ${firebaseTime}s`);
+
+  try {
+    // Get current site data to check override status
+    const siteData = await realtimeDB.getSiteData(siteId);
+    const isOverrideActive = siteData?.override_active === true;
+
+    // If this is not an override, never increase time in Firebase
+    if (!isOverrideActive) {
+      // Use the minimum time between local and Firebase
+      const minTime = Math.min(localTime, firebaseTime);
+      console.log(`Using minimum time: ${minTime}s (override not active)`);
+
+      if (updateLocal) {
+        await updateLocalTimers(domain, minTime);
+      }
+
+      if (updateFirebase && Math.abs(firebaseTime - minTime) > timeDifferenceThreshold) {
         await realtimeDB.updateSiteSyncedTimer(siteId, minTime);
       }
-    } catch (error) {
-      console.error('❌ Error updating Firebase:', error);
+
+      return minTime;
+    } else {
+      // For overrides, allow time increase but still sync between devices
+      console.log(`Override active - allowing time increase`);
+      const syncedTime = localTime;
+
+      if (updateLocal) {
+        await updateLocalTimers(domain, syncedTime);
+      }
+
+      if (updateFirebase && Math.abs(firebaseTime - syncedTime) > timeDifferenceThreshold) {
+        await realtimeDB.updateSiteSyncedTimer(siteId, syncedTime);
+      }
+
+      return syncedTime;
     }
-  
-  return minTime;
+  } catch (error) {
+    console.error(`❌ Error during timer sync for ${domain}:`, error);
+    return localTime; // Default to local time on error
+  }
 }
 
 // Helper function for backward compatibility
@@ -1430,7 +1459,9 @@ async function handleTabSwitch(tabId) {
       } else {
         // No Firebase time, just send tab switch update with local time
         console.log(`📤 No Firebase time found, sending tab switch with local time: ${localTimeRemaining}s`);
-        await realtimeDB.updateSiteTabSwitch(siteId, { timeRemaining: localTimeRemaining });
+        await realtimeDB.updateSiteTabSwitch(siteId, { 
+          timeRemaining: localTimeRemaining // Explicitly pass local time
+        });
       }
     } else {
       console.log(`❌ No timer state found for ${domainInfo.domain}, just creating tab switch event`);
