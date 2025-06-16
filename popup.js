@@ -1993,7 +1993,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
   
   // Subscription functions
-  function showSubscriptionModal() {
+  async function showSubscriptionModal() {
     renderSubscriptionPlans();
     subscriptionModal.style.display = 'flex';
   }
@@ -2056,7 +2056,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
   
-  function updateSubscriptionUI() {
+  async function updateSubscriptionUI() {
     const status = subscriptionService.getSubscriptionStatus();
     const currentDomainCount = Object.keys(domains).length;
     
@@ -2096,18 +2096,17 @@ document.addEventListener('DOMContentLoaded', function() {
       if (status.planId === 'free') {
         limitsText += ' • 1-hour timers only';
       }
+      console.log("userProfile", userProfile)
       
+      const user = firebaseAuth.getCurrentUser();
+      const userOverrides = await firestore.getUserOverrides(user.uid);
       // Add override information
+      console.log("userOverrides", userOverrides)
       if (userProfile) {
-        const totalOverrides = userProfile.total_overrides || userProfile.overrides || 0;
-        const freeOverrides = status.limits.freeOverrides;
-        
-        if (freeOverrides === -1) {
+        if (userOverrides.overrides === -1) {
           limitsText += ' • Unlimited overrides';
-        } else if (totalOverrides > 0) {
-          limitsText += ` • ${totalOverrides} overrides remaining`;
-        } else if (freeOverrides > 0) {
-          limitsText += ` • ${freeOverrides} free overrides/month`;
+        } else if (userOverrides.overrides > 0) {
+          limitsText += ` • ${userOverrides.overrides} overrides remaining`;
         } else {
           limitsText += ' • No overrides remaining';
         }
