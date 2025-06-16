@@ -80,7 +80,7 @@ class FirebaseSyncService {
         siteData.blocked_until = new Date(now.setHours(23, 59, 59, 999)).toISOString();
       }
 
-      await realtimeDB.addBlockedSite(siteId, siteData);
+      await this.firestore.updateBlockedSite(siteId, siteData);
       return true;
     } catch (error) {
       console.error('Firebase Sync Service: Realtime DB sync error:', error);

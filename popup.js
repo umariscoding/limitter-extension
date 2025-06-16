@@ -187,8 +187,10 @@ document.addEventListener('DOMContentLoaded', function() {
       sendResponse({ displayed: true });
     } else if (message.action === 'triggerDomainListRefresh') {
       // console.log('Limitter Popup: Refreshing domain list due to deactivation');
-      loadDomainsFromFirestore().then(() => {
-        renderDomainsList();
+      console.log("refreshing domain list")
+      loadDomainsFromFirestore().then(async () => {
+        await updateSubscriptionUI(); // Update subscription UI first
+        renderDomainsList(false); // Then render domains with subscription update
       }).catch(error => {
         console.log('Error refreshing domain list:', error);
       });
@@ -1404,7 +1406,7 @@ document.addEventListener('DOMContentLoaded', function() {
           last_reset_timestamp: existingSite.last_reset_timestamp
         };
         
-        await realtimeDB.addBlockedSite(siteId, reactivatedSiteData);
+        await firestore.updateBlockedSite(siteId, reactivatedSiteData);
         
         // Add to local domains with existing time_limit
         domains[cleanDomain] = existingSite.time_limit;
@@ -1486,7 +1488,6 @@ document.addEventListener('DOMContentLoaded', function() {
       }
 
       // Format domain for Firebase
-      // const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
       const siteId = `${user.uid}_${domain}`;
 
       console.log(`Removing domain ${domain} from both local storage and Firebase (siteId: ${siteId})`);
@@ -1496,43 +1497,31 @@ document.addEventListener('DOMContentLoaded', function() {
       delete domainStates[domain];
       saveDomains();
 
-      // Remove from both Firestore (mark as inactive) and Realtime Database (delete completely)
-      await Promise.all([
-        // Mark as inactive in Firestore
-        // removeDomainFromFirestore(domain),
-        
-        // Set is_active: false in Realtime Database so other devices can detect the change
-        (async () => {
-          try {
-            // const existingSite = await realtimeDB.getBlockedSite(siteId);
-            const existingSite = await firestore.getBlockedSite(siteId);
-            if (existingSite) {
-              const updatedSiteData = {
-                ...existingSite,
-                is_active: false,
-                updated_at: new Date().toISOString(),
-                last_reset_timestamp: existingSite.last_reset_timestamp
-              };
-              
-              await firestore.updateBlockedSite(siteId, updatedSiteData);
-              // await realtimeDB.addBlockedSite(siteId, updatedSiteData);
-              console.log(`Successfully set is_active: false for ${domain} in Realtime Database`);
-            } else {
-              console.log(`No existing site found for ${domain} in Realtime Database`);
-            }
-          } catch (error) {
-            console.error(`Error setting is_active: false for ${domain} in Realtime Database:`, error);
-            // Don't throw here - we still want to continue with other cleanup
-          }
-        })()
-      ]);
+      // Remove from Firestore (mark as inactive)
+      try {
+        const existingSite = await firestore.getBlockedSite(siteId);
+        if (existingSite) {
+          const updatedSiteData = {
+            ...existingSite,
+            is_active: false,
+            updated_at: new Date().toISOString(),
+            last_reset_timestamp: existingSite.last_reset_timestamp
+          };
+          
+          await firestore.updateBlockedSite(siteId, updatedSiteData);
+          console.log(`Successfully set is_active: false for ${domain} in Firestore`);
+        } else {
+          console.log(`No existing site found for ${domain} in Firestore`);
+        }
+      } catch (error) {
+        console.error(`Error setting is_active: false for ${domain} in Firestore:`, error);
+      }
 
       // Clear local timer states
       clearDailyBlock(domain);
       stopTrackingDomain(domain);
 
-      // Notify background script to reload tabs for this domain across all devices
-      // This ensures inactive tabs also stop tracking the removed domain
+      // Notify background script to reload tabs for this domain
       safeChromeCall(() => {
         chrome.runtime.sendMessage({ 
           action: 'domainRemoved', 
@@ -1540,8 +1529,12 @@ document.addEventListener('DOMContentLoaded', function() {
         });
       });
 
-      renderDomainsList();
-      updateStats();
+      // Update all UI elements in sequence
+      await updateDomainStates();
+      await updateStats();
+      await updateSubscriptionUI();
+      await renderDomainsList(false); // Force subscription UI update
+
       showFeedback(`Deactivated ${domain} - all devices will immediately stop tracking this domain`);
       
     } catch (error) {
@@ -1956,6 +1949,7 @@ document.addEventListener('DOMContentLoaded', function() {
           domains = changes.blockedDomains.newValue || {};
           updateDomainStates();
           updateStats();
+          updateSubscriptionUI(); // Add this to update subscription UI on storage changes
         }
       } else if (area === 'local') {
         // Timer states changed, update display
@@ -2088,7 +2082,7 @@ document.addEventListener('DOMContentLoaded', function() {
       // Update plan limits
       const maxDomains = status.limits.maxDomains;
       let limitsText = '';
-      
+
       if (maxDomains === -1) {
         limitsText = 'Unlimited domains';
         domainUsage.textContent = `${currentDomainCount} domains`;

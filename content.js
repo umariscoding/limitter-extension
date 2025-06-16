@@ -2128,7 +2128,20 @@
                     if (!response || !response.success || !response.timerState) {
                         return;
                     }
-                    console.log("response", response)
+
+                    if(!response.timerState.isActive) {
+                        clearDailyBlock(currentDomain);
+                        stopCountdownTimer();
+                        clearTimerState();
+                        hideTimer();
+                        hideModal();
+                        chrome.runtime.sendMessage({
+                            action: 'triggerDomainListRefresh'
+                        });
+                        pollingInterval = null;
+                        return;
+                        
+                    }
                     const firestoreState = response.timerState;
                     const firestoreTime = firestoreState.time_remaining;
                     
@@ -2137,17 +2150,14 @@
                         console.log(`Timer Polling - Local: ${timeRemaining}s, Firestore: ${firestoreTime}s`);
                     
                         if(response.timerState.override_active || ((response.timerState.last_reset_timestamp > lastResetTimestamp) && (lastResetTimestamp !== undefined)) ) {
-                            console.log("override active SA")
                             currentOverrideActive = response.timerState.override_active;
                             currentOverrideInitiatedBy = response.timerState.override_initiated_by;
                             currentOverrideInitiatedAt = response.timerState.override_initiated_at;
-                            console.log("last reset timestamp ", response.timerState.last_reset_timestamp, lastResetTimestamp)
                             lastResetTimestamp = response.timerState.last_reset_timestamp;
                             timeRemaining = firestoreTime;
                             saveTimerState();
                             updateTimerDisplay();
                             startCountdownTimer();
-                            return;
                         }
 
                         if (timeRemaining < firestoreTime) {
