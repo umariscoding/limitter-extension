@@ -139,4 +139,4 @@ To test the error handling:
 
 ## Conclusion
 
-These improvements ensure the Smart Tab Blocker extension provides a reliable user experience even when external services are unavailable. The extension gracefully degrades functionality while preserving user data and providing clear communication about any issues. 
+These improvements ensure the Limitter extension provides a reliable user experience even when external services are unavailable. The extension gracefully degrades functionality while preserving user data and providing clear communication about any issues. 

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Smart Tab Blocker",
+  "name": "Limitter",
   "version": "2.0",
   "description": "Block any website with configurable timers. Smart tracking that pauses when you switch tabs.",
   "permissions": [
@@ -31,7 +31,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Smart Tab Blocker",
+    "default_title": "Limitter",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

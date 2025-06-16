@@ -1,4 +1,4 @@
-// Smart Tab Blocker Subscription Service
+// Limitter Subscription Service
 
 class SubscriptionService {
   constructor(firebaseAuth, firestore) {

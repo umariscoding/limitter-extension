@@ -1,4 +1,4 @@
-# Smart Tab Blocker Chrome Extension
+# Limitter Chrome Extension
 
 A Chrome extension that helps you stay focused by blocking any website with configurable timers. Features smart tracking that pauses when you switch tabs and resumes when you return, with individual timers for each domain.
 

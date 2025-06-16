@@ -99,12 +99,12 @@ class FirebaseSyncService {
 
     if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
       this.showUserNotification(
-        'Smart Tab Blocker is experiencing sync issues. Please try reinstalling the extension.',
+        'Limitter is experiencing sync issues. Please try reinstalling the extension.',
         true
       );
     } else if (this.consecutiveErrors >= 3) {
       this.showUserNotification(
-        'Smart Tab Blocker sync is temporarily unavailable. Your data will be saved locally.',
+        'Limitter sync is temporarily unavailable. Your data will be saved locally.',
         false
       );
     }

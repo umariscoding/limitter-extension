@@ -1,4 +1,4 @@
-// Smart Tab Blocker Popup Script
+// Limitter Popup Script
 
 // Check if extension context is valid
 function isExtensionContextValid() {
@@ -168,7 +168,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // Listen for notification messages from background script
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'displayNotification') {
-      // console.log('Smart Tab Blocker Popup: Received notification:', message);
+      // console.log('Limitter Popup: Received notification:', message);
       
              if (message.isError) {
          showError(message.message);
@@ -186,7 +186,7 @@ document.addEventListener('DOMContentLoaded', function() {
       
       sendResponse({ displayed: true });
     } else if (message.action === 'triggerDomainListRefresh') {
-      // console.log('Smart Tab Blocker Popup: Refreshing domain list due to deactivation');
+      // console.log('Limitter Popup: Refreshing domain list due to deactivation');
       loadDomainsFromFirestore().then(() => {
         renderDomainsList();
       }).catch(error => {
@@ -275,7 +275,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <ol style="text-align: left; margin: 0 0 20px 0; padding-left: 20px;">
         <li>Close this popup</li>
         <li>Go to chrome://extensions/</li>
-        <li>Find "Smart Tab Blocker" and click "Remove"</li>
+        <li>Find "Limitter" and click "Remove"</li>
         <li>Reinstall the extension from the Chrome Web Store</li>
         <li>Sign in again with your account</li>
       </ol>
@@ -731,19 +731,19 @@ document.addEventListener('DOMContentLoaded', function() {
   // Clear all Chrome storage data on logout
   async function clearAllChromeStorageData() {
     return new Promise((resolve) => {
-      // console.log('Smart Tab Blocker: Clearing all Chrome storage data on logout');
+      // console.log('Limitter: Clearing all Chrome storage data on logout');
       
       // Clear sync storage (blocked domains)
       safeChromeCall(() => {
         chrome.storage.sync.clear(() => {
-          console.log('Smart Tab Blocker: Sync storage cleared');
+          console.log('Limitter: Sync storage cleared');
         });
       });
       
       // Clear local storage (timer states, daily blocks, etc.)
       safeChromeCall(() => {
         chrome.storage.local.clear(() => {
-          console.log('Smart Tab Blocker: Local storage cleared');
+          console.log('Limitter: Local storage cleared');
           resolve();
         });
       });
@@ -1244,7 +1244,7 @@ document.addEventListener('DOMContentLoaded', function() {
               // If this domain is not in our legitimate domains list, mark for removal
               if (!legitimateDomains.includes(domain)) {
                 keysToRemove.push(key);
-                console.log(`Smart Tab Blocker: Marking leftover storage key for removal: ${key}`);
+                console.log(`Limitter: Marking leftover storage key for removal: ${key}`);
               }
             }
           });
@@ -1252,7 +1252,7 @@ document.addEventListener('DOMContentLoaded', function() {
           // Remove leftover keys
           if (keysToRemove.length > 0) {
             chrome.storage.local.remove(keysToRemove, () => {
-              console.log(`Smart Tab Blocker: Cleaned up ${keysToRemove.length} leftover storage entries`);
+              console.log(`Limitter: Cleaned up ${keysToRemove.length} leftover storage entries`);
             });
           }
         });
@@ -1270,7 +1270,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const hostname = new URL(tab.url).hostname.toLowerCase();
             const cleanHostname = hostname.replace(/^www\./, '');
             if (cleanHostname === domain || hostname === domain) {
-              console.log(`Smart Tab Blocker: Sending stop tracking for removed domain ${domain} to tab ${tab.id}`);
+              console.log(`Limitter: Sending stop tracking for removed domain ${domain} to tab ${tab.id}`);
               
               // Send explicit stopTracking message
               chrome.tabs.sendMessage(tab.id, {
@@ -1299,14 +1299,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const blockKey = `dailyBlock_${domain}`;
     const timerKey = `timerState_${domain}`;
     
-    // console.log(`Smart Tab Blocker: Clearing storage for domain: ${domain}`);
+    // console.log(`Limitter: Clearing storage for domain: ${domain}`);
     
     safeChromeCall(() => {
       chrome.storage.local.remove([blockKey, timerKey], () => {
         if (chrome.runtime.lastError) {
           console.error('Storage clear error:', chrome.runtime.lastError);
         } else {
-          console.log(`Smart Tab Blocker: Successfully cleared storage for ${domain}`);
+          console.log(`Limitter: Successfully cleared storage for ${domain}`);
         }
       });
     });

@@ -1,7 +1,7 @@
-# Smart Tab Blocker - Subscription Features
+# Limitter - Subscription Features
 
 ## Overview
-The Smart Tab Blocker extension now includes a comprehensive subscription system with three tiers designed to meet different user needs and usage patterns.
+The Limitter extension now includes a comprehensive subscription system with three tiers designed to meet different user needs and usage patterns.
 
 ## Subscription Tiers
 
@@ -149,4 +149,4 @@ For users experiencing subscription issues:
 
 ---
 
-This subscription system provides a solid foundation for monetizing the Smart Tab Blocker extension while delivering clear value at each tier. 
+This subscription system provides a solid foundation for monetizing the Limitter extension while delivering clear value at each tier. 
