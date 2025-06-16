@@ -507,16 +507,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
       // Format domain and create site ID
       const timerDomain = request.domain.replace(/^www\./, '').toLowerCase();
-      const formattedTimerDomain = realtimeDB.formatDomainForFirebase(timerDomain);
+      // const formattedTimerDomain = realtimeDB.formatDomainForFirebase(timerDomain);
       const user = firebaseAuth.getCurrentUser();
       if (!user) {
         sendResponse({ success: false, error: 'Not authenticated' });
         break;
       }
-      const timerSiteId = `${user.uid}_${formattedTimerDomain}`;
-
+      const timerSiteId = `${user.uid}_${timerDomain}`;
+      
       // First get existing site data to compare times
-      realtimeDB.getBlockedSite(timerSiteId).then(existingSite => {
+      firestore.getBlockedSite(timerSiteId).then(existingSite => {
         // Only proceed if:
         // 1. No existing site (new site)
         // 2. Override is active (allowed to increase time)
@@ -562,7 +562,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           }
 
           // Sync to Realtime Database
-          realtimeDB.addBlockedSite(timerSiteId, siteData)
+          firestore.updateBlockedSite(timerSiteId, siteData)
             .then(() => {
               sendResponse({ success: true });
             })
@@ -688,15 +688,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
       return true; // Keep message channel open for async response
       
-    case 'tabSwitch':
-      // Handle tab switch event
-      handleTabSwitch(request.tabId).then(() => {
-        sendResponse({ success: true });
-      }).catch(error => {
-        console.error('Tab switch error:', error);
-        sendResponse({ success: false, error: error.message });
-      });
-      return true; // Keep message channel open for async response
+    // case 'tabSwitch':
+    //   // Handle tab switch event
+    //   handleTabSwitch(request.tabId).then(() => {
+    //     sendResponse({ success: true });
+    //   }).catch(error => {
+    //     console.error('Tab switch error:', error);
+    //     sendResponse({ success: false, error: error.message });
+    //   });
+    //   return true; // Keep message channel open for async response
+      
+    case 'loadTimerFromFirestore':
+      loadTimerStateFromFirestore(request.domain)
+        .then(timerState => {
+          console.log("timerState", timerState)
+          sendResponse({ success: true, timerState });
+        })
+        .catch(error => {
+          console.error('Error loading timer from Firestore:', error);
+          sendResponse({ success: false, error: error.message });
+        });
+      return true; // Will respond asynchronously
+      
+    case 'syncTimerToFirestore':
+      console.log("syncTimerToFirestore", request)
+      syncTimerStateToFirestore(request.domain, request)
+        .then(() => {
+          sendResponse({ success: true });
+        })
+        .catch(error => {
+          console.error('Error syncing timer to Firestore:', error);
+          sendResponse({ success: false, error: error.message });
+        });
+      return true; // Will respond asynchronously
       
     default:
       sendResponse({ success: false, error: 'Unknown action' });
@@ -933,13 +957,13 @@ async function loadTimerStateFromFirebase(domain) {
     
     // Normalize domain for consistency
     const timerDomain = domain.replace(/^www\./, '').toLowerCase();
-    const formattedTimerDomainForLoad = realtimeDB.formatDomainForFirebase(timerDomain);
-    const timerSiteId = `${userId}_${formattedTimerDomainForLoad}`;
+    // const formattedTimerDomainForLoad = realtimeDB.formatDomainForFirebase(timerDomain);
+    const timerSiteId = `${userId}_${timerDomain}`;
     
     // console.log(`Limitter Background: Loading timer state for ${timerDomain} from Firebase (siteId: ${timerSiteId})`);
     
-    const siteData = await realtimeDB.getBlockedSite(timerSiteId);
-    
+    // const siteData = await realtimeDB.getBlockedSite(timerSiteId);
+    const siteData = await firestore.getBlockedSite(timerSiteId);
     if (siteData) {
       // Check if site is blocked for today
       const today = getTodayString();
@@ -1113,11 +1137,11 @@ function setupDomainListener(domain) {
                 return;
             }
 
-            // Handle tab switch changes
-            if (updatedData.tab_switch_active === true) {
-              console.log("tab_switch_active", updatedData)
-                handleTabSwitchSync(cleanDomain, updatedData);
-            }
+            // // Handle tab switch changes
+            // if (updatedData.tab_switch_active === true) {
+            //   console.log("tab_switch_active", updatedData)
+            //     handleTabSwitchSync(cleanDomain, updatedData);
+            // }
 
             // Handle site opened changes
             if (updatedData.site_opened_active === true) {
@@ -1180,53 +1204,53 @@ async function handleOverrideChange(domain, updatedData) {
   }
 }
 
-// Handle tab switch synchronization (simplified with unified functions)
-async function handleTabSwitchSync(domain, updatedData) {
-  console.log(`🔄 TAB SWITCH: Tab switch detected for ${domain}`);
-  console.log("updatedData", updatedData);
+// // Handle tab switch synchronization (simplified with unified functions)
+// async function handleTabSwitchSync(domain, updatedData) {
+//   console.log(`🔄 TAB SWITCH: Tab switch detected for ${domain}`);
+//   console.log("updatedData", updatedData);
 
-  // Timer synchronization logic
-  const firebaseTimeRemaining = updatedData.time_remaining;
-  console.log(`Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
+//   // Timer synchronization logic
+//   const firebaseTimeRemaining = updatedData.time_remaining;
+//   console.log(`Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
   
-  if (firebaseTimeRemaining !== undefined && firebaseTimeRemaining !== null && typeof firebaseTimeRemaining === 'number') {
-    // Get local timer state using unified function
-    const localTimerState = await getTimerStateForDomain(domain);
+//   if (firebaseTimeRemaining !== undefined && firebaseTimeRemaining !== null && typeof firebaseTimeRemaining === 'number') {
+//     // Get local timer state using unified function
+//     const localTimerState = await getTimerStateForDomain(domain);
     
-    if (localTimerState && typeof localTimerState.timeRemaining === 'number') {
-      // Use unified sync logic
-      const user = firebaseAuth.getCurrentUser();
-      if (user) {
-        const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-        const siteId = `${user.uid}_${formattedDomain}`;
+//     if (localTimerState && typeof localTimerState.timeRemaining === 'number') {
+//       // Use unified sync logic
+//       const user = firebaseAuth.getCurrentUser();
+//       if (user) {
+//         const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+//         const siteId = `${user.uid}_${formattedDomain}`;
         
-        console.log(`🔄 Syncing timers - Local: ${localTimerState.timeRemaining}s, Firebase: ${firebaseTimeRemaining}s`);
+//         console.log(`🔄 Syncing timers - Local: ${localTimerState.timeRemaining}s, Firebase: ${firebaseTimeRemaining}s`);
         
-        await syncTimerStates(domain, localTimerState.timeRemaining, firebaseTimeRemaining, siteId, {
-          updateFirebase: true, // May update Firebase if large difference
-          updateLocal: true,
-          timeDifferenceThreshold: 5,
-          source: 'cross-device'
-        });
+//         await syncTimerStates(domain, localTimerState.timeRemaining, firebaseTimeRemaining, siteId, {
+//           updateFirebase: true, // May update Firebase if large difference
+//           updateLocal: true,
+//           timeDifferenceThreshold: 5,
+//           source: 'cross-device'
+//         });
         
-        console.log(`✅ Cross-device timer sync completed for ${domain}`);
-      } else {
-        console.error('❌ No authenticated user for Firebase update');
-      }
-    } else {
-      console.log(`⚠️ No valid local timer state found for ${domain}`);
-      console.log(`  Will use Firebase time as reference: ${firebaseTimeRemaining}s`);
+//         console.log(`✅ Cross-device timer sync completed for ${domain}`);
+//       } else {
+//         console.error('❌ No authenticated user for Firebase update');
+//       }
+//     } else {
+//       console.log(`⚠️ No valid local timer state found for ${domain}`);
+//       console.log(`  Will use Firebase time as reference: ${firebaseTimeRemaining}s`);
       
-      // No local timer found, but we have Firebase time - update local timers directly
-      console.log(`🔄 Updating local timers with Firebase time: ${firebaseTimeRemaining}s`);
-      await updateLocalTimers(domain, firebaseTimeRemaining);
-      console.log(`✅ Local timers updated with Firebase time for cross-device sync`);
-    }
-  } else {
-    console.log(`⚠️ Invalid Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
-    console.log(`  Tab switch event processed but no valid timer data to sync`);
-  }
-}
+//       // No local timer found, but we have Firebase time - update local timers directly
+//       console.log(`🔄 Updating local timers with Firebase time: ${firebaseTimeRemaining}s`);
+//       await updateLocalTimers(domain, firebaseTimeRemaining);
+//       console.log(`✅ Local timers updated with Firebase time for cross-device sync`);
+//     }
+//   } else {
+//     console.log(`⚠️ Invalid Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
+//     console.log(`  Tab switch event processed but no valid timer data to sync`);
+//   }
+// }
 
 // ===== UNIFIED TIMER SYNCHRONIZATION FUNCTIONS =====
 
@@ -1437,93 +1461,93 @@ async function getDeviceId() {
   });
 }
 
-// Handle tab switch to a tracked domain (simplified with unified functions)
-async function handleTabSwitch(tabId) {
-    console.log(`🔍 handleTabSwitch called for tabId: ${tabId}`);
-    try {
-        // Check prerequisites and attempt recovery if needed
-        if (!realtimeDB || !firebaseAuth || !isAuthenticated) {
-            console.log(`❌ Prerequisites failed - attempting recovery...`);
-            const recovered = await recoverFirebaseServices();
-            if (!recovered) {
-                console.log(`❌ Service recovery failed - cannot proceed with tab switch`);
-                return;
-            }
-        }
+// // Handle tab switch to a tracked domain (simplified with unified functions)
+// async function handleTabSwitch(tabId) {
+//     console.log(`🔍 handleTabSwitch called for tabId: ${tabId}`);
+//     try {
+//         // Check prerequisites and attempt recovery if needed
+//         if (!realtimeDB || !firebaseAuth || !isAuthenticated) {
+//             console.log(`❌ Prerequisites failed - attempting recovery...`);
+//             const recovered = await recoverFirebaseServices();
+//             if (!recovered) {
+//                 console.log(`❌ Service recovery failed - cannot proceed with tab switch`);
+//                 return;
+//             }
+//         }
         
-        const user = firebaseAuth.getCurrentUser();
-        if (!user) {
-            console.log(`❌ No authenticated user`);
-            return;
-        }
+//         const user = firebaseAuth.getCurrentUser();
+//         if (!user) {
+//             console.log(`❌ No authenticated user`);
+//             return;
+//         }
         
-        const tab = await chrome.tabs.get(tabId);
-        console.log(`Tab info:`, { url: tab?.url, title: tab?.title });
+//         const tab = await chrome.tabs.get(tabId);
+//         console.log(`Tab info:`, { url: tab?.url, title: tab?.title });
         
-        if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
-            console.log(`❌ Tab filtered out - invalid URL: ${tab?.url}`);
-            return;
-        }
+//         if (!tab || !tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+//             console.log(`❌ Tab filtered out - invalid URL: ${tab?.url}`);
+//             return;
+//         }
         
-        const domainInfo = isTrackedDomain(tab.url);
-        console.log(`Domain check for ${tab.url}:`, domainInfo);
+//         const domainInfo = isTrackedDomain(tab.url);
+//         console.log(`Domain check for ${tab.url}:`, domainInfo);
         
-        if (!domainInfo) {
-            console.log(`❌ Domain not tracked: ${tab.url}`);
-            return; // Only track sites that are being monitored
-        }
+//         if (!domainInfo) {
+//             console.log(`❌ Domain not tracked: ${tab.url}`);
+//             return; // Only track sites that are being monitored
+//         }
         
-        console.log(`✅ Processing tab switch for tracked domain: ${domainInfo.domain}`);
+//         console.log(`✅ Processing tab switch for tracked domain: ${domainInfo.domain}`);
         
-        const formattedDomain = realtimeDB.formatDomainForFirebase(domainInfo.domain);
-        const siteId = `${user.uid}_${formattedDomain}`;
+//         const formattedDomain = realtimeDB.formatDomainForFirebase(domainInfo.domain);
+//         const siteId = `${user.uid}_${formattedDomain}`;
         
-        // Get current Firebase state
-        console.log(`🔍 Getting current Firebase state for ${domainInfo.domain}`);
-        const firebaseData = await realtimeDB.getSiteData(siteId);
-        const firebaseTimeRemaining = firebaseData?.time_remaining;
+//         // Get current Firebase state
+//         console.log(`🔍 Getting current Firebase state for ${domainInfo.domain}`);
+//         const firebaseData = await realtimeDB.getSiteData(siteId);
+//         const firebaseTimeRemaining = firebaseData?.time_remaining;
         
-        console.log(`Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
+//         console.log(`Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
         
-        // Get local timer state using unified function (prefer the specific tab)
-        const localTimerState = await getTimerStateForDomain(domainInfo.domain, tabId);
+//         // Get local timer state using unified function (prefer the specific tab)
+//         const localTimerState = await getTimerStateForDomain(domainInfo.domain, tabId);
         
-        if (localTimerState && typeof localTimerState.timeRemaining === 'number') {
-            const localTimeRemaining = localTimerState.timeRemaining;
-            console.log(`✅ Got local timer state: ${localTimeRemaining}s`);
+//         if (localTimerState && typeof localTimerState.timeRemaining === 'number') {
+//             const localTimeRemaining = localTimerState.timeRemaining;
+//             console.log(`✅ Got local timer state: ${localTimeRemaining}s`);
             
-            // If we have both local and Firebase times, sync them
-            if (firebaseTimeRemaining !== undefined && firebaseTimeRemaining !== null && typeof firebaseTimeRemaining === 'number') {
-                // Use unified sync logic with device ID for tab switch updates
-                const syncedTime = await syncTimerStates(domainInfo.domain, localTimeRemaining, firebaseTimeRemaining, siteId, {
-                    updateFirebase: true,
-                    updateLocal: true,
-                    timeDifferenceThreshold: 5,
-                    source: 'individual-tab-switch'
-                });
+//             // If we have both local and Firebase times, sync them
+//             if (firebaseTimeRemaining !== undefined && firebaseTimeRemaining !== null && typeof firebaseTimeRemaining === 'number') {
+//                 // Use unified sync logic with device ID for tab switch updates
+//                 const syncedTime = await syncTimerStates(domainInfo.domain, localTimeRemaining, firebaseTimeRemaining, siteId, {
+//                     updateFirebase: true,
+//                     updateLocal: true,
+//                     timeDifferenceThreshold: 5,
+//                     source: 'individual-tab-switch'
+//                 });
                 
-                console.log(`✅ Tab switch sync completed with time: ${syncedTime}s`);
-            } else {
-                // No Firebase time, just send tab switch update with local time
-                console.log(`📤 No Firebase time found, sending tab switch with local time: ${localTimeRemaining}s`);
-                await realtimeDB.updateSiteTabSwitch(siteId, { 
-                    timeRemaining: localTimeRemaining // Explicitly pass local time
-                });
-            }
-        } else {
-            console.log(`❌ No timer state found for ${domainInfo.domain}, just creating tab switch event`);
+//                 console.log(`✅ Tab switch sync completed with time: ${syncedTime}s`);
+//             } else {
+//                 // No Firebase time, just send tab switch update with local time
+//                 console.log(`📤 No Firebase time found, sending tab switch with local time: ${localTimeRemaining}s`);
+//                 await realtimeDB.updateSiteTabSwitch(siteId, { 
+//                     timeRemaining: localTimeRemaining // Explicitly pass local time
+//                 });
+//             }
+//         } else {
+//             console.log(`❌ No timer state found for ${domainInfo.domain}, just creating tab switch event`);
             
-            console.log(`🚀 Calling updateSiteTabSwitch with:`, { timeRemaining: undefined });
-            await realtimeDB.updateSiteTabSwitch(siteId, { 
-                timeRemaining: undefined // Explicitly pass undefined 
-            });
-            console.log(`✅ updateSiteTabSwitch completed successfully`);
-        }
+//             console.log(`🚀 Calling updateSiteTabSwitch with:`, { timeRemaining: undefined });
+//             await realtimeDB.updateSiteTabSwitch(siteId, { 
+//                 timeRemaining: undefined // Explicitly pass undefined 
+//             });
+//             console.log(`✅ updateSiteTabSwitch completed successfully`);
+//         }
         
-    } catch (error) {
-        console.error('Error handling tab switch:', error);
-    }
-}
+//     } catch (error) {
+//         console.error('Error handling tab switch:', error);
+//     }
+// }
 
 // Track previous tab for better tab switch detection
 let previousTabId = null;
@@ -1531,15 +1555,15 @@ let previousTabId = null;
 // Initialize tab switch listener
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   // Handle switching TO the new tab
-  await handleTabSwitch(activeInfo.tabId);
+  // await handleTabSwitch(activeInfo.tabId);
   
   // Handle switching FROM the previous tab (if any)
-  if (previousTabId && previousTabId !== activeInfo.tabId) {
-    await handleTabSwitch(previousTabId);
-  }
+  // if (previousTabId && previousTabId !== activeInfo.tabId) {
+    // await handleTabSwitch(previousTabId);
+  // }
   
   // Update previous tab
-  previousTabId = activeInfo.tabId;
+  // previousTabId = activeInfo.tabId;
 });
 
 // Handle site opened event (fresh tab/reload) with cross-device sync
@@ -1768,3 +1792,132 @@ setInterval(async () => {
         await recoverFirebaseServices();
     }
 }, 60000); // Check every minute
+
+// Load timer state from Firestore
+async function loadTimerStateFromFirestore(domain) {
+  try {
+    if (!firestore || !firebaseAuth) {
+      console.log('Limitter Background: Not authenticated or services not available for Firestore load');
+      return null;
+    }
+    
+    const user = firebaseAuth.getCurrentUser();
+    if (!user) {
+      const storedUser = await firebaseAuth.getStoredAuthData();
+      if (!storedUser) {
+        return null;
+      }
+    }
+    
+    const userId = user?.uid || user?.id;
+    if (!userId) {
+      console.log('Limitter Background: No user ID available for Firestore load');
+      return null;
+    }
+    
+    // Normalize domain for consistency
+    const timerDomain = domain.replace(/^www\./, '').toLowerCase();
+    
+    // Query the blocked_sites collection
+    console.log("userId", userId)
+    console.log("timerDomain", timerDomain)
+    const blockedSitesQuery = await firestore.getCollection('blocked_sites', {
+      where: [
+        ['user_id', '==', userId],
+        ['url', '==', timerDomain]
+      ]
+    });
+    console.log("blockedSitesQuery", blockedSitesQuery)
+    if (blockedSitesQuery && blockedSitesQuery.length > 0) {
+      const siteData = blockedSitesQuery[0];
+      
+      // Check if it's a new day
+      const today = getTodayString();
+      const lastResetDate = siteData.last_reset_date;
+      
+      if (lastResetDate !== today) {
+        return null; // Let timer start fresh for new day
+      }
+      
+      return {
+        time_remaining: siteData.time_remaining,
+        gracePeriod: siteData.time_limit || 20,
+        isActive: siteData.is_active,
+        isPaused: false,
+        timestamp: new Date(siteData.updated_at).getTime(),
+        url: siteData.url,
+        date: today,
+        domain: timerDomain,
+        override_active: siteData.override_active || false,
+        override_initiated_by: siteData.override_initiated_by,
+        override_initiated_at: siteData.override_initiated_at,
+        time_limit: siteData.time_limit
+      };
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Limitter Background: Error loading timer state from Firestore:', error);
+    return null;
+  }
+}
+
+// Sync timer state to Firestore
+async function syncTimerStateToFirestore(domain, timerState) {
+  try {
+    if (!firestore || !firebaseAuth) {
+      throw new Error('Firestore or Auth not available');
+    }
+    
+    const user = firebaseAuth.getCurrentUser();
+    if (!user) {
+      throw new Error('User not authenticated');
+    }
+    
+    const normalizedDomain = domain.replace(/^www\./, '').toLowerCase();
+    const now = new Date();
+    
+    const siteData = {
+      user_id: user.uid,
+      url: normalizedDomain,
+      time_remaining: timerState.timeRemaining,
+      time_limit: timerState.gracePeriod,
+      is_active: timerState.isActive,
+      override_active: timerState.override_active || false,
+      override_initiated_by: timerState.override_initiated_by,
+      override_initiated_at: timerState.override_initiated_at,
+      is_blocked: timerState.timeRemaining <= 0,
+      last_accessed: now,
+      updated_at: now,
+      last_reset_date: getTodayString(),
+      last_reset_timestamp: timerState.last_reset_timestamp || 0,
+      last_sync_timestamp: Date.now()
+    };
+    console.log("siteData in firestore", siteData)
+    // Query existing site document
+    const existingSites = await firestore.getCollection('blocked_sites', {
+      where: [
+        ['user_id', '==', user.uid],
+        ['url', '==', normalizedDomain]
+      ]
+    });
+    
+    if (existingSites && existingSites.length > 0) {
+      // Update existing document using updateBlockedSite
+      const docId = existingSites[0].id;
+      await firestore.updateBlockedSite(docId, siteData);
+    } else {
+      // Create new document using updateBlockedSite with a new ID
+      const newDocId = `${user.uid}_${normalizedDomain}`;
+      await firestore.updateBlockedSite(newDocId, {
+        ...siteData,
+        created_at: now
+      });
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Limitter Background: Error syncing timer state to Firestore:', error);
+    throw error;
+  }
+}

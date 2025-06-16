@@ -415,8 +415,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const user = firebaseAuth.getCurrentUser();
         if (!user) return;
 
-        const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-        const siteId = `${user.uid}_${formattedDomain}`;
+        // const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+        const siteId = `${user.uid}_${domain}`;
         const now = new Date();
         const todayString = getTodayString();
         
@@ -449,8 +449,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Add to both Firestore and Realtime Database
         await Promise.all([
-            // firestore.updateBlockedSite(siteId, siteData),
-            realtimeDB.addBlockedSite(siteId, siteData)
+            firestore.updateBlockedSite(siteId, siteData),
+            // firestore.addBlockedSite(siteId, siteData)
         ]);
 
         // Update user profile stats if we have one
@@ -469,8 +469,8 @@ document.addEventListener('DOMContentLoaded', function() {
       const user = firebaseAuth.getCurrentUser();
       if (!user) return;
 
-      const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-      const siteId = `${user.uid}_${formattedDomain}`;
+      // const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+      const siteId = `${user.uid}_${domain}`;
       
       // First, get the existing site data to preserve it
       const existingSite = await firestore.getBlockedSite(siteId);
@@ -502,7 +502,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
       // Update both Firestore and Realtime Database
       await Promise.all([
-        realtimeDB.addBlockedSite(siteId, siteData)
+        firestore.updateBlockedSite(siteId, siteData),
+        // realtimeDB.addBlockedSite(siteId, siteData)
       ]);
 
       console.log(`Removed domain ${domain} from Firebase (marked as inactive)`);
@@ -1093,7 +1094,8 @@ document.addEventListener('DOMContentLoaded', function() {
       console.log('Loading blocked sites from Firebase Realtime Database');
       
       // Get user's blocked sites from Realtime Database
-      const blockedSites = await realtimeDB.getBlockedSites();
+      // const blockedSites = await realtimeDB.getBlockedSites();
+      const blockedSites = await firestore.getUserBlockedSites(user.uid);
       
       // Clear existing domains object
       domains = {};
@@ -1383,9 +1385,10 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-    const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
-    const siteId = `${user.uid}_${formattedDomain}`;
-    const existingSite = await realtimeDB.getBlockedSite(siteId);
+    // const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
+    const siteId = `${user.uid}_${cleanDomain}`;
+    // const existingSite = await realtimeDB.getBlockedSite(siteId);
+    const existingSite = await firestore.getBlockedSite(siteId);
     
     if (existingSite) {
       if (existingSite.is_active) {
@@ -1486,8 +1489,8 @@ document.addEventListener('DOMContentLoaded', function() {
       }
 
       // Format domain for Firebase
-      const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-      const siteId = `${user.uid}_${formattedDomain}`;
+      // const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+      const siteId = `${user.uid}_${domain}`;
 
       console.log(`Removing domain ${domain} from both local storage and Firebase (siteId: ${siteId})`);
 
@@ -1504,7 +1507,8 @@ document.addEventListener('DOMContentLoaded', function() {
         // Set is_active: false in Realtime Database so other devices can detect the change
         (async () => {
           try {
-            const existingSite = await realtimeDB.getBlockedSite(siteId);
+            // const existingSite = await realtimeDB.getBlockedSite(siteId);
+            const existingSite = await firestore.getBlockedSite(siteId);
             if (existingSite) {
               const updatedSiteData = {
                 ...existingSite,
@@ -1513,7 +1517,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 last_reset_timestamp: existingSite.last_reset_timestamp
               };
               
-              await realtimeDB.addBlockedSite(siteId, updatedSiteData);
+              await firestore.updateBlockedSite(siteId, updatedSiteData);
+              // await realtimeDB.addBlockedSite(siteId, updatedSiteData);
               console.log(`Successfully set is_active: false for ${domain} in Realtime Database`);
             } else {
               console.log(`No existing site found for ${domain} in Realtime Database`);
@@ -1616,12 +1621,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Format domain for Firebase
-    const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-    const siteId = `${userId}_${formattedDomain}`;
+    // const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+    const siteId = `${userId}_${domain}`;
 
     try {
       // Get existing site data
-      const existingSite = await realtimeDB.getBlockedSite(siteId);
+      // const existingSite = await realtimeDB.getBlockedSite(siteId);
+      const existingSite = await firestore.getBlockedSite(siteId);
       if (!existingSite) {
         showError('Site not found in database');
         return;
@@ -1675,7 +1681,8 @@ document.addEventListener('DOMContentLoaded', function() {
       await clearDailyBlock(domain);
 
       // Update Firebase Realtime Database
-      await realtimeDB.addBlockedSite(siteId, updatedSiteData);
+      await firestore.updateBlockedSite(siteId, updatedSiteData);
+      // await realtimeDB.addBlockedSite(siteId, updatedSiteData);
 
       // Create override history record
       const historyId = crypto.randomUUID();

@@ -2128,4 +2128,88 @@
         startCountdownTimer();
     }
     
-})(); 
+    // Add Firestore polling function for timer synchronization
+    let pollingInterval;
+    
+    function startTimerPolling() {
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+        }
+        console.log("starting timer polling")
+        pollingInterval = setInterval(async () => {
+            if (!currentDomain || !isEnabled || isInitializing || !hasLoadedFromFirebase) {
+                return;
+            }
+            
+            try {
+                // Load current Firestore state
+                const response = await chrome.runtime.sendMessage({
+                    action: 'loadTimerFromFirestore',
+                    domain: currentDomain
+                });
+                
+                if (!response || !response.success || !response.timerState) {
+                    return;
+                }
+                console.log("response", response)
+                const firestoreState = response.timerState;
+                const firestoreTime = firestoreState.time_remaining;
+                
+                // Compare with local time
+                console.log("firestoreTime", firestoreTime)
+                console.log("timeRemaining", timeRemaining)
+                if (typeof firestoreTime === 'number' && typeof timeRemaining === 'number') {
+                    console.log(`Timer Polling - Local: ${timeRemaining}s, Firestore: ${firestoreTime}s`);
+                    
+                    if (timeRemaining < firestoreTime) {
+                        // Local time is less than Firestore - update Firestore
+                        console.log('Local time is less - updating Firestore');
+                        chrome.runtime.sendMessage({
+                            action: 'syncTimerToFirestore',
+                            domain: currentDomain,
+                            timeRemaining: timeRemaining,
+                            gracePeriod: gracePeriod,
+                            isActive: true,
+                            isPaused: isTimerPaused,
+                            timestamp: Date.now(),
+                            override_active: currentOverrideActive,
+                            override_initiated_by: currentOverrideInitiatedBy,
+                            override_initiated_at: currentOverrideInitiatedAt,
+                            time_limit: currentTimeLimit,
+                            last_reset_timestamp: lastResetTimestamp
+                        });
+                    } else if (firestoreTime < timeRemaining) {
+                        // Firestore time is less than local - update local
+                        console.log('Firestore time is less - updating local');
+                        timeRemaining = firestoreTime;
+                        updateTimerDisplay();
+                    }
+                }
+            } catch (error) {
+                console.error('Timer polling error:', error);
+            }
+        }, 5000); // 5 seconds interval
+    }
+    
+    function stopTimerPolling() {
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+            pollingInterval = null;
+        }
+    }
+    
+    // Start polling when the timer starts
+    const originalStartCountdownTimer = startCountdownTimer;
+    startCountdownTimer = function() {
+        originalStartCountdownTimer();
+        startTimerPolling();
+    };
+    
+    // Stop polling when the timer stops
+    const originalStopCountdownTimer = stopCountdownTimer;
+    stopCountdownTimer = function() {
+        originalStopCountdownTimer();
+        stopTimerPolling();
+    };
+
+})(); // End of IIFE 
