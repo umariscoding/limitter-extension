@@ -260,7 +260,7 @@
                         if (firebaseResetTime > chromeResetTime) {
                             console.log('Using Firebase time due to more recent reset');
                             timeRemaining = firebaseTime;
-                            lastResetTimestamp = firebaseResetTime;
+                            // lastResetTimestamp = firebaseResetTime;
                         }
                         // Case 2: Chrome has a more recent reset
                         else if (chromeResetTime > firebaseResetTime) {
@@ -431,9 +431,11 @@
                         if (state && state.date === getTodayString()) {
                             // Only restore if same day - we're more lenient about URL to handle subdomain variations
                             console.log(`Limitter: Found saved timer state with ${state.timeRemaining}s remaining`);
-                            
+                            lastResetTimestamp = state.last_reset_timestamp;
                             // Update override state variables from Chrome storage
+                            console.log("last reset timestamp ", state.last_reset_timestamp)
                             if (state.override_active) {
+                                console.log("state.override_active", state.override_active)
                                 setOverrideActive(state.override_initiated_by, state.override_initiated_at);
                             } else {
                                 currentOverrideActive = false;
@@ -492,6 +494,7 @@
                         if (state && state.date === getTodayString()) {
                             // Update override state variables from Chrome storage
                             if (state.override_active) {
+                                console.log("state.override_active 2", state.override_active)
                                 setOverrideActive(state.override_initiated_by, state.override_initiated_at);
                             } else {
                                 currentOverrideActive = false;
@@ -533,7 +536,7 @@
                     
                     if (response && response.success && response.timerState) {
                         const firebaseState = response.timerState;
-                        
+                        console.log("firebaseState ", firebaseState)
                         // Update reset timestamp if Firebase has a more recent one
                         if (firebaseState.last_reset_timestamp > lastResetTimestamp) {
                             lastResetTimestamp = firebaseState.last_reset_timestamp;
@@ -543,6 +546,7 @@
                         
                         // Update override state variables
                         if (firebaseState.override_active) {
+                            console.log("firebaseState.override_active 3", firebaseState.override_active)
                             setOverrideActive(firebaseState.override_initiated_by, firebaseState.override_initiated_at);
                         } else {
                             currentOverrideActive = false;
@@ -666,36 +670,16 @@
         currentOverrideActive = true;
         currentOverrideInitiatedBy = userId;
         currentOverrideInitiatedAt = initiatedAt;
-        
+        console.log("initiatedAt", initiatedAt, "currentOverrideActive", currentOverrideActive, "currentOverrideInitiatedBy", currentOverrideInitiatedBy, "currentOverrideInitiatedAt", currentOverrideInitiatedAt)
         // Clear any existing timeout
         if (overrideClearTimeout) {
             clearTimeout(overrideClearTimeout);
         }
         
-        // Calculate remaining time if override was initiated earlier
-        let timeoutDuration = 4000; // Default 4 seconds
-        if (initiatedAt) {
-            const initiatedTime = new Date(initiatedAt).getTime();
-            const currentTime = Date.now();
-            const elapsedTime = currentTime - initiatedTime;
-            
-            if (elapsedTime >= 4000) {
-                // Override should have already expired, clear it immediately
-                console.log('Limitter: Override has already expired, clearing immediately');
-                clearOverrideActive();
-                return;
-            } else {
-                // Calculate remaining time
-                timeoutDuration = 4000 - elapsedTime;
-                console.log(`Limitter: Override initiated ${elapsedTime}ms ago, clearing in ${timeoutDuration}ms`);
-            }
-        }
-        
-        // Set timeout to clear override after remaining time
         overrideClearTimeout = setTimeout(() => {
             console.log('Limitter: Automatically clearing override_active after timeout');
             clearOverrideActive();
-        }, timeoutDuration);
+        }, 6000);
     }
 
     // Clear override active state
@@ -704,8 +688,6 @@
         
         console.log('Limitter: Clearing override_active state');
         currentOverrideActive = false;
-        currentOverrideInitiatedBy = null;
-        currentOverrideInitiatedAt = null;
         
         // Clear timeout if it exists
         if (overrideClearTimeout) {
@@ -715,7 +697,7 @@
         
         // Save updated state to Chrome storage
         saveTimerState();
-        
+        currentOverrideActive = false;
         // Sync to Firebase
         if (hasLoadedFromFirebase && !isInitializing) {
             syncTimerToFirebase();
@@ -989,16 +971,9 @@
                         // Override was activated - reset timer completely
                         console.log(`Limitter: Override activated, resetting timer to ${gracePeriod}s`);
                         timeRemaining = gracePeriod;
-                        
-                        // Set override active with automatic clearing after 4 seconds
                         setOverrideActive(null, new Date().toISOString());
-                        
-                        // Stop existing timer and start fresh
                         stopCountdownTimer();
                         startCountdownTimer();
-                        
-                        // Save the new state (will be called by setOverrideActive, but call again to ensure timer state is saved)
-                        saveTimerState();
                     } else if (!countdownTimer) {
                         // No existing timer, start new one
                         timeRemaining = gracePeriod;
@@ -1056,6 +1031,7 @@
                         currentTimeLimit = originalTimeLimit;
                         gracePeriod = originalTimeLimit;
                         
+                        console.log("setting override active 5")
                         // Set override active with automatic clearing after 4 seconds (same as override button)
                         setOverrideActive(null, new Date().toISOString());
                         
@@ -1624,7 +1600,6 @@
                     override_initiated_by: currentOverrideInitiatedBy,
                     override_initiated_at: currentOverrideInitiatedAt,
                     time_limit: currentTimeLimit,
-                    last_reset_timestamp: lastResetTimestamp // Add reset timestamp
                 }, (response) => {
                     console.log("response", response)
                     if (chrome.runtime.lastError) {
@@ -2135,60 +2110,76 @@
         if (pollingInterval) {
             clearInterval(pollingInterval);
         }
+        if(document.URL.includes(currentDomain)) {
         console.log("starting timer polling")
-        pollingInterval = setInterval(async () => {
-            if (!currentDomain || !isEnabled || isInitializing || !hasLoadedFromFirebase) {
-                return;
-            }
-            
-            try {
-                // Load current Firestore state
-                const response = await chrome.runtime.sendMessage({
-                    action: 'loadTimerFromFirestore',
-                    domain: currentDomain
-                });
-                
-                if (!response || !response.success || !response.timerState) {
+            pollingInterval = setInterval(async () => {
+                if (!currentDomain || !isEnabled || isInitializing || !hasLoadedFromFirebase) {
                     return;
                 }
-                console.log("response", response)
-                const firestoreState = response.timerState;
-                const firestoreTime = firestoreState.time_remaining;
                 
-                // Compare with local time
-                console.log("firestoreTime", firestoreTime)
-                console.log("timeRemaining", timeRemaining)
-                if (typeof firestoreTime === 'number' && typeof timeRemaining === 'number') {
-                    console.log(`Timer Polling - Local: ${timeRemaining}s, Firestore: ${firestoreTime}s`);
+                try {
+                    // Load current Firestore state
+                    const response = await chrome.runtime.sendMessage({
+                        action: 'loadTimerFromFirestore',
+                        domain: currentDomain
+                    });
                     
-                    if (timeRemaining < firestoreTime) {
-                        // Local time is less than Firestore - update Firestore
-                        console.log('Local time is less - updating Firestore');
-                        chrome.runtime.sendMessage({
-                            action: 'syncTimerToFirestore',
-                            domain: currentDomain,
-                            timeRemaining: timeRemaining,
-                            gracePeriod: gracePeriod,
-                            isActive: true,
-                            isPaused: isTimerPaused,
-                            timestamp: Date.now(),
-                            override_active: currentOverrideActive,
-                            override_initiated_by: currentOverrideInitiatedBy,
-                            override_initiated_at: currentOverrideInitiatedAt,
-                            time_limit: currentTimeLimit,
-                            last_reset_timestamp: lastResetTimestamp
-                        });
-                    } else if (firestoreTime < timeRemaining) {
-                        // Firestore time is less than local - update local
-                        console.log('Firestore time is less - updating local');
-                        timeRemaining = firestoreTime;
-                        updateTimerDisplay();
+                    if (!response || !response.success || !response.timerState) {
+                        return;
                     }
+                    console.log("response", response)
+                    const firestoreState = response.timerState;
+                    const firestoreTime = firestoreState.time_remaining;
+                    
+                    // Compare with local time
+                    if (typeof firestoreTime === 'number' && typeof timeRemaining === 'number') {
+                        console.log(`Timer Polling - Local: ${timeRemaining}s, Firestore: ${firestoreTime}s`);
+                    
+                        if(response.timerState.override_active || ((response.timerState.last_reset_timestamp > lastResetTimestamp) && (lastResetTimestamp !== undefined)) ) {
+                            console.log("override active SA")
+                            currentOverrideActive = response.timerState.override_active;
+                            currentOverrideInitiatedBy = response.timerState.override_initiated_by;
+                            currentOverrideInitiatedAt = response.timerState.override_initiated_at;
+                            console.log("last reset timestamp ", response.timerState.last_reset_timestamp, lastResetTimestamp)
+                            lastResetTimestamp = response.timerState.last_reset_timestamp;
+                            timeRemaining = firestoreTime;
+                            saveTimerState();
+                            updateTimerDisplay();
+                            startCountdownTimer();
+                            return;
+                        }
+
+                        if (timeRemaining < firestoreTime) {
+                            // Local time is less than Firestore - update Firestore
+                            if(firestoreTime - timeRemaining > 4) {
+                                console.log('Local time is less - updating Firestore');
+                                chrome.runtime.sendMessage({
+                                    action: 'syncTimerToFirestore',
+                                    domain: currentDomain,
+                                    timeRemaining: timeRemaining,
+                                    gracePeriod: gracePeriod,
+                                    isActive: true,
+                                    isPaused: isTimerPaused,
+                                    timestamp: Date.now(),
+                                    override_active: currentOverrideActive,
+                                    override_initiated_by: currentOverrideInitiatedBy,
+                                    override_initiated_at: currentOverrideInitiatedAt,
+                                    time_limit: currentTimeLimit,
+                                    last_reset_timestamp: lastResetTimestamp
+                                });
+                            }
+                        } else if (firestoreTime < timeRemaining) {
+                            // Firestore time is less than local - update local
+                            console.log('Firestore time is less - updating local');
+                            timeRemaining = firestoreTime;
+                            updateTimerDisplay();
+                        }
+                    }
+                } catch (error) {
+                    console.error('Timer polling error:', error);
                 }
-            } catch (error) {
-                console.error('Timer polling error:', error);
-            }
-        }, 5000); // 5 seconds interval
+            }, 5000); // 5 seconds interval
+        }
     }
     
     function stopTimerPolling() {

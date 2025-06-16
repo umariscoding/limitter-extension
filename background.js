@@ -528,22 +528,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             
           // Create site data for Realtime Database
           const now = new Date();
+
+
           const siteData = {
             user_id: user.uid,
             url: timerDomain,
             time_remaining: request.timeRemaining,
             time_limit: request.time_limit || request.gracePeriod,
             is_active: true,
-            override_active: request.override_active || false,
-            override_initiated_by: request.override_initiated_by || null,
-            override_initiated_at: request.override_initiated_at || null,
+            override_active: request.override_active,
+            override_initiated_by: request.override_initiated_by,
+            override_initiated_at: request.override_initiated_at,
             is_blocked: request.timeRemaining <= 0,
             last_accessed: now.toISOString(),
             updated_at: now.toISOString(),
             last_reset_date: getTodayString(),
             is_paused: request.isPaused || false,
-            last_reset_timestamp: existingSite?.last_reset_timestamp 
+            last_reset_timestamp: existingSite.last_reset_timestamp,
+            last_sync_timestamp: Date.now()
           };
+          console.log("Reset Timer State", existingSite)
 
           // If timer has reached zero, mark as blocked
           if (request.timeRemaining <= 0) {
@@ -1004,7 +1008,9 @@ async function loadTimerStateFromFirebase(domain) {
           override_active: siteData.override_active,
           override_initiated_by: siteData.override_initiated_by,
           override_initiated_at: siteData.override_initiated_at,
-          time_limit: siteData.time_limit
+          last_reset_timestamp: siteData.last_reset_timestamp,
+          time_limit: siteData.time_limit,
+          last_sync_timestamp: siteData.last_sync_timestamp
         };
         // console.log(`Limitter Background: Loaded active timer state from Firebase - ${timerState.timeRemaining}s remaining`);
         return timerState;
@@ -1103,39 +1109,39 @@ function setupDomainListener(domain) {
     }
 
     try {
-        console.log(`🔄 Setting up persistent listener for domain: ${cleanDomain} (${siteId})`);
+        // console.log(`🔄 Setting up persistent listener for domain: ${cleanDomain} (${siteId})`);
 
-        const eventSource = realtimeDB.listenToBlockedSite(siteId, async (updatedData) => {
-            // Check services before processing update
-            if (!realtimeDB || !firebaseAuth || !isAuthenticated) {
-                console.log(`❌ Services unavailable during update - attempting recovery...`);
-                const recovered = await recoverFirebaseServices();
-                if (!recovered) {
-                    console.log(`❌ Service recovery failed - cannot process update`);
-                    return;
-                }
-            }
+        // const eventSource = realtimeDB.listenToBlockedSite(siteId, async (updatedData) => {
+        //     // Check services before processing update
+        //     if (!realtimeDB || !firebaseAuth || !isAuthenticated) {
+        //         console.log(`❌ Services unavailable during update - attempting recovery...`);
+        //         const recovered = await recoverFirebaseServices();
+        //         if (!recovered) {
+        //             console.log(`❌ Service recovery failed - cannot process update`);
+        //             return;
+        //         }
+        //     }
 
-            console.log(`🔥 Firebase Update: ${cleanDomain}`, updatedData);
+        //     console.log(`🔥 Firebase Update: ${cleanDomain}`, updatedData);
 
-            // Get local timer state first
-            const localTimerState = await getTimerStateForDomain(cleanDomain);
-            const localTimeRemaining = localTimerState?.timeRemaining;
+        //     // Get local timer state first
+        //     const localTimerState = await getTimerStateForDomain(cleanDomain);
+        //     const localTimeRemaining = localTimerState?.timeRemaining;
 
-            if (updatedData.override_active !== true && 
-               (updatedData.tab_switch_active === undefined) && 
-                updatedData.time_remaining < localTimeRemaining) {
-                // Handle time decrease from other device
-                console.log("time_remaining", updatedData.time_remaining)
-                await updateLocalTimers(cleanDomain, updatedData.time_remaining);
-            }
+        //     if (updatedData.override_active !== true && 
+        //        (updatedData.tab_switch_active === undefined) && 
+        //         updatedData.time_remaining < localTimeRemaining) {
+        //         // Handle time decrease from other device
+        //         console.log("time_remaining", updatedData.time_remaining)
+        //         await updateLocalTimers(cleanDomain, updatedData.time_remaining);
+        //     }
 
-            // Handle override changes
-            if (updatedData.override_active !== undefined) {
-                handleOverrideChange(cleanDomain, updatedData);
-                // Skip other handlers when handling override to prevent loops
-                return;
-            }
+        //     // Handle override changes
+        //     if (updatedData.override_active !== undefined) {
+        //         handleOverrideChange(cleanDomain, updatedData);
+        //         // Skip other handlers when handling override to prevent loops
+        //         return;
+        //     }
 
             // // Handle tab switch changes
             // if (updatedData.tab_switch_active === true) {
@@ -1144,22 +1150,22 @@ function setupDomainListener(domain) {
             // }
 
             // Handle site opened changes
-            if (updatedData.site_opened_active === true) {
-                handleSiteOpenedSync(cleanDomain, updatedData);
-            }
+        //     if (updatedData.site_opened_active === true) {
+        //         handleSiteOpenedSync(cleanDomain, updatedData);
+        //     }
 
-            // Handle domain deactivation (is_active becomes false)
-            if (updatedData.is_active === false) {
-                handleDomainDeactivation(cleanDomain, updatedData);
-            }
-        });
+        //     // Handle domain deactivation (is_active becomes false)
+        //     if (updatedData.is_active === false) {
+        //         handleDomainDeactivation(cleanDomain, updatedData);
+        //     }
+        // });
 
-        // Store the listener for cleanup later
-        activeListeners.set(siteId, {
-            eventSource,
-            domain: cleanDomain,
-            siteId
-        });
+        // // Store the listener for cleanup later
+        // activeListeners.set(siteId, {
+        //     eventSource,
+        //     domain: cleanDomain,
+        //     siteId
+        // });
 
         console.log(`✅ Listener set up successfully for ${cleanDomain}`);
     } catch (error) {
@@ -1391,7 +1397,7 @@ async function syncTimerStates(domain, localTime, firebaseTime, siteId, options 
       }
 
       if (updateFirebase && Math.abs(firebaseTime - minTime) > timeDifferenceThreshold) {
-        await realtimeDB.updateSiteSyncedTimer(siteId, minTime);
+        // await realtimeDB.updateSiteSyncedTimer(siteId, minTime);
       }
 
       return minTime;
@@ -1405,7 +1411,7 @@ async function syncTimerStates(domain, localTime, firebaseTime, siteId, options 
       }
 
       if (updateFirebase && Math.abs(firebaseTime - syncedTime) > timeDifferenceThreshold) {
-        await realtimeDB.updateSiteSyncedTimer(siteId, syncedTime);
+        // await realtimeDB.updateSiteSyncedTimer(siteId, syncedTime);
       }
 
       return syncedTime;
@@ -1851,7 +1857,8 @@ async function loadTimerStateFromFirestore(domain) {
         override_active: siteData.override_active || false,
         override_initiated_by: siteData.override_initiated_by,
         override_initiated_at: siteData.override_initiated_at,
-        time_limit: siteData.time_limit
+        time_limit: siteData.time_limit,
+        last_reset_timestamp: siteData.last_reset_timestamp
       };
     }
     
@@ -1883,14 +1890,14 @@ async function syncTimerStateToFirestore(domain, timerState) {
       time_remaining: timerState.timeRemaining,
       time_limit: timerState.gracePeriod,
       is_active: timerState.isActive,
-      override_active: timerState.override_active || false,
+      override_active: timerState.override_active,
       override_initiated_by: timerState.override_initiated_by,
       override_initiated_at: timerState.override_initiated_at,
       is_blocked: timerState.timeRemaining <= 0,
       last_accessed: now,
       updated_at: now,
       last_reset_date: getTodayString(),
-      last_reset_timestamp: timerState.last_reset_timestamp || 0,
+      last_reset_timestamp: timerState.last_reset_timestamp,
       last_sync_timestamp: Date.now()
     };
     console.log("siteData in firestore", siteData)

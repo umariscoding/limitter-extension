@@ -431,7 +431,7 @@ document.addEventListener('DOMContentLoaded', function() {
             time_remaining: timer,
             time_spent_today: 0,
             last_reset_date: todayString,
-            last_reset_timestamp: Date.now(),
+            last_reset_timestamp: 0,
             last_sync_timestamp: Date.now(),
             is_blocked: false,
             override_active: false,
@@ -1110,105 +1110,102 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log(`Loaded site from Firebase: ${site.url} with ${site.time_limit}s timer`);
             
             // Set up real-time listener for each blocked site
-            const formattedDomain = realtimeDB.formatDomainForFirebase(site.url);
-            const siteId = `${user.uid}_${formattedDomain}`;
+            // const formattedDomain = realtimeDB.formatDomainForFirebase(site.url);
+            // const siteId = `${user.uid}_${formattedDomain}`;
             
-            try {
-              realtimeDB.listenToBlockedSite(siteId, (updatedSiteData) => {
-                console.log(`🔥 Firebase Update: ${site.url}`, updatedSiteData);
+            // try {
+            //   realtimeDB.listenToBlockedSite(siteId, (updatedSiteData) => {
+            //     console.log(`🔥 Firebase Update: ${site.url}`, updatedSiteData);
                 
-                // Handle override changes
-                if (updatedSiteData.override_active !== undefined) {
-                  console.log(`Override active changed for ${site.url}: ${updatedSiteData.override_active}`);
+            //     // Handle override changes
+            //     if (updatedSiteData.override_active !== undefined) {
+            //       console.log(`Override active changed for ${site.url}: ${updatedSiteData.override_active}`);
                   
-                  if (updatedSiteData.override_active) {
-                    console.log(`Override activated for ${site.url} from another device`);
+            //       if (updatedSiteData.override_active) {
+            //         console.log(`Override activated for ${site.url} from another device`);
                     
-                    // Update Chrome local storage with reset timer state
-                    console.log("updatedSiteData", updatedSiteData)
-                    const timerKey = `timerState_${site.url}`;
-                    const resetTimerState = {
-                      timeRemaining: updatedSiteData.time_limit,
-                      gracePeriod: updatedSiteData.time_limit,
-                      isActive: true,
-                      isPaused: false,
-                      timestamp: Date.now(),
-                      date: getTodayString(),
-                      url: site.url,
-                      override_active: true,
-                      override_initiated_by: updatedSiteData.override_initiated_by,
-                      override_initiated_at: updatedSiteData.override_initiated_at,
-                      time_limit: updatedSiteData.time_limit
-                    };
+            //         // Update Chrome local storage with reset timer state
+            //         console.log("updatedSiteData", updatedSiteData)
+            //         const timerKey = `timerState_${site.url}`;
+            //         const resetTimerState = {
+            //           timeRemaining: updatedSiteData.time_limit,
+            //           gracePeriod: updatedSiteData.time_limit,
+            //           isActive: true,
+            //           isPaused: false,
+            //           timestamp: Date.now(),
+            //           date: getTodayString(),
+            //           url: site.url,
+            //           override_active: true,
+            //           override_initiated_by: updatedSiteData.override_initiated_by,
+            //           override_initiated_at: updatedSiteData.override_initiated_at,
+            //           time_limit: updatedSiteData.time_limit
+            //         };
 
-                    safeChromeCall(() => {
-                      chrome.storage.local.set({
-                        [timerKey]: resetTimerState
-                      }, () => {
-                        console.log(`Chrome local storage updated for ${site.url} - override activated`);
-                      });
-                    });
+            //         safeChromeCall(() => {
+            //           chrome.storage.local.set({
+            //             [timerKey]: resetTimerState
+            //           }, () => {
+            //             console.log(`Chrome local storage updated for ${site.url} - override activated`);
+            //           });
+            //         });
 
-                    // Clear daily block
-                    clearDailyBlock(site.url);
+            //         // Clear daily block
+            //         clearDailyBlock(site.url);
                     
-                    // Update domains object for Chrome sync storage
-                    domains[site.url] = updatedSiteData.time_limit;
-                    saveDomains(); // This saves to Chrome sync storage
+            //         // Update domains object for Chrome sync storage
+            //         domains[site.url] = updatedSiteData.time_limit;
+            //         saveDomains(); // This saves to Chrome sync storage
                     
-                    // Update domain states for UI
-                    domainStates[site.url] = {
-                      status: 'running',
-                      timeRemaining: updatedSiteData.time_remaining || updatedSiteData.time_limit,
-                      isActive: true
-                    };
+            //         // Update domain states for UI
+            //         domainStates[site.url] = {
+            //           status: 'running',
+            //           timeRemaining: updatedSiteData.time_remaining || updatedSiteData.time_limit,
+            //           isActive: true
+            //         };
                     
-                    // Re-render the domains list with skipSubscriptionUpdate=true to prevent loops
-                    renderDomainsList(true);
+            //         // Re-render the domains list with skipSubscriptionUpdate=true to prevent loops
+            //         renderDomainsList(true);
                     
-                    console.log(`Domains object and Chrome sync storage updated for ${site.url}`);
+            //         console.log(`Domains object and Chrome sync storage updated for ${site.url}`);
                     
-                  } else {
-                    console.log(`Override deactivated for ${site.url} from another device`);
+            //       } else {
+            //         console.log(`Override deactivated for ${site.url} from another device`);
                     
-                    // Update Chrome local storage to clear override state
-                    const timerKey = `timerState_${site.url}`;
-                    safeChromeCall(() => {
-                      chrome.storage.local.get([timerKey], (result) => {
-                        if (result[timerKey]) {
-                          const updatedState = {
-                            ...result[timerKey],
-                            override_active: false,
-                            override_initiated_by: null,
-                            override_initiated_at: null,
-                            timestamp: Date.now()
-                          };
+            //         // Update Chrome local storage to clear override state
+            //         const timerKey = `timerState_${site.url}`;
+            //         safeChromeCall(() => {
+            //           chrome.storage.local.get([timerKey], (result) => {
+            //             if (result[timerKey]) {
+            //               const updatedState = {
+            //                 ...result[timerKey],
+            //                 timestamp: Date.now()
+            //               };
                           
-                          chrome.storage.local.set({
-                            [timerKey]: updatedState
-                          }, () => {
-                            console.log(`Chrome local storage updated for ${site.url} - override cleared`);
-                          });
-                        }
-                      });
-                    });
+            //               chrome.storage.local.set({
+            //                 [timerKey]: updatedState
+            //               }, () => {
+            //                 console.log(`Chrome local storage updated for ${site.url} - override cleared`);
+            //               });
+            //             }
+            //           });
+            //         });
                     
-                    // Update domain states for UI
-                    if (domainStates[site.url]) {
-                      domainStates[site.url] = {
-                        ...domainStates[site.url],
-                        // Keep existing state but ensure override is cleared
-                      };
-                    }
+            //         // Update domain states for UI
+            //         if (domainStates[site.url]) {
+            //           domainStates[site.url] = {
+            //             ...domainStates[site.url],
+            //             // Keep existing state but ensure override is cleared
+            //           };
+            //         }
                     
-                    // Re-render the domains list
-                    renderDomainsList();
-                  }
-                }
-              });
-            } catch (error) {
-              console.error(`Failed to set up listener for ${site.url}:`, error);
-            }
+            //         // Re-render the domains list
+            //         renderDomainsList();
+            //       }
+            //     }
+            //   });
+            // } catch (error) {
+            //   console.error(`Failed to set up listener for ${site.url}:`, error);
+            // }
           }
         });
         
@@ -1596,7 +1593,7 @@ document.addEventListener('DOMContentLoaded', function() {
       if (userOverrides.overrides <= 0) {
         // No overrides available - redirect to checkout
         console.log("No overrides available - opening checkout in new tab")
-        chrome.tabs.create({ url: 'http://localhost:3001/checkout?overrides=1' });
+        chrome.tabs.create({ url: 'http://localhost:3000/checkout?overrides=1' });
         window.close(); // Close the popup after opening the new tab
         return;
       }
@@ -1647,7 +1644,7 @@ document.addEventListener('DOMContentLoaded', function() {
         blocked_until: null, // Clear blocked until
         updated_at: now.toISOString(),
         last_accessed: now.toISOString(), 
-        last_reset_timestamp: existingSite.last_reset_timestamp
+        last_reset_timestamp: now.getTime()
       };
 
       // First update local state
@@ -1665,8 +1662,9 @@ document.addEventListener('DOMContentLoaded', function() {
         override_initiated_by: userId,
         override_initiated_at: now.toISOString(),
         time_limit: originalTimeLimit,
-        lastResetTimestamp: existingSite.last_reset_timestamp
+        last_reset_timestamp: now.getTime()
       };
+      
 
       // Update Chrome storage first
       await new Promise((resolve) => {
@@ -1676,7 +1674,6 @@ document.addEventListener('DOMContentLoaded', function() {
           }, resolve);
         });
       });
-
       // Clear daily block in Chrome storage
       await clearDailyBlock(domain);
 
@@ -1750,15 +1747,13 @@ document.addEventListener('DOMContentLoaded', function() {
           console.log("clearing override");
           const clearedOverrideData = {
             ...updatedSiteData,
-            last_reset_timestamp: time,
             override_active: false,
-            override_initiated_by: null,
-            override_initiated_at: null,
             updated_at: new Date().toISOString()
           };
-
+          console.log("clearedOverrideData", clearedOverrideData)
           // Update Firebase first
-          await realtimeDB.addBlockedSite(siteId, clearedOverrideData);
+          await firestore.updateBlockedSite(siteId, clearedOverrideData);
+          // await realtimeDB.addBlockedSite(siteId, clearedOverrideData);
 
           // Then update local storage
           await new Promise((resolve) => {
@@ -1768,8 +1763,8 @@ document.addEventListener('DOMContentLoaded', function() {
                   const updatedState = {
                     ...result[timerKey],
                     override_active: false,
-                    override_initiated_by: null,
-                    override_initiated_at: null,
+                    override_initiated_by: '',
+                    override_initiated_at: '',
                     timestamp: time,
                     last_reset_timestamp: time
                   };
@@ -1785,18 +1780,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
               });
             });
-          });
 
+          });
+          renderDomainsList();
+          updateStats();
+          showFeedback(`Override activated for ${domain} - timer reset to ${formatTime(originalTimeLimit)}`);
           console.log(`Override cleared for ${domain} after 3 seconds`);
         } catch (error) {
           console.error('Error clearing override:', error);
         }
-      }, 2000);
+      }, 6000);
 
-      renderDomainsList();
-      updateStats();
+
       
-      showFeedback(`Override activated for ${domain} - timer reset to ${formatTime(originalTimeLimit)}`);
 
     } catch (error) {
       console.error('Error in processOverride:', error);
