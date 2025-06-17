@@ -466,6 +466,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const contentDomain = request.domain;
       
       // If authentication is still initializing, wait a bit and retry
+      console.log("firebaseAuth", firebaseAuth)
+      console.log("firebaseSyncService", firebaseSyncService)
       if (firebaseAuth === null || firebaseSyncService === null) {
         console.log(`Limitter Background: Authentication still initializing, retrying for ${contentDomain}`);
         setTimeout(() => {
@@ -493,6 +495,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
       // Reload configuration to get latest domains
       loadConfiguration();
+
+      
       const contentShouldTrack = isAuthenticated && isEnabled && contentDomain && blockedDomains[contentDomain];
       // console.log(`Limitter Background: Content script loaded for ${contentDomain}, shouldTrack: ${contentShouldTrack}, isAuthenticated: ${isAuthenticated}, isEnabled: ${isEnabled}, blockedDomains:`, Object.keys(blockedDomains));
       sendResponse({ shouldTrack: contentShouldTrack });
@@ -1614,7 +1618,7 @@ setInterval(async () => {
     if (!firebaseAuth || !isAuthenticated) {
         await recoverFirebaseServices();
     }
-}, 60000); // Check every minute
+}, 2000); // Check every minute
 
 // Load timer state from Firestore
 async function loadTimerStateFromFirestore(domain) {

@@ -422,6 +422,27 @@
             // First, try to load from Firebase for cross-device syncing
             loadTimerStateFromFirebase().then(firebaseState => {
                 console.log("firebaseState", firebaseState)
+                if(firebaseState === null){
+                    // Check if domain should be tracked (it might have been reactivated)
+                    chrome.runtime.sendMessage({ action: 'checkDomainActive', domain: getCurrentDomain() }, (response) => {
+                        if (response && response.isActive) {
+                            console.log('Limitter: Domain is tracked, requesting fresh config');
+                            // Domain is tracked, get fresh config
+                            chrome.runtime.sendMessage({ action: 'getDomainConfig' }, (configResponse) => {
+                                if (configResponse && configResponse.domainConfig) {
+                                    console.log('Limitter: Got fresh config, initializing');
+                                    initializeWithConfig(configResponse.domainConfig);
+                                }
+                            });
+                            loadTimerState();
+                        } else {
+                            console.log('Limitter: Domain is not tracked');
+                            clearAllStateForDomain();
+                        }
+                    });
+                  
+                    return;
+                }
                 if (firebaseState && firebaseState.timeRemaining > 0) {
                     console.log(`Limitter: Loaded timer state from Firebase (cross-device) with ${firebaseState.timeRemaining}s remaining`);
                     resolve(firebaseState);
@@ -865,20 +886,20 @@
                     console.log("timeToSend", timeToSend, "firebaseState", firebaseState)
                     if (timeToSend && timeToSend > 0) {
                         console.log(`Limitter: Sending site opened signal with time: ${timeToSend}s`);
-                        if(firebaseState!=null){
-                        // Send site opened signal for cross-device sync
-                        chrome.runtime.sendMessage({
-                            action: 'siteOpened',
-                            domain: currentDomain,
-                            localTimeRemaining: timeToSend
-                        }, (response) => {
-                            if (response && response.success) {
-                                console.log(`Limitter: Site opened signal sent successfully: ${response.result.message}`);
-                            } else {
-                                console.log('Limitter: Site opened signal failed:', response?.error);
-                            }
-                        });
-                    }
+                    //     if(firebaseState!=null){
+                    //     // Send site opened signal for cross-device sync
+                    //     chrome.runtime.sendMessage({
+                    //         action: 'siteOpened',
+                    //         domain: currentDomain,
+                    //         localTimeRemaining: timeToSend
+                    //     }, (response) => {
+                    //         if (response && response.success) {
+                    //             console.log(`Limitter: Site opened signal sent successfully: ${response.result.message}`);
+                    //         } else {
+                    //             console.log('Limitter: Site opened signal failed:', response?.error);
+                    //         }
+                    //     });
+                    // }
                     console.log("localTimeRemaining", localTimeRemaining, "firebaseState", firebaseState)
                         // Use the local time if available, otherwise use Firebase time
                         if(firebaseState?.timeRemaining != 3600){
@@ -2103,7 +2124,7 @@
                             action: 'triggerDomainListRefresh'
                         });
                         pollingInterval = null;
-                        return;
+                        // return;
                         
                     }
                     const firestoreState = response.timerState;
