@@ -571,7 +571,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           }
 
           // Sync to Realtime Database
-          firestore.updateBlockedSite(timerSiteId, siteData)
+          firestore.updateBlockedSite(timerSiteId, siteData, ['url'])
             .then(() => {
               sendResponse({ success: true });
             })
@@ -1191,62 +1191,62 @@ async function updateLocalTimers(domain, timeRemaining) {
 }
 
 // Sync timer states between local and Firebase
-async function syncTimerStates(domain, localTime, firebaseTime, siteId, options = {}) {
-  const {
-    updateFirebase = true,
-    updateLocal = true,
-    timeDifferenceThreshold = 5,
-    source = 'unknown'
-  } = options;
+// async function syncTimerStates(domain, localTime, firebaseTime, siteId, options = {}) {
+//   const {
+//     updateFirebase = true,
+//     updateLocal = true,
+//     timeDifferenceThreshold = 5,
+//     source = 'unknown'
+//   } = options;
 
-  console.log(`🔄 SYNC: Syncing timers for ${domain} (source: ${source})`);
-  console.log(`Local: ${localTime}s, Firebase: ${firebaseTime}s`);
+//   console.log(`🔄 SYNC: Syncing timers for ${domain} (source: ${source})`);
+//   console.log(`Local: ${localTime}s, Firebase: ${firebaseTime}s`);
 
-  try {
-    // Get current site data to check override status
-    const siteData = await realtimeDB.getSiteData(siteId);
-    const isOverrideActive = siteData?.override_active === true;
+//   try {
+//     // Get current site data to check override status
+//     // const siteData = await realtimeDB.getSiteData(siteId);
+//     const isOverrideActive = siteData?.override_active === true;
 
-    // If this is not an override, never increase time in Firebase
-    if (!isOverrideActive) {
-      // Use the minimum time between local and Firebase
-      const minTime = Math.min(localTime, firebaseTime);
-      console.log(`Using minimum time: ${minTime}s (override not active)`);
+//     // If this is not an override, never increase time in Firebase
+//     if (!isOverrideActive) {
+//       // Use the minimum time between local and Firebase
+//       const minTime = Math.min(localTime, firebaseTime);
+//       console.log(`Using minimum time: ${minTime}s (override not active)`);
 
-      if (updateLocal) {
-        await updateLocalTimers(domain, minTime);
-      }
+//       if (updateLocal) {
+//         await updateLocalTimers(domain, minTime);
+//       }
 
-      if (updateFirebase && Math.abs(firebaseTime - minTime) > timeDifferenceThreshold) {
-        // await realtimeDB.updateSiteSyncedTimer(siteId, minTime);
-      }
+//       if (updateFirebase && Math.abs(firebaseTime - minTime) > timeDifferenceThreshold) {
+//         // await realtimeDB.updateSiteSyncedTimer(siteId, minTime);
+//       }
 
-      return minTime;
-    } else {
-      // For overrides, allow time increase but still sync between devices
-      console.log(`Override active - allowing time increase`);
-      const syncedTime = localTime;
+//       return minTime;
+//     } else {
+//       // For overrides, allow time increase but still sync between devices
+//       console.log(`Override active - allowing time increase`);
+//       const syncedTime = localTime;
 
-      if (updateLocal) {
-        await updateLocalTimers(domain, syncedTime);
-      }
+//       if (updateLocal) {
+//         await updateLocalTimers(domain, syncedTime);
+//       }
 
-      if (updateFirebase && Math.abs(firebaseTime - syncedTime) > timeDifferenceThreshold) {
-        // await realtimeDB.updateSiteSyncedTimer(siteId, syncedTime);
-      }
+//       if (updateFirebase && Math.abs(firebaseTime - syncedTime) > timeDifferenceThreshold) {
+//         // await realtimeDB.updateSiteSyncedTimer(siteId, syncedTime);
+//       }
 
-      return syncedTime;
-    }
-  } catch (error) {
-    console.error(`❌ Error during timer sync for ${domain}:`, error);
-    return localTime; // Default to local time on error
-  }
-}
+//       return syncedTime;
+//     }
+//   } catch (error) {
+//     console.error(`❌ Error during timer sync for ${domain}:`, error);
+//     return localTime; // Default to local time on error
+//   }
+// }
 
-// Helper function for backward compatibility
-function notifyTabsOfTimerUpdate(domain, timeRemaining) {
-  updateLocalTimers(domain, timeRemaining);
-}
+// // Helper function for backward compatibility
+// function notifyTabsOfTimerUpdate(domain, timeRemaining) {
+//   updateLocalTimers(domain, timeRemaining);
+// }
 
 // Clean up listeners when user logs out
 // function cleanupListeners() {
@@ -1269,24 +1269,24 @@ function notifyTabsOfTimerUpdate(domain, timeRemaining) {
 // Tab switch detection
 let currentDeviceId = null;
 
-async function getDeviceId() {
-  if (currentDeviceId) return currentDeviceId;
+// async function getDeviceId() {
+//   if (currentDeviceId) return currentDeviceId;
   
-  return new Promise((resolve) => {
-    chrome.storage.local.get(['deviceId'], (result) => {
-      if (result.deviceId) {
-        currentDeviceId = result.deviceId;
-        resolve(result.deviceId);
-      } else {
-        const newDeviceId = `device_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        currentDeviceId = newDeviceId;
-        chrome.storage.local.set({ deviceId: newDeviceId }, () => {
-          resolve(newDeviceId);
-        });
-      }
-    });
-  });
-}
+//   return new Promise((resolve) => {
+//     chrome.storage.local.get(['deviceId'], (result) => {
+//       if (result.deviceId) {
+//         currentDeviceId = result.deviceId;
+//         resolve(result.deviceId);
+//       } else {
+//         const newDeviceId = `device_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+//         currentDeviceId = newDeviceId;
+//         chrome.storage.local.set({ deviceId: newDeviceId }, () => {
+//           resolve(newDeviceId);
+//         });
+//       }
+//     });
+//   });
+// }
 
 // // Handle tab switch to a tracked domain (simplified with unified functions)
 // async function handleTabSwitch(tabId) {
@@ -1644,19 +1644,13 @@ async function loadTimerStateFromFirestore(domain) {
     
     // Normalize domain for consistency
     const timerDomain = domain.replace(/^www\./, '').toLowerCase();
-    
+    const siteId = `${userId}_${timerDomain}`;
     // Query the blocked_sites collection
     console.log("userId", userId)
     console.log("timerDomain", timerDomain)
-    const blockedSitesQuery = await firestore.getCollection('blocked_sites', {
-      where: [
-        ['user_id', '==', userId],
-        ['url', '==', timerDomain]
-      ]
-    });
-    console.log("blockedSitesQuery", blockedSitesQuery)
-    if (blockedSitesQuery && blockedSitesQuery.length > 0) {
-      const siteData = blockedSitesQuery[0];
+    const siteData = await firestore.getBlockedSite(siteId);
+    console.log("blockedSitesQuery", siteData)
+    if (siteData) {
       
       // Check if it's a new day
       const today = getTodayString();
@@ -1701,7 +1695,7 @@ async function syncTimerStateToFirestore(domain, timerState) {
     if (!user) {
       throw new Error('User not authenticated');
     }
-    
+    console.log("domain", domain)
     const normalizedDomain = domain.replace(/^www\./, '').toLowerCase();
     const now = new Date();
     
@@ -1723,21 +1717,15 @@ async function syncTimerStateToFirestore(domain, timerState) {
     };
     console.log("siteData in firestore", siteData)
     // Query existing site document
-    const existingSites = await firestore.getCollection('blocked_sites', {
-      where: [
-        ['user_id', '==', user.uid],
-        ['url', '==', normalizedDomain]
-      ]
-    });
-    
-    if (existingSites && existingSites.length > 0) {
-      // Update existing document using updateBlockedSite
-      const docId = existingSites[0].id;
-      await firestore.updateBlockedSite(docId, siteData, ['is_active', 'override_active', 'override_initiated_by', 'override_initiated_at', 'last_reset_timestamp']);
+    const siteId = `${user.uid}_${normalizedDomain}`;
+    console.log("siteId", siteId)
+    const existingSite = await firestore.getBlockedSite(siteId);
+    console.log("existingSite", existingSite)
+    if (existingSite) {
+      await firestore.updateBlockedSite(siteId, siteData, ['is_active', 'override_active', 'override_initiated_by', 'override_initiated_at', 'last_reset_timestamp',]);
     } else {
       // Create new document using updateBlockedSite with a new ID
-      const newDocId = `${user.uid}_${normalizedDomain}`;
-      await firestore.updateBlockedSite(newDocId, {
+      await firestore.updateBlockedSite(siteId, {
         ...siteData,
         created_at: now
       });

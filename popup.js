@@ -452,10 +452,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         // Add to both Firestore and Realtime Database
-        await Promise.all([
-            firestore.updateBlockedSite(siteId, siteData),
-            // firestore.addBlockedSite(siteId, siteData)
-        ]);
+       await firestore.updateBlockedSite(siteId, siteData);
 
         // Update user profile stats if we have one
         if (userProfile) {
@@ -506,7 +503,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
       // Update both Firestore and Realtime Database
       await Promise.all([
-        firestore.updateBlockedSite(siteId, siteData),
+        firestore.updateBlockedSite(siteId, siteData, ['url']),
         // realtimeDB.addBlockedSite(siteId, siteData)
       ]);
 
@@ -1408,7 +1405,7 @@ document.addEventListener('DOMContentLoaded', function() {
           last_reset_timestamp: existingSite.last_reset_timestamp
         };
         
-        await firestore.updateBlockedSite(siteId, reactivatedSiteData);
+        await firestore.updateBlockedSite(siteId, reactivatedSiteData, ['url']);
         
         // Add to local domains with existing time_limit
         domains[cleanDomain] = existingSite.time_limit;
@@ -1510,7 +1507,7 @@ document.addEventListener('DOMContentLoaded', function() {
             last_reset_timestamp: existingSite.last_reset_timestamp
           };
           
-          await firestore.updateBlockedSite(siteId, updatedSiteData);
+          await firestore.updateBlockedSite(siteId, updatedSiteData, ['url']);
           console.log(`Successfully set is_active: false for ${domain} in Firestore`);
         } else {
           console.log(`No existing site found for ${domain} in Firestore`);
@@ -1673,7 +1670,7 @@ document.addEventListener('DOMContentLoaded', function() {
       await clearDailyBlock(domain);
 
       // Update Firebase Realtime Database
-      await firestore.updateBlockedSite(siteId, updatedSiteData);
+      await firestore.updateBlockedSite(siteId, updatedSiteData, ['url']);
       // await realtimeDB.addBlockedSite(siteId, updatedSiteData);
 
       // Create override history record
@@ -1747,7 +1744,7 @@ document.addEventListener('DOMContentLoaded', function() {
           };
           console.log("clearedOverrideData", clearedOverrideData)
           // Update Firebase first
-          await firestore.updateBlockedSite(siteId, clearedOverrideData);
+          await firestore.updateBlockedSite(siteId, clearedOverrideData, ['url']);
           // await realtimeDB.addBlockedSite(siteId, clearedOverrideData);
 
           // Then update local storage

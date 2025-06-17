@@ -291,9 +291,11 @@
                         }
                         // Case 3: Same reset time or no resets - use minimum time
                         else {
-                            if (firebaseTime <= chromeTimeRemaining) {
+                            if (firebaseTime <= chromeTimeRemaining || chromeTimeRemaining === null) {
                                 console.log('Using Firebase time (lower value)');
                                 timeRemaining = firebaseTime;
+                                chromeTimeRemaining = firebaseTime;
+                                saveTimerState();
                             } else {
                                 console.log('Using Chrome time (lower value)');
                                 timeRemaining = chromeTimeRemaining;
@@ -2096,6 +2098,7 @@
             clearInterval(pollingInterval);
         }
             pollingInterval = setInterval(async () => {
+                console.log("documnet", document.URL)
                 if(document.visibilityState == "hidden") {
                     return;
                 }
@@ -2164,7 +2167,8 @@
                                     override_initiated_by: currentOverrideInitiatedBy,
                                     override_initiated_at: currentOverrideInitiatedAt,
                                     time_limit: currentTimeLimit,
-                                    last_reset_timestamp: lastResetTimestamp
+                                    last_reset_timestamp: lastResetTimestamp,
+                                    url: document.URL
                                 });
                             }
                         } else if (firestoreTime < timeRemaining) {
