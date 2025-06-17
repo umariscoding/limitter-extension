@@ -1,12 +1,12 @@
 // Firebase Configuration
 export const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyCRcKOOzsp_nX8auUOhAFR-UVhGqIgmOjU",
-  authDomain: "test-ext-ad0b2.firebaseapp.com",
-  projectId: "test-ext-ad0b2",
-  storageBucket: "test-ext-ad0b2.firebasestorage.app",
-  messagingSenderId: "642984588666",
-  appId: "1:642984588666:web:dd1fcd739567df3a4d92c3",
-  measurementId: "G-B0MC8CDXCK",
+  apiKey: "AIzaSyDmeE0h4qlRTs8c87bQhvh8Hvfe0NZsqmQ",
+  authDomain: "testing-396cd.firebaseapp.com",
+  projectId: "testing-396cd",
+  storageBucket: "testing-396cd.firebasestorage.app",
+  messagingSenderId: "327238443846",
+  appId: "1:327238443846:web:72732cb7e7d200c4327b47",
+  measurementId: "G-XKPB99GTGF"
 };
 
 // Firebase Auth API endpoints
