@@ -1,7 +1,7 @@
 // Firebase Sync Service
 // Handles syncing of timer states and blocked site data to Firebase
 
-class FirebaseSyncService {
+export class FirebaseSyncService {
   constructor(firestore, auth) {
     this.firestore = firestore;
     this.auth = auth;
@@ -48,45 +48,45 @@ class FirebaseSyncService {
   }
 
   // Sync timer state to Realtime Database
-  async syncTimerStateToRealtimeDB(userId, timerState) {
-    try {
-      const realtimeDB = chrome.extension.getBackgroundPage()?.realtimeDB;
-      if (!realtimeDB) {
-        throw new Error('Realtime Database not available');
-      }
-      const normalizedDomain = this.normalizeDomain(timerState.domain);
-      const formattedDomain = realtimeDB.formatDomainForFirebase(normalizedDomain);
-      const siteId = `${userId}_${formattedDomain}`;
+  // async syncTimerStateToRealtimeDB(userId, timerState) {
+  //   try {
+  //     const realtimeDB = chrome.extension.getBackgroundPage()?.realtimeDB;
+  //     if (!realtimeDB) {
+  //       throw new Error('Realtime Database not available');
+  //     }
+  //     const normalizedDomain = this.normalizeDomain(timerState.domain);
+  //     const formattedDomain = realtimeDB.formatDomainForFirebase(normalizedDomain);
+  //     const siteId = `${userId}_${formattedDomain}`;
 
-      const now = new Date();
-      const siteData = {
-        user_id: userId,
-        url: normalizedDomain,
-        time_remaining: timerState.actualTimeRemaining,
-        time_limit: timerState.gracePeriod,
-        is_active: true,
-        override_active: false,
-        is_blocked: timerState.actualTimeRemaining <= 0,
-        last_accessed: now.toISOString(),
-        updated_at: now.toISOString(),
-        last_reset_date: this.getTodayString(),
-        last_reset_timestamp: timerState.lastResetTimestamp || 0,
-        last_sync_timestamp: Date.now()
-      };
+  //     const now = new Date();
+  //     const siteData = {
+  //       user_id: userId,
+  //       url: normalizedDomain,
+  //       time_remaining: timerState.actualTimeRemaining,
+  //       time_limit: timerState.gracePeriod,
+  //       is_active: true,
+  //       override_active: false,
+  //       is_blocked: timerState.actualTimeRemaining <= 0,
+  //       last_accessed: now.toISOString(),
+  //       updated_at: now.toISOString(),
+  //       last_reset_date: this.getTodayString(),
+  //       last_reset_timestamp: timerState.lastResetTimestamp || 0,
+  //       last_sync_timestamp: Date.now()
+  //     };
 
-      // If timer has reached zero, mark as blocked
-      if (timerState.actualTimeRemaining <= 0) {
-        siteData.is_blocked = true;
-        siteData.blocked_until = new Date(now.setHours(23, 59, 59, 999)).toISOString();
-      }
+  //     // If timer has reached zero, mark as blocked
+  //     if (timerState.actualTimeRemaining <= 0) {
+  //       siteData.is_blocked = true;
+  //       siteData.blocked_until = new Date(now.setHours(23, 59, 59, 999)).toISOString();
+  //     }
 
-      await this.firestore.updateBlockedSite(siteId, siteData);
-      return true;
-    } catch (error) {
-      console.error('Firebase Sync Service: Realtime DB sync error:', error);
-      throw error;
-    }
-  }
+  //     await this.firestore.updateBlockedSite(siteId, siteData);
+  //     return true;
+  //   } catch (error) {
+  //     console.error('Firebase Sync Service: Realtime DB sync error:', error);
+  //     throw error;
+  //   }
+  // }
 
   // Get today's date string in YYYY-MM-DD format
   getTodayString() {
@@ -135,17 +135,4 @@ class FirebaseSyncService {
   normalizeDomain(domain) {
     return domain.replace(/^www\./, '').toLowerCase();
   }
-}
-
-// Export for use in other scripts - Chrome extension compatible
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { FirebaseSyncService };
-}
-
-// Make FirebaseSyncService available globally for Chrome extension context
-if (typeof window !== 'undefined') {
-  window.FirebaseSyncService = FirebaseSyncService;
-} else if (typeof self !== 'undefined') {
-  // For service workers
-  self.FirebaseSyncService = FirebaseSyncService;
 }

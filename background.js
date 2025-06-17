@@ -1,17 +1,18 @@
 // Limitter Background Script
+import * as FirebaseModule from './firebase-config.js';
+import { SubscriptionService } from './subscription-service.js';
+import { FirebaseSyncService } from './firebase-sync-service.js';
+
+const { FIREBASE_CONFIG, FirebaseAuth, FirebaseFirestore } = FirebaseModule;
+
 let blockedDomains = {};
 let isEnabled = true;
 let isAuthenticated = false;
 let firebaseAuth = null;
 let firestore = null;
-let realtimeDB = null;
+// let realtimeDB = null;
 let subscriptionService = null;
 let firebaseSyncService = null;
-
-// Import Firebase configuration
-importScripts('firebase-config.js');
-importScripts('subscription-service.js');
-importScripts('firebase-sync-service.js');
 
 // Check if all required classes are loaded
 console.log('Limitter Background: Checking class availability:', {
@@ -64,18 +65,18 @@ async function initializeAuth() {
       firebaseSyncService = null;
     }
 
-    try {
-      if (firebaseAuth) {
-        realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
-        console.log('Limitter Background: FirebaseRealtimeDB created successfully');
-      } else {
-        console.log('Limitter Background: Skipping FirebaseRealtimeDB creation - auth not available');
-        realtimeDB = null;
-      }
-    } catch (realtimeError) {
-      console.warn('Limitter Background: Error creating FirebaseRealtimeDB, continuing without realtime features:', realtimeError);
-      realtimeDB = null;
-    }
+    // try {
+    //   if (firebaseAuth) {
+    //     realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
+    //     console.log('Limitter Background: FirebaseRealtimeDB created successfully');
+    //   } else {
+    //     console.log('Limitter Background: Skipping FirebaseRealtimeDB creation - auth not available');
+    //     realtimeDB = null;
+    //   }
+    // } catch (realtimeError) {
+    //   console.warn('Limitter Background: Error creating FirebaseRealtimeDB, continuing without realtime features:', realtimeError);
+    //   realtimeDB = null;
+    // }
     
     let storedUser = null;
     if (firebaseAuth) {
@@ -132,7 +133,7 @@ async function initializeAuth() {
       console.log('Limitter Background: User not authenticated or subscription service not available');
     }
     
-    console.log('Limitter Background: Authentication initialized, isAuthenticated:', isAuthenticated, 'syncService available:', !!firebaseSyncService, 'realtimeDB available:', !!realtimeDB);
+    console.log('Limitter Background: Authentication initialized, isAuthenticated:', isAuthenticated, 'syncService available:', !!firebaseSyncService);
   } catch (error) {
     console.warn('Limitter Background: Auth initialization failed, extension will work in offline mode:', error);
     isAuthenticated = false;
@@ -140,7 +141,7 @@ async function initializeAuth() {
     firebaseAuth = null;
     firestore = null;
     subscriptionService = null;
-    realtimeDB = null;
+    // realtimeDB = null;
   }
 }
 
@@ -354,7 +355,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           
           firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
           firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
-          realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
+          // realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
           
           // Initialize sync service
           firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
@@ -368,13 +369,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           console.log('Limitter Background: Service status after login:', {
             hasFirebaseAuth: !!firebaseAuth,
             hasFirestore: !!firestore,
-            hasRealtimeDB: !!realtimeDB,
+            // hasRealtimeDB: !!realtimeDB,
             hasFirebaseSyncService: !!firebaseSyncService,
             hasSubscriptionService: !!subscriptionService
           });
           
           // Only proceed with tab updates if everything is ready
-          if (firebaseSyncService && realtimeDB) {
+          if (firebaseSyncService) {
             console.log('Limitter Background: All services ready - loading configuration and updating tabs');
             
             // Load configuration first, then update tabs
@@ -393,7 +394,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             console.error('Limitter Background: Firebase services still not available after login');
             console.error('Limitter Background: Service status:', {
               hasFirebaseSyncService: !!firebaseSyncService,
-              hasRealtimeDB: !!realtimeDB,
+              // hasRealtimeDB: !!realtimeDB,
               hasFirebaseAuth: !!firebaseAuth,
               hasFirestore: !!firestore
             });
@@ -752,38 +753,38 @@ chrome.storage.onChanged.addListener((changes, area) => {
       console.log('Limitter: Domains configuration changed', blockedDomains);
       
       // Set up listeners for newly added domains
-      if (isAuthenticated && realtimeDB) {
-        Object.keys(newDomains).forEach(domain => {
-          if (!oldDomains[domain]) {
-            console.log(`🔄 Setting up listener for newly added domain: ${domain}`);
-            setupDomainListener(domain);
-          }
-        });
+      // if (isAuthenticated) {
+        // Object.keys(newDomains).forEach(domain => {
+        //   if (!oldDomains[domain]) {
+        //     console.log(`🔄 Setting up listener for newly added domain: ${domain}`);
+        //     setupDomainListener(domain);
+        //   }
+        // });
         
-        // Clean up listeners for removed domains
-        Object.keys(oldDomains).forEach(domain => {
-          if (!newDomains[domain]) {
-            console.log(`🧹 Cleaning up listener for removed domain: ${domain}`);
-            const user = firebaseAuth.getCurrentUser();
-            if (user) {
-              const cleanDomain = domain.replace(/^www\./, '').toLowerCase();
-              const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
-              const siteId = `${user.uid}_${formattedDomain}`;
+        // // Clean up listeners for removed domains
+        // Object.keys(oldDomains).forEach(domain => {
+        //   if (!newDomains[domain]) {
+        //     console.log(`🧹 Cleaning up listener for removed domain: ${domain}`);
+        //     const user = firebaseAuth.getCurrentUser();
+        //     if (user) {
+        //       const cleanDomain = domain.replace(/^www\./, '').toLowerCase();
+        //       // const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
+        //       const siteId = `${user.uid}_${formattedDomain}`;
               
-              const listener = activeListeners.get(siteId);
-              if (listener) {
-                try {
-                  listener.eventSource.close();
-                  activeListeners.delete(siteId);
-                  console.log(`✅ Cleaned up listener for ${domain}`);
-                } catch (error) {
-                  console.error(`Error cleaning up listener for ${domain}:`, error);
-                }
-              }
-            }
-          }
-        });
-      }
+        //       const listener = activeListeners.get(siteId);
+        //       if (listener) {
+        //         try {
+        //           listener.eventSource.close();
+        //           activeListeners.delete(siteId);
+        //           console.log(`✅ Cleaned up listener for ${domain}`);
+        //         } catch (error) {
+        //           console.error(`Error cleaning up listener for ${domain}:`, error);
+        //         }
+        //       }
+        //     }
+        //   }
+        // });
+      // }
     
       updateAllTrackedTabs();
     }
@@ -799,7 +800,7 @@ function stopAllTimers() {
   }
 
   // Clean up Firebase listeners
-  cleanupListeners();
+  // cleanupListeners();
 
   chrome.tabs.query({}, (tabs) => {
     tabs.forEach(tab => {
@@ -937,7 +938,7 @@ function updateAllTrackedTabs() {
 // Load timer state from Firebase for cross-device syncing
 async function loadTimerStateFromFirebase(domain) {
   try {
-    if (!realtimeDB || !firebaseAuth) {
+    if (!firebaseAuth) {
       console.log('Limitter Background: Not authenticated or services not available for Firebase load');
       return null;
     }
@@ -1035,143 +1036,7 @@ function getTodayString() {
 
 
 // Store active Firebase listeners
-const activeListeners = new Map();
-
-// Initialize Firebase services
-async function initializeAuth() {
-  try {
-    firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
-    const user = await firebaseAuth.getStoredAuthData();
-    
-    if (user) {
-      isAuthenticated = true;
-      firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
-      realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
-      firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
-      
-      // Set up persistent listeners for all tracked domains
-      await setupPersistentListeners();
-      
-      return true;
-    }
-  } catch (error) {
-    console.error('Firebase initialization error:', error);
-  }
-  return false;
-}
-
-// Set up persistent Firebase listeners for all tracked domains
-async function setupPersistentListeners() {
-  try {
-    console.log('🔄 Setting up persistent Firebase listeners for all tracked domains...');
-    
-    // Load current blocked domains configuration
-    await loadConfiguration();
-    
-    const user = firebaseAuth.getCurrentUser();
-    if (!user || !blockedDomains) {
-      console.log('❌ Cannot set up listeners - no user or domains');
-      return;
-    }
-    
-    // Set up listeners for each tracked domain
-    Object.keys(blockedDomains).forEach(domain => {
-      setupDomainListener(domain);
-    });
-    
-    console.log(`✅ Set up persistent listeners for ${Object.keys(blockedDomains).length} domains`);
-  } catch (error) {
-    console.error('Error setting up persistent listeners:', error);
-  }
-}
-
-// Set up listener for a specific domain
-function setupDomainListener(domain) {
-    if (!firebaseAuth || !realtimeDB) {
-        console.log(`❌ Cannot set up listener for ${domain} - services not available`);
-        return;
-    }
-
-    const user = firebaseAuth.getCurrentUser();
-    if (!user) {
-        console.log(`❌ Cannot set up listener for ${domain} - no authenticated user`);
-        return;
-    }
-
-    const cleanDomain = domain.replace(/^www\./, '').toLowerCase();
-    const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
-    const siteId = `${user.uid}_${formattedDomain}`;
-
-    // Don't set up duplicate listeners
-    if (activeListeners.has(siteId)) {
-        console.log(`🔄 Listener already exists for ${cleanDomain}`);
-        return;
-    }
-
-    try {
-        // console.log(`🔄 Setting up persistent listener for domain: ${cleanDomain} (${siteId})`);
-
-        // const eventSource = realtimeDB.listenToBlockedSite(siteId, async (updatedData) => {
-        //     // Check services before processing update
-        //     if (!realtimeDB || !firebaseAuth || !isAuthenticated) {
-        //         console.log(`❌ Services unavailable during update - attempting recovery...`);
-        //         const recovered = await recoverFirebaseServices();
-        //         if (!recovered) {
-        //             console.log(`❌ Service recovery failed - cannot process update`);
-        //             return;
-        //         }
-        //     }
-
-        //     console.log(`🔥 Firebase Update: ${cleanDomain}`, updatedData);
-
-        //     // Get local timer state first
-        //     const localTimerState = await getTimerStateForDomain(cleanDomain);
-        //     const localTimeRemaining = localTimerState?.timeRemaining;
-
-        //     if (updatedData.override_active !== true && 
-        //        (updatedData.tab_switch_active === undefined) && 
-        //         updatedData.time_remaining < localTimeRemaining) {
-        //         // Handle time decrease from other device
-        //         console.log("time_remaining", updatedData.time_remaining)
-        //         await updateLocalTimers(cleanDomain, updatedData.time_remaining);
-        //     }
-
-        //     // Handle override changes
-        //     if (updatedData.override_active !== undefined) {
-        //         handleOverrideChange(cleanDomain, updatedData);
-        //         // Skip other handlers when handling override to prevent loops
-        //         return;
-        //     }
-
-            // // Handle tab switch changes
-            // if (updatedData.tab_switch_active === true) {
-            //   console.log("tab_switch_active", updatedData)
-            //     handleTabSwitchSync(cleanDomain, updatedData);
-            // }
-
-            // Handle site opened changes
-        //     if (updatedData.site_opened_active === true) {
-        //         handleSiteOpenedSync(cleanDomain, updatedData);
-        //     }
-
-        //     // Handle domain deactivation (is_active becomes false)
-        //     if (updatedData.is_active === false) {
-        //         handleDomainDeactivation(cleanDomain, updatedData);
-        //     }
-        // });
-
-        // // Store the listener for cleanup later
-        // activeListeners.set(siteId, {
-        //     eventSource,
-        //     domain: cleanDomain,
-        //     siteId
-        // });
-
-        console.log(`✅ Listener set up successfully for ${cleanDomain}`);
-    } catch (error) {
-        console.error(`❌ Error setting up listener for ${cleanDomain}:`, error);
-    }
-}
+// const activeListeners = new Map();
 
 // Handle override changes
 async function handleOverrideChange(domain, updatedData) {
@@ -1209,54 +1074,6 @@ async function handleOverrideChange(domain, updatedData) {
     await updateLocalTimers(domain, localTimerState.timeRemaining);
   }
 }
-
-// // Handle tab switch synchronization (simplified with unified functions)
-// async function handleTabSwitchSync(domain, updatedData) {
-//   console.log(`🔄 TAB SWITCH: Tab switch detected for ${domain}`);
-//   console.log("updatedData", updatedData);
-
-//   // Timer synchronization logic
-//   const firebaseTimeRemaining = updatedData.time_remaining;
-//   console.log(`Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
-  
-//   if (firebaseTimeRemaining !== undefined && firebaseTimeRemaining !== null && typeof firebaseTimeRemaining === 'number') {
-//     // Get local timer state using unified function
-//     const localTimerState = await getTimerStateForDomain(domain);
-    
-//     if (localTimerState && typeof localTimerState.timeRemaining === 'number') {
-//       // Use unified sync logic
-//       const user = firebaseAuth.getCurrentUser();
-//       if (user) {
-//         const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-//         const siteId = `${user.uid}_${formattedDomain}`;
-        
-//         console.log(`🔄 Syncing timers - Local: ${localTimerState.timeRemaining}s, Firebase: ${firebaseTimeRemaining}s`);
-        
-//         await syncTimerStates(domain, localTimerState.timeRemaining, firebaseTimeRemaining, siteId, {
-//           updateFirebase: true, // May update Firebase if large difference
-//           updateLocal: true,
-//           timeDifferenceThreshold: 5,
-//           source: 'cross-device'
-//         });
-        
-//         console.log(`✅ Cross-device timer sync completed for ${domain}`);
-//       } else {
-//         console.error('❌ No authenticated user for Firebase update');
-//       }
-//     } else {
-//       console.log(`⚠️ No valid local timer state found for ${domain}`);
-//       console.log(`  Will use Firebase time as reference: ${firebaseTimeRemaining}s`);
-      
-//       // No local timer found, but we have Firebase time - update local timers directly
-//       console.log(`🔄 Updating local timers with Firebase time: ${firebaseTimeRemaining}s`);
-//       await updateLocalTimers(domain, firebaseTimeRemaining);
-//       console.log(`✅ Local timers updated with Firebase time for cross-device sync`);
-//     }
-//   } else {
-//     console.log(`⚠️ Invalid Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
-//     console.log(`  Tab switch event processed but no valid timer data to sync`);
-//   }
-// }
 
 // ===== UNIFIED TIMER SYNCHRONIZATION FUNCTIONS =====
 
@@ -1428,22 +1245,22 @@ function notifyTabsOfTimerUpdate(domain, timeRemaining) {
 }
 
 // Clean up listeners when user logs out
-function cleanupListeners() {
-  console.log(`🧹 Cleaning up ${activeListeners.size} Firebase listeners`);
+// function cleanupListeners() {
+//   console.log(`🧹 Cleaning up ${activeListeners.size} Firebase listeners`);
   
-  activeListeners.forEach((listener, siteId) => {
-    try {
-      if (listener.eventSource) {
-        listener.eventSource.close();
-      }
-    } catch (error) {
-      console.error(`Error closing listener for ${siteId}:`, error);
-    }
-  });
+//   activeListeners.forEach((listener, siteId) => {
+//     try {
+//       if (listener.eventSource) {
+//         listener.eventSource.close();
+//       }
+//     } catch (error) {
+//       console.error(`Error closing listener for ${siteId}:`, error);
+//     }
+//   });
   
-  activeListeners.clear();
-  console.log('✅ All Firebase listeners cleaned up');
-}
+//   activeListeners.clear();
+//   console.log('✅ All Firebase listeners cleaned up');
+// }
 
 // Tab switch detection
 let currentDeviceId = null;
@@ -1573,125 +1390,125 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 });
 
 // Handle site opened event (fresh tab/reload) with cross-device sync
-async function handleSiteOpened(domain, localTimeRemaining) {
-  console.log(`🔄 SITE OPENED: Fresh site opening detected for ${domain} with local time: ${localTimeRemaining}s`);
+// async function handleSiteOpened(domain, localTimeRemaining) {
+//   console.log(`🔄 SITE OPENED: Fresh site opening detected for ${domain} with local time: ${localTimeRemaining}s`);
   
-  try {
-    if (!realtimeDB || !firebaseAuth || !isAuthenticated) {
-      console.log(`❌ Prerequisites failed for site opened event`);
-      return { success: false, message: 'Not authenticated or services not available' };
-    }
+//   try {
+//     if (!realtimeDB || !firebaseAuth || !isAuthenticated) {
+//       console.log(`❌ Prerequisites failed for site opened event`);
+//       return { success: false, message: 'Not authenticated or services not available' };
+//     }
     
-    const user = firebaseAuth.getCurrentUser();
-    if (!user) {
-      console.log(`❌ No authenticated user for site opened event`);
-      return { success: false, message: 'No authenticated user' };
-    }
+//     const user = firebaseAuth.getCurrentUser();
+//     if (!user) {
+//       console.log(`❌ No authenticated user for site opened event`);
+//       return { success: false, message: 'No authenticated user' };
+//     }
     
-    const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-    const siteId = `${user.uid}_${formattedDomain}`;
+//     const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+//     const siteId = `${user.uid}_${formattedDomain}`;
     
-    // Get current Firebase state
-    console.log(`🔍 Getting current Firebase state for ${domain}`);
-    const firebaseData = await realtimeDB.getSiteData(siteId);
-    const firebaseTimeRemaining = firebaseData?.time_remaining;
+//     // Get current Firebase state
+//     console.log(`🔍 Getting current Firebase state for ${domain}`);
+//     const firebaseData = await realtimeDB.getSiteData(siteId);
+//     const firebaseTimeRemaining = firebaseData?.time_remaining;
     
-    console.log(`Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
-    console.log(`Local time_remaining: ${localTimeRemaining} (type: ${typeof localTimeRemaining})`);
+//     console.log(`Firebase time_remaining: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
+//     console.log(`Local time_remaining: ${localTimeRemaining} (type: ${typeof localTimeRemaining})`);
     
-    // If we have both local and Firebase times, send site opened signal for cross-device sync
-    if (typeof localTimeRemaining === 'number' && firebaseTimeRemaining !== undefined && firebaseTimeRemaining !== null && typeof firebaseTimeRemaining === 'number') {
-      console.log(`🔄 Both times available - sending site opened signal for cross-device sync`);
+//     // If we have both local and Firebase times, send site opened signal for cross-device sync
+//     if (typeof localTimeRemaining === 'number' && firebaseTimeRemaining !== undefined && firebaseTimeRemaining !== null && typeof firebaseTimeRemaining === 'number') {
+//       console.log(`🔄 Both times available - sending site opened signal for cross-device sync`);
       
-      // Send site opened signal with local time
-      await realtimeDB.updateSiteOpened(siteId, { 
-        timeRemaining: localTimeRemaining , 
-        site_opened_active: true
-      });
+//       // Send site opened signal with local time
+//       await realtimeDB.updateSiteOpened(siteId, { 
+//         timeRemaining: localTimeRemaining , 
+//         site_opened_active: true
+//       });
       
-      // Wait a bit for other devices to respond, then sync using min logic
-      setTimeout(async () => {
-        try {
-          // Get updated Firebase data after other devices had a chance to respond
-          const updatedFirebaseData = await realtimeDB.getSiteData(siteId);
-          const updatedFirebaseTime = updatedFirebaseData?.time_remaining;
+//       // Wait a bit for other devices to respond, then sync using min logic
+//       setTimeout(async () => {
+//         try {
+//           // Get updated Firebase data after other devices had a chance to respond
+//           const updatedFirebaseData = await realtimeDB.getSiteData(siteId);
+//           const updatedFirebaseTime = updatedFirebaseData?.time_remaining;
           
-          if (updatedFirebaseTime !== undefined && updatedFirebaseTime !== null && typeof updatedFirebaseTime === 'number') {
-            console.log(`🔄 Syncing after site opened signal - Local: ${localTimeRemaining}s, Firebase: ${updatedFirebaseTime}s`);
+//           if (updatedFirebaseTime !== undefined && updatedFirebaseTime !== null && typeof updatedFirebaseTime === 'number') {
+//             console.log(`🔄 Syncing after site opened signal - Local: ${localTimeRemaining}s, Firebase: ${updatedFirebaseTime}s`);
             
-            await syncTimerStates(domain, localTimeRemaining, updatedFirebaseTime, siteId, {
-              updateFirebase: true,
-              updateLocal: true,
-              timeDifferenceThreshold: 2, // More sensitive for fresh opens
-              source: 'site-opened'
-            });
-          }
-        } catch (error) {
-          console.error('❌ Error during post-site-opened sync:', error);
-        }
-      }, 2000); // Wait 2 seconds for other devices to respond
+//             await syncTimerStates(domain, localTimeRemaining, updatedFirebaseTime, siteId, {
+//               updateFirebase: true,
+//               updateLocal: true,
+//               timeDifferenceThreshold: 2, // More sensitive for fresh opens
+//               source: 'site-opened'
+//             });
+//           }
+//         } catch (error) {
+//           console.error('❌ Error during post-site-opened sync:', error);
+//         }
+//       }, 2000); // Wait 2 seconds for other devices to respond
       
-      return { success: true, message: 'Site opened signal sent, cross-device sync initiated' };
-    } else if (typeof localTimeRemaining === 'number') {
-      // Only local time available, send signal anyway
-      console.log(`📤 Only local time available, sending site opened signal: ${localTimeRemaining}s`);
-      await realtimeDB.updateSiteOpened(siteId, { 
-        timeRemaining: localTimeRemaining ,
-        site_opened_active: true
-      });
+//       return { success: true, message: 'Site opened signal sent, cross-device sync initiated' };
+//     } else if (typeof localTimeRemaining === 'number') {
+//       // Only local time available, send signal anyway
+//       console.log(`📤 Only local time available, sending site opened signal: ${localTimeRemaining}s`);
+//       await realtimeDB.updateSiteOpened(siteId, { 
+//         timeRemaining: localTimeRemaining ,
+//         site_opened_active: true
+//       });
       
-      return { success: true, message: 'Site opened signal sent with local time' };
-    } else {
-      console.log(`⚠️ No valid local time for site opened signal`);
-      return { success: false, message: 'No valid local time available' };
-    }
+//       return { success: true, message: 'Site opened signal sent with local time' };
+//     } else {
+//       console.log(`⚠️ No valid local time for site opened signal`);
+//       return { success: false, message: 'No valid local time available' };
+//     }
     
-  } catch (error) {
-    console.error('❌ Error handling site opened:', error);
-    return { success: false, message: error.message };
-  }
-}
+//   } catch (error) {
+//     console.error('❌ Error handling site opened:', error);
+//     return { success: false, message: error.message };
+//   }
+// }
 
 // Handle site opened synchronization from other devices
-async function handleSiteOpenedSync(domain, updatedData) {
-  console.log(`🔄 SITE OPENED SYNC: Site opened detected from another device for ${domain}`);
-  console.log("updatedData", updatedData);
+// async function handleSiteOpenedSync(domain, updatedData) {
+//   console.log(`🔄 SITE OPENED SYNC: Site opened detected from another device for ${domain}`);
+//   console.log("updatedData", updatedData);
   
-  // Timer synchronization logic
-  const firebaseTimeRemaining = updatedData.time_remaining;
-  console.log(`Firebase time_remaining from other device: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
+//   // Timer synchronization logic
+//   const firebaseTimeRemaining = updatedData.time_remaining;
+//   console.log(`Firebase time_remaining from other device: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
   
-  if (firebaseTimeRemaining !== undefined && firebaseTimeRemaining !== null && typeof firebaseTimeRemaining === 'number') {
-    // Get local timer state
-    const localTimerState = await getTimerStateForDomain(domain);
+//   if (firebaseTimeRemaining !== undefined && firebaseTimeRemaining !== null && typeof firebaseTimeRemaining === 'number') {
+//     // Get local timer state
+//     const localTimerState = await getTimerStateForDomain(domain);
     
-    if (localTimerState && typeof localTimerState.timeRemaining === 'number') {
-      // Use unified sync logic to respond with our local time
-      const user = firebaseAuth.getCurrentUser();
-      if (user) {
-        const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-        const siteId = `${user.uid}_${formattedDomain}`;
+//     if (localTimerState && typeof localTimerState.timeRemaining === 'number') {
+//       // Use unified sync logic to respond with our local time
+//       const user = firebaseAuth.getCurrentUser();
+//       if (user) {
+//         const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+//         const siteId = `${user.uid}_${formattedDomain}`;
         
-        console.log(`🔄 Responding to site opened with our local time - Local: ${localTimerState.timeRemaining}s, Other device: ${firebaseTimeRemaining}s`);
+//         console.log(`🔄 Responding to site opened with our local time - Local: ${localTimerState.timeRemaining}s, Other device: ${firebaseTimeRemaining}s`);
         
-        await syncTimerStates(domain, localTimerState.timeRemaining, firebaseTimeRemaining, siteId, {
-          updateFirebase: true,
-          updateLocal: true,
-          timeDifferenceThreshold: 2, // More sensitive for site opened events
-          source: 'cross-device-site-opened'
-        });
+//         await syncTimerStates(domain, localTimerState.timeRemaining, firebaseTimeRemaining, siteId, {
+//           updateFirebase: true,
+//           updateLocal: true,
+//           timeDifferenceThreshold: 2, // More sensitive for site opened events
+//           source: 'cross-device-site-opened'
+//         });
         
-        console.log(`✅ Cross-device site opened sync completed for ${domain}`);
-      } else {
-        console.error('❌ No authenticated user for Firebase update');
-      }
-    } else {
-      console.log(`⚠️ No valid local timer state found for ${domain} during site opened sync`);
-    }
-  } else {
-    console.log(`⚠️ Invalid Firebase time_remaining from site opened: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
-  }
-}
+//         console.log(`✅ Cross-device site opened sync completed for ${domain}`);
+//       } else {
+//         console.error('❌ No authenticated user for Firebase update');
+//       }
+//     } else {
+//       console.log(`⚠️ No valid local timer state found for ${domain} during site opened sync`);
+//     }
+//   } else {
+//     console.log(`⚠️ Invalid Firebase time_remaining from site opened: ${firebaseTimeRemaining} (type: ${typeof firebaseTimeRemaining})`);
+//   }
+// }
 
 // Handle domain deactivation (is_active becomes false)
 function handleDomainDeactivation(domain, updatedData) {
@@ -1763,9 +1580,9 @@ async function recoverFirebaseServices() {
             if (!firestore) {
                 firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
             }
-            if (!realtimeDB) {
-                realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
-            }
+              // if (!realtimeDB) {
+              //     realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
+              // }
             if (!firebaseSyncService && firestore && firebaseAuth) {
                 firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
             }
@@ -1794,7 +1611,7 @@ async function recoverFirebaseServices() {
 
 // Add periodic service check
 setInterval(async () => {
-    if (!realtimeDB || !firebaseAuth || !isAuthenticated) {
+    if (!firebaseAuth || !isAuthenticated) {
         await recoverFirebaseServices();
     }
 }, 60000); // Check every minute

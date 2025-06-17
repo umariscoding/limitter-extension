@@ -1,4 +1,6 @@
 // Limitter Popup Script
+import { FIREBASE_CONFIG, FirebaseAuth, FirebaseFirestore } from './firebase-config.js';
+import { SubscriptionService } from './subscription-service.js';
 
 // Check if extension context is valid
 function isExtensionContextValid() {
@@ -28,7 +30,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // Initialize Firebase Auth and Firestore
   const firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
   const firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
-  const realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
+  // const realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
   
   // Initialize Subscription Service
   const subscriptionService = new SubscriptionService(firebaseAuth, firestore);

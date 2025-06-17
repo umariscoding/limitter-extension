@@ -19,25 +19,14 @@
     "https://firestore.googleapis.com/*"
   ],
   "background": {
-    "service_worker": "background.js",
-    "type": "module"
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["subscription-service.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_start"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "firebase-config.js",
-        "subscription-service.js",
-        "firebase-sync-service.js"
-      ],
-      "matches": ["<all_urls>"]
     }
   ],
   "action": {

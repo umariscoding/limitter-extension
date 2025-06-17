@@ -602,11 +602,11 @@
                 }).then(() => {
                     // Only sync to Firebase if we've loaded the current state first
                     // This prevents race conditions where new devices overwrite existing progress
-                    if (hasLoadedFromFirebase && !isInitializing) {
-                        syncTimerToFirebase();
-                    } else {
-                        console.log('Limitter: Skipping Firebase sync - still initializing or haven\'t loaded from Firebase yet');
-                    }
+                    // if (hasLoadedFromFirebase && !isInitializing) {
+                    //     syncTimerToFirebase();
+                    // } else {
+                    //     console.log('Limitter: Skipping Firebase sync - still initializing or haven\'t loaded from Firebase yet');
+                    // }
                 }).catch((error) => {
                     if (error.message && error.message.includes('Extension context invalidated')) {
                         console.log("Limitter: Extension context invalidated, cannot save timer state");
@@ -791,19 +791,19 @@
                 // Mark that we've attempted to load from Firebase
                 hasLoadedFromFirebase = true;
                 
-                // Set up real-time listener for this specific blocked site
-                try {
-                    chrome.runtime.sendMessage({
-                        action: 'setupRealtimeListener',
-                        domain: currentDomain
-                    }, (response) => {
-                        if (response && response.success) {
-                            console.log(`Firebase Realtime Listener: Set up successfully for ${currentDomain}`);
-                        }
-                    });
-                } catch (error) {
-                    console.error('Failed to set up realtime listener:', error);
-                }
+                // // Set up real-time listener for this specific blocked site
+                // try {
+                //     chrome.runtime.sendMessage({
+                //         action: 'setupRealtimeListener',
+                //         domain: currentDomain
+                //     }, (response) => {
+                //         if (response && response.success) {
+                //             console.log(`Firebase Realtime Listener: Set up successfully for ${currentDomain}`);
+                //         }
+                //     });
+                // } catch (error) {
+                //     console.error('Failed to set up realtime listener:', error);
+                // }
                 
                 // Check if we have local saved state first
                 let localTimeRemaining = null;
@@ -2041,68 +2041,6 @@
         });
     }
     
-    function updateTimerState(newTimeRemaining, override = false) {
-        if (!currentDomain) return;
-        
-        const storageKey = getStorageKey();
-        if (!storageKey) return;
-
-        // Update local state
-        timeRemaining = newTimeRemaining;
-        
-        // Save to Chrome storage
-        chrome.storage.local.set({
-            [storageKey]: {
-                timeRemaining: newTimeRemaining,
-                timestamp: Date.now()
-            }
-        });
-
-        // Sync to Firebase if available
-        chrome.runtime.sendMessage({
-            action: 'syncTimerToFirebase',
-            domain: currentDomain,
-            timeRemaining: newTimeRemaining,
-            time_limit: currentTimeLimit,
-            override_active: override,
-            isPaused: !isActiveTab
-        }, response => {
-            if (response && !response.success) {
-                console.log('Limitter: Firebase sync failed:', response.error);
-                
-                // If time increase was rejected, use the server's time
-                if (response.error === 'Time increase not allowed' && response.currentTime !== undefined) {
-                    console.log('Limitter: Using server time:', response.currentTime);
-                    timeRemaining = response.currentTime;
-                    updateDisplay();
-                }
-            }
-        });
-    }
-    
-    // Update the resetTimer function
-    function resetTimer() {
-        if (!currentDomain) return;
-        
-        // Update reset timestamp
-        lastResetTimestamp = Date.now();
-        
-        // Reset timer state
-        timeRemaining = currentTimeLimit;
-        gracePeriod = DEFAULT_GRACE_PERIOD;
-        isTimerPaused = false;
-        
-        // Save and sync state
-        saveTimerState();
-        if (hasLoadedFromFirebase && !isInitializing) {
-            syncTimerToFirebase();
-        }
-        
-        // Update display
-        updateTimerDisplay();
-        startCountdownTimer();
-    }
-    
     // Add Firestore polling function for timer synchronization
     let pollingInterval;
     
@@ -2149,7 +2087,7 @@
                     if (typeof firestoreTime === 'number' && typeof timeRemaining === 'number') {
                         console.log(`Timer Polling - Local: ${timeRemaining}s, Firestore: ${firestoreTime}s`);
                     
-                        if(response.timerState.override_active || ((response.timerState.last_reset_timestamp > lastResetTimestamp) && (lastResetTimestamp !== undefined)) ) {
+                        if(currentOverrideActive || response.timerState.override_active || ((response.timerState.last_reset_timestamp > lastResetTimestamp) && (lastResetTimestamp !== undefined)) ) {
                             currentOverrideActive = response.timerState.override_active;
                             currentOverrideInitiatedBy = response.timerState.override_initiated_by;
                             currentOverrideInitiatedAt = response.timerState.override_initiated_at;
@@ -2158,6 +2096,7 @@
                             saveTimerState();
                             updateTimerDisplay();
                             startCountdownTimer();
+                            return;
                         }
 
                         if (timeRemaining < firestoreTime) {
