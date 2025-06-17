@@ -2139,6 +2139,24 @@
                         console.log("reset timestamp", response.timerState.last_reset_timestamp, lastResetTimestamp)
                         if(response.timerState.override_active || ((response.timerState.last_reset_timestamp > lastResetTimestamp)) || (lastResetTimestamp == undefined)) {
                             console.log("override active", response.timerState.override_active)
+                            if(response.timerState.time_limit - response.timerState.time_remaining > 10) {
+                                chrome.runtime.sendMessage({
+                                    action: 'syncTimerToFirestore',
+                                    domain: currentDomain,
+                                    timeRemaining: currentTimeLimit,
+                                    gracePeriod: gracePeriod,
+                                    isActive: true,
+                                    isPaused: isTimerPaused,
+                                    timestamp: Date.now(),
+                                    override_active: response.timerState.override_active,
+                                    override_initiated_by: response.timerState.override_initiated_by,
+                                    override_initiated_at: response.timerState.override_initiated_at,
+                                    last_reset_timestamp: response.timerState.last_reset_timestamp,
+                                    time_limit: currentTimeLimit,
+                                    url: document.URL
+                                });
+                                return;
+                            }
                             currentOverrideActive = response.timerState.override_active;
                             currentOverrideInitiatedBy = response.timerState.override_initiated_by;
                             currentOverrideInitiatedAt = response.timerState.override_initiated_at;

@@ -439,6 +439,8 @@ document.addEventListener('DOMContentLoaded', function() {
             last_sync_timestamp: Date.now(),
             is_blocked: false,
             override_active: false,
+            override_initiated_by: null,
+            override_initiated_at: null,
             is_active: true,
             blocked_until: null,
             schedule: null,
@@ -1363,6 +1365,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (!canAdd) {
       const maxDomains = subscriptionService.getMaxDomains();
+      showError('You have reached your domains limit of current plan. Upgrade to Pro for unlimited domains.');
       showPlanLimitError(`You've reached your limit of ${maxDomains} domains. Upgrade to Pro for unlimited domains.`, 'pro');
       return;
     }
