@@ -2175,7 +2175,10 @@ document.addEventListener('DOMContentLoaded', function() {
       // Update helper text
       const helperText = document.querySelector('.input-helper');
       if (helperText) {
-        helperText.innerHTML = 'Free plan: 1-hour timer only. <button onclick="chrome.tabs.create({ url: \'http://localhost:3000\' })" style="background: none; border: none; color: #00d4aa; text-decoration: underline; cursor: pointer; font-size: inherit;">Upgrade to Pro</button> for custom timers.';
+        helperText.innerHTML = 'Free plan: 1-hour timer only. <button id = "upgradeBtn" style="background: none; border: none; color: #00d4aa; text-decoration: underline; cursor: pointer; font-size: inherit;">Upgrade to Pro</button> for custom timers.';
+        document.getElementById('upgradeBtn').addEventListener('click', () => {
+          chrome.tabs.create({ url: 'http://localhost:3000' });
+        });
       }
     } else {
       // Enable timer inputs for paid plans
