@@ -39,7 +39,8 @@
     let isEnabled = false;
     let isInitialized = false;
     let countdownTimer = null;
-    let timeRemaining = 20;
+    let _timeRemaining = 20;  // private variable
+    let _previousTimeRemaining = 20;  // track previous value
     let isTimerPaused = false;
     let tabId = null;
     let currentDomain = null;
@@ -48,6 +49,20 @@
     let lastSyncTime = 0; // Track when we last synced with shared state
     let hasLoadedFromFirebase = false; // Prevent writing to Firebase until we've loaded current state
     let isInitializing = true;
+    
+    // Getter/Setter for timeRemaining to track changes
+    Object.defineProperty(window, 'timeRemaining', {
+        get: function() {
+            return _timeRemaining;
+        },
+        set: function(newValue) {
+            if (_previousTimeRemaining !== newValue) {
+                console.log(`Time Remaining Changed: ${_previousTimeRemaining} -> ${newValue}`);
+                _previousTimeRemaining = _timeRemaining;
+                _timeRemaining = newValue;
+            }
+        }
+    });
     
     // Override state variables
     let currentOverrideActive = false;
@@ -258,9 +273,12 @@
                         console.log("lastResetTimestamp", lastResetTimestamp, chromeResetTime)
                         // Case 1: Firebase has a more recent reset
                         if (firebaseResetTime > chromeResetTime) {
+                            console.log("firebaseResetTime > chromeResetTime", firebaseResetTime, chromeResetTime, firebaseTime, chromeTimeRemaining)
                             console.log('Using Firebase time due to more recent reset');
                             timeRemaining = firebaseTime;
-                            // lastResetTimestamp = firebaseResetTime;
+                            lastResetTimestamp = firebaseResetTime;
+                            chromeTimeRemaining = firebaseTime;
+                            saveTimerState();
                         }
                         // Case 2: Chrome has a more recent reset
                         else if (chromeResetTime > firebaseResetTime) {
@@ -696,6 +714,7 @@
         }
         
         // Save updated state to Chrome storage
+        console.log("clearing override active", currentOverrideActive)
         saveTimerState();
         currentOverrideActive = false;
         // Sync to Firebase
@@ -725,6 +744,7 @@
     function pauseTimer() {
         if (countdownTimer && !isTimerPaused) {
             isTimerPaused = true;
+            console.log("pausing timer", isTimerPaused)
             saveTimerState();
             updateTimerDisplay();
         }
@@ -737,10 +757,12 @@
             // If this tab is becoming active, sync with shared state first
             if (isActiveTab) {
                 syncFromSharedState().then(() => {
+                    console.log("resuming timer", isTimerPaused)
                     saveTimerState();
                     updateTimerDisplay();
                 });
             } else {
+                console.log("resuming asdtimer", isTimerPaused)
                 saveTimerState();
                 updateTimerDisplay();
             }
@@ -1046,6 +1068,7 @@
                         sendTimerUpdateToPopup();
                         
                         // Save the new state (same as override button)
+                        console.log("saving timer staasdasdaste", timeRemaining)
                         saveTimerState();
                         
                         // Also update Chrome sync storage to ensure domain is properly tracked
@@ -1099,6 +1122,7 @@
                     updateTimerDisplay();
                     
                     // Save the updated state
+                    console.log("saving timerasdasasdasdasdsad state", timeRemaining)
                     saveTimerState();
                     
                     // If timer expired, handle blocking
@@ -1561,6 +1585,7 @@
         }, 1000);
         
         // Immediate save when timer starts
+        console.log("saving timer stateas213", timeRemaining)
         saveTimerState();
     }
     
@@ -2021,6 +2046,7 @@
                     
                     // If this tab becomes active and we've updated the time, sync to Chrome storage
                     if (isActiveTab && timeDifference > 2) {
+                        console.log("savi22ng timer state", timeRemaining)
                         saveTimerState();
                     }
                 }
@@ -2086,13 +2112,15 @@
                     // Compare with local time
                     if (typeof firestoreTime === 'number' && typeof timeRemaining === 'number') {
                         console.log(`Timer Polling - Local: ${timeRemaining}s, Firestore: ${firestoreTime}s`);
-                    
-                        if(currentOverrideActive || response.timerState.override_active || ((response.timerState.last_reset_timestamp > lastResetTimestamp) && (lastResetTimestamp !== undefined)) ) {
+                        console.log("reset timestamp", response.timerState.last_reset_timestamp, lastResetTimestamp)
+                        if(response.timerState.override_active || ((response.timerState.last_reset_timestamp > lastResetTimestamp)) || (lastResetTimestamp == undefined)) {
+                            console.log("override active", response.timerState.override_active)
                             currentOverrideActive = response.timerState.override_active;
                             currentOverrideInitiatedBy = response.timerState.override_initiated_by;
                             currentOverrideInitiatedAt = response.timerState.override_initiated_at;
                             lastResetTimestamp = response.timerState.last_reset_timestamp;
                             timeRemaining = firestoreTime;
+                            console.log("saving timsadsadasd123123er state", timeRemaining)
                             saveTimerState();
                             updateTimerDisplay();
                             startCountdownTimer();

@@ -1595,7 +1595,7 @@ async function recoverFirebaseServices() {
             }
             
             // Reestablish listeners
-            await setupPersistentListeners();
+            // await setupPersistentListeners();
             
             console.log('✅ Firebase services recovered successfully');
             return true;

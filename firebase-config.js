@@ -86,15 +86,9 @@ export class FirebaseAuth {
   async getStoredAuthData() {
     return new Promise((resolve) => {
       chrome.storage.local.get(["firebaseUser", "authTimestamp"], (result) => {
-        if (result.firebaseUser && result.authTimestamp) {
-          const hourInMs = 60 * 60 * 1000;
-          if (Date.now() - result.authTimestamp < hourInMs) {
-            this.currentUser = result.firebaseUser;
-            resolve(result.firebaseUser);
-          } else {
-            this.signOut();
-            resolve(null);
-          }
+        if (result.firebaseUser) {
+          this.currentUser = result.firebaseUser;
+          resolve(result.firebaseUser);
         } else {
           resolve(null);
         }
