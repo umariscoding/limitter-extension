@@ -238,6 +238,40 @@ document.addEventListener('DOMContentLoaded', function() {
         // Show notification to user
         showFeedback(`${message.domain} was removed from another device`);
       }
+    } else if (message.action === 'forceLogout') {
+      console.log('Popup: Received force logout message');
+      
+      // Show error notification
+      showError(message.message || 'You have been logged out.');
+      
+      // Clear all data
+      clearAllChromeStorageData().then(() => {
+        // Update UI to unauthenticated state
+        showUnauthenticatedState();
+        
+        // Clear domains list
+        domains = {};
+        domainStates = {};
+        renderDomainsList();
+        
+        // Stop any active timers
+        if (updateInterval) {
+          clearInterval(updateInterval);
+          updateInterval = null;
+        }
+        
+        // // Hide active timer display if visible
+        // hideActiveTimerDisplay();
+        
+        // // Update stats
+        // updateStats();
+        
+        console.log('Popup: Force logout completed');
+      }).catch(error => {
+        console.error('Error during force logout cleanup:', error);
+      });
+      
+      sendResponse({ success: true });
     }
   });
   

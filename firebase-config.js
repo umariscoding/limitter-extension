@@ -173,14 +173,52 @@ export class FirebaseAuth {
       
       // If this is about our device being removed
       if (data.path === `/${deviceInfo.device_id}` && data.data === null) {
+        console.log('Current device was removed, forcing logout...');
+        
+        // First show notification
         chrome.notifications.create('device-removed', {
           type: 'basic',
           iconUrl: 'icons/icon128.png',
           title: 'Device Removed',
-          message: 'This device has been removed from your account. Please log in again to continue.',
+          message: 'This device has been removed. Logging out...',
           priority: 2,
-          requireInteraction: true,
-          buttons: [{ title: 'Login' }]
+          requireInteraction: true
+        });
+
+        // Force logout
+        this.signOut().then(() => {
+          console.log('Forced logout successful');
+          
+          // Clear all timers and data
+          chrome.storage.sync.set({ blockedDomains: {} });
+          chrome.storage.local.clear();
+          
+          // Notify all tabs to show force logout message and redirect to login
+          chrome.tabs.query({}, (tabs) => {
+            tabs.forEach(tab => {
+              chrome.tabs.sendMessage(tab.id, {
+                action: 'forceLogout',
+                message: 'This device has been removed from your account.'
+              }).catch(err => console.log('Tab might not be ready:', err));
+            });
+          });
+
+          // Notify popup if open
+          chrome.runtime.sendMessage({
+            action: 'forceLogout',
+            message: 'This device has been removed from your account.'
+          }).catch(() => {
+            // Popup might not be open, which is fine
+          });
+
+          // Reload all tabs to ensure clean state
+          chrome.tabs.query({}, (tabs) => {
+            tabs.forEach(tab => {
+              chrome.tabs.reload(tab.id);
+            });
+          });
+        }).catch(error => {
+          console.error('Error during forced logout:', error);
         });
       } 
       // If this is a new device added
@@ -188,12 +226,16 @@ export class FirebaseAuth {
         console.log("data.data", data.data)
         const deviceId = data.path.replace('/', '');
         if (deviceId !== deviceInfo.device_id) {
-          chrome.notifications.create('new-device', {
+          chrome.notifications.create('persistent-notification', {
             type: 'basic',
             iconUrl: 'icons/icon128.png',
             title: 'New Device Added',
+            requireInteraction: true,
+            eventTime: Date.now(),
             message: `A new device "${data.data.device_name}" has been added to your account.`,
-            priority: 1
+            priority: 2
+          }, () => {
+            console.log("notification created");
           });
         }
       }

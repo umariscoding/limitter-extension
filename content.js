@@ -49,6 +49,8 @@
     let lastSyncTime = 0; // Track when we last synced with shared state
     let hasLoadedFromFirebase = false; // Prevent writing to Firebase until we've loaded current state
     let isInitializing = true;
+    let notificationElement = null;
+    let currentNotificationTimeout = null;
     
     // Getter/Setter for timeRemaining to track changes
     Object.defineProperty(window, 'timeRemaining', {
@@ -2223,5 +2225,188 @@
         originalStopCountdownTimer();
         stopTimerPolling();
     };
+
+    // Create and show a custom notification
+    function showCustomNotification(title, message, type = 'info', duration = 5000) {
+        console.log('Showing custom notification:', { title, message, type, duration });
+        
+        // Remove any existing notification
+        if (notificationElement) {
+            notificationElement.remove();
+        }
+        
+        // Clear any existing timeout
+        if (currentNotificationTimeout) {
+            clearTimeout(currentNotificationTimeout);
+        }
+
+        try {
+            // Create notification element
+            notificationElement = document.createElement('div');
+            notificationElement.className = `limitter-banner-notification ${type}`;
+            notificationElement.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                max-width: 400px;
+                min-width: 300px;
+                background: rgba(33, 33, 33, 0.98);
+                color: white;
+                padding: 16px 20px;
+                border-radius: 12px;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+                z-index: 2147483647;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            `;
+            
+            const titleElement = document.createElement('div');
+            titleElement.style.cssText = `
+                font-size: 16px;
+                font-weight: 600;
+                margin: 0 0 8px 0;
+            `;
+            titleElement.textContent = title;
+            
+            const messageElement = document.createElement('div');
+            messageElement.style.cssText = `
+                font-size: 14px;
+                margin: 0;
+                line-height: 1.4;
+            `;
+            messageElement.textContent = message;
+            
+            const closeButton = document.createElement('button');
+            closeButton.style.cssText = `
+                position: absolute;
+                top: 12px;
+                right: 12px;
+                background: none;
+                border: none;
+                color: inherit;
+                font-size: 20px;
+                cursor: pointer;
+                padding: 0;
+                line-height: 1;
+            `;
+            closeButton.innerHTML = '×';
+            closeButton.onclick = () => notificationElement.remove();
+            
+            notificationElement.appendChild(closeButton);
+            notificationElement.appendChild(titleElement);
+            notificationElement.appendChild(messageElement);
+            
+            // Add to page
+            document.body.appendChild(notificationElement);
+            console.log('Notification element added to page');
+            
+            // Auto-hide after duration
+            currentNotificationTimeout = setTimeout(() => {
+                if (notificationElement) {
+                    notificationElement.remove();
+                    notificationElement = null;
+                }
+            }, duration);
+        } catch (error) {
+            console.error('Error showing notification:', error);
+        }
+    }
+
+    // Listen for custom notification messages
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        console.log('Content script received message:', message);
+        if (message.action === 'showCustomNotification') {
+            console.log('Showing notification from message:', message);
+            showCustomNotification(
+                message.title,
+                message.message,
+                message.type || 'info',
+                message.duration || 5000
+            );
+            sendResponse({ success: true });
+        }
+        return true; // Keep the message channel open for the async response
+    });
+
+    // Create force logout overlay
+    function showForceLogoutMessage(message) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 2147483647;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        `;
+
+        const messageBox = document.createElement('div');
+        messageBox.style.cssText = `
+            background: #1a1a1a;
+            padding: 30px;
+            border-radius: 12px;
+            text-align: center;
+            max-width: 400px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        `;
+
+        const icon = document.createElement('div');
+        icon.style.cssText = `
+            font-size: 48px;
+            margin-bottom: 20px;
+        `;
+        icon.textContent = '🔒';
+
+        const title = document.createElement('div');
+        title.style.cssText = `
+            color: #ff3b30;
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        `;
+        title.textContent = 'Device Removed';
+
+        const text = document.createElement('div');
+        text.style.cssText = `
+            color: white;
+            font-size: 16px;
+            line-height: 1.5;
+            margin-bottom: 20px;
+        `;
+        text.textContent = message;
+
+        const subtext = document.createElement('div');
+        subtext.style.cssText = `
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 14px;
+        `;
+        subtext.textContent = 'This page will reload automatically...';
+
+        messageBox.appendChild(icon);
+        messageBox.appendChild(title);
+        messageBox.appendChild(text);
+        messageBox.appendChild(subtext);
+        overlay.appendChild(messageBox);
+        document.body.appendChild(overlay);
+
+        // Remove overlay after 5 seconds (page will reload anyway)
+        setTimeout(() => {
+            overlay.remove();
+        }, 5000);
+    }
+
+    // Listen for messages from background script
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message.action === 'forceLogout') {
+            showForceLogoutMessage(message.message);
+            sendResponse({ success: true });
+        }
+        // ... existing message handlers ...
+    });
 
 })(); // End of IIFE 
