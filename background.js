@@ -25,6 +25,8 @@ console.log('Limitter Background: Checking class availability:', {
 // Add at the top with other variables
 const lastUpdateTimestamps = new Map();
 const UPDATE_DEBOUNCE_INTERVAL = 2000; // 2 seconds
+let recoveryAttempts = 0;
+const MAX_RECOVERY_ATTEMPTS = 2;
 
 async function initializeAuth() {
   try {
@@ -77,7 +79,7 @@ async function initializeAuth() {
     //   console.warn('Limitter Background: Error creating FirebaseRealtimeDB, continuing without realtime features:', realtimeError);
     //   realtimeDB = null;
     // }
-    
+    console.log("firebaseAuth", firebaseAuth)
     let storedUser = null;
     if (firebaseAuth) {
       try {
@@ -89,6 +91,32 @@ async function initializeAuth() {
     isAuthenticated = !!storedUser;
     if (subscriptionService) {
       console.log('Limitter Background: User is authenticated, initializing services...');
+      
+      // Initialize device tracking
+      if (firebaseAuth && storedUser) {
+        try {
+          // Start listening for device changes
+          firebaseAuth.listenToDeviceChanges(storedUser.uid);
+          
+          // Set up aggressive check interval for device listener
+          // let lastReconnectAttempt = 0;
+          // const RECONNECT_COOLDOWN = 2000; // 2 seconds cooldown between reconnect attempts
+          
+          // setInterval(() => {
+          //   const now = Date.now();
+          //   if (!firebaseAuth.isDeviceListenerActive() && 
+          //       (now - lastReconnectAttempt) > RECONNECT_COOLDOWN) {
+          //     console.log('Limitter Background: Device listener inactive, reconnecting...');
+          //     lastReconnectAttempt = now;
+          //     firebaseAuth.listenToDeviceChanges(storedUser.uid);
+          //   }
+          // }, 5000); // Check every 5 seconds
+          
+          console.log('Limitter Background: Device tracking initialized');
+        } catch (deviceError) {
+          console.warn('Limitter Background: Error initializing device tracking:', deviceError);
+        }
+      }
       
       try {
         await subscriptionService.initializePlan();
@@ -179,7 +207,7 @@ chrome.runtime.onStartup.addListener(async () => {
   // console.log('Limitter startup - initializing...');
   await initializeAuth();
   await loadConfiguration();
-  
+   
   // Only update tabs AFTER everything is fully initialized
   if (firebaseSyncService) {
     // console.log('Limitter: Startup complete - updating tracked tabs');
@@ -559,8 +587,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             siteData.is_blocked = true;
             siteData.blocked_until = new Date(now.setHours(23, 59, 59, 999)).toISOString();
           }
-
-          // Preserve any existing fields we want to keep
+          
           if (existingSite) {
             siteData.created_at = existingSite.created_at;
             siteData.name = existingSite.name;
@@ -611,8 +638,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
     case 'loadTimerFromFirebase':
       // Load timer state from Firebase for cross-device syncing
-      if (!firebaseSyncService) {
-        sendResponse({ success: false, error: 'Not authenticated or sync service not available' });
+      if (!firebaseAuth) {
+        sendResponse({ success: false, error: 'Not authenticated or services not available' });
         break;
       }
       
@@ -952,10 +979,8 @@ async function loadTimerStateFromFirebase(domain) {
       // Try stored auth data as fallback
       const storedUser = await firebaseAuth.getStoredAuthData();
       if (!storedUser) {
-        // console.log('Limitter Background: No current user for Firebase load');
         return null;
       }
-      // console.log('Limitter Background: Using stored auth for Firebase load');
     }
     
     const userId = user?.uid || user?.id;
@@ -963,30 +988,82 @@ async function loadTimerStateFromFirebase(domain) {
       console.log('Limitter Background: No user ID available for Firebase load');
       return null;
     }
+
+    // Get the stored device ID first
+    const deviceId = await new Promise((resolve) => {
+      chrome.storage.local.get(['device_id'], (result) => {
+        resolve(result.device_id);
+      });
+    });
+
+    if (!deviceId) {
+      console.warn('Limitter Background: No device ID found, device needs registration');
+      return null;
+    }
+
+    // Check if this device is being tracked
+    const isDeviceTracked = await firebaseAuth.isDeviceTracked(userId);
+    if (!isDeviceTracked) {
+    
+      try {
+          console.warn('Limitter Background: Device re-registration failed, forcing logout');
+          
+          // Show notification with retry
+          chrome.notifications.create('device-not-tracked', {
+            type: 'basic',
+            iconUrl: 'icons/icon128.png',
+            title: 'Device Access Issue',
+            message: 'This device is no longer authorized. Please log in again to continue.',
+            priority: 2,
+            requireInteraction: true,
+            buttons: [
+              { title: 'Login' }
+            ]
+          }, (notificationId) => {
+            if (chrome.runtime.lastError) {
+              console.error('Failed to show notification:', chrome.runtime.lastError);
+            }
+          });
+          
+          // Force logout
+          await firebaseAuth.signOut();
+          isAuthenticated = false;
+
+          // Clear all timers and data
+          stopAllTimers();
+          chrome.storage.sync.set({ blockedDomains: {} });
+          
+          // Notify popup if open
+          chrome.runtime.sendMessage({
+            action: 'forceLogout',
+            message: 'Device access issue. Please log in again to continue.'
+          }).catch(() => {
+            // Popup might not be open, which is fine
+          });
+
+          return null;
+        
+      } catch (error) {
+        console.error('Limitter Background: Device re-registration failed:', error);
+        return null;
+      }
+    }
     
     // Normalize domain for consistency
     const timerDomain = domain.replace(/^www\./, '').toLowerCase();
-    // const formattedTimerDomainForLoad = realtimeDB.formatDomainForFirebase(timerDomain);
     const timerSiteId = `${userId}_${timerDomain}`;
     
-    // console.log(`Limitter Background: Loading timer state for ${timerDomain} from Firebase (siteId: ${timerSiteId})`);
-    
-    // const siteData = await realtimeDB.getBlockedSite(timerSiteId);
     const siteData = await firestore.getBlockedSite(timerSiteId);
     if (siteData) {
-      // Check if site is blocked for today
+      // Rest of the existing timer state loading code...
       const today = getTodayString();
       const lastResetDate = siteData.last_reset_date;
       
-      // If it's a new day, reset the timer
       if (lastResetDate !== today) {
-        // console.log(`Limitter Background: New day detected (${today} vs ${lastResetDate}), timer should reset`);
-        return null; // Let the timer start fresh for the new day
+        return null;
       }
       
-      // Check if site is currently blocked
       if (siteData.is_blocked && siteData.time_remaining <= 0) {
-        // console.log(`Limitter Background: Site is blocked in Firebase with ${siteData.time_remaining}s remaining`);
         return {
           timeRemaining: 0,
           gracePeriod: siteData.time_limit || 20,
@@ -999,13 +1076,12 @@ async function loadTimerStateFromFirebase(domain) {
         };
       }
       
-      // Return active timer state if available
       if (siteData.is_active && siteData.time_remaining > 0) {
         const timerState = {
           timeRemaining: siteData.time_remaining,
           gracePeriod: siteData.time_limit || 20,
           isActive: true,
-          isPaused: false, // Firebase doesn't track pause state
+          isPaused: false,
           timestamp: new Date(siteData.updated_at).getTime(),
           url: siteData.url,
           date: today,
@@ -1017,12 +1093,10 @@ async function loadTimerStateFromFirebase(domain) {
           time_limit: siteData.time_limit,
           last_sync_timestamp: siteData.last_sync_timestamp
         };
-        // console.log(`Limitter Background: Loaded active timer state from Firebase - ${timerState.timeRemaining}s remaining`);
         return timerState;
       }
     }
     
-    // console.log(`Limitter Background: No active timer state found in Firebase for ${timerDomain}`);
     return null;
   } catch (error) {
     console.error('Limitter Background: Error loading timer state from Firebase:', error);
@@ -1568,49 +1642,43 @@ function handleDomainDeactivation(domain, updatedData) {
 
 // Add service recovery function
 async function recoverFirebaseServices() {
-    console.log('🔄 Attempting to recover Firebase services...');
-    
-    try {
-        // Check if we have stored auth data
-        if (!firebaseAuth) {
-            firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
-        }
-        
-        const storedUser = await firebaseAuth.getStoredAuthData();
-        if (storedUser) {
-            isAuthenticated = true;
-            
-            // Reinitialize services
-            if (!firestore) {
-                firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
-            }
-              // if (!realtimeDB) {
-              //     realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
-              // }
-            if (!firebaseSyncService && firestore && firebaseAuth) {
-                firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
-            }
-            
-            // Refresh token
-            try {
-                await firebaseAuth.refreshAuthToken();
-            } catch (refreshError) {
-                console.warn('Token refresh failed during recovery:', refreshError);
-            }
-            
-            // Reestablish listeners
-            // await setupPersistentListeners();
-            
-            console.log('✅ Firebase services recovered successfully');
-            return true;
-        } else {
-            console.log('❌ No stored auth data found during recovery');
-            return false;
-        }
-    } catch (error) {
-        console.error('❌ Error during Firebase service recovery:', error);
-        return false;
+  console.log('🔄 Attempting to recover Firebase services...');
+  
+  // Check if we've exceeded max attempts
+  if (recoveryAttempts >= MAX_RECOVERY_ATTEMPTS) {
+    console.log('❌ Max recovery attempts reached, stopping recovery');
+    recoveryAttempts = 0;
+    return false;
+  }
+  recoveryAttempts++;
+
+  try {
+    // Try to get stored auth data
+    const storedUser = await firebaseAuth?.getStoredAuthData();
+    if (!storedUser) {
+      console.log('❌ No stored auth data found during recovery');
+      return false;
     }
+
+    // Initialize Firebase services
+    firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
+    firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
+    subscriptionService = new SubscriptionService(firebaseAuth, firestore);
+
+    // Initialize services
+    await Promise.all([
+      firebaseSyncService.init(),
+      subscriptionService.initializePlan(),
+      firebaseAuth.listenToDeviceChanges(storedUser.uid)
+    ]);
+
+    console.log('✅ Firebase services recovered successfully');
+    recoveryAttempts = 0;
+    return true;
+  } catch (error) {
+    console.error('❌ Error during service recovery:', error);
+    return false;
+  }
 }
 
 // Add periodic service check
@@ -1737,3 +1805,60 @@ async function syncTimerStateToFirestore(domain, timerState) {
     throw error;
   }
 }
+
+// async function checkDeviceTracking() {
+//   try {
+//     if (!firebaseAuth) {
+//       console.log('Limitter Background: Not authenticated or services not available');
+//       return;
+//     }
+    
+//     const user = firebaseAuth.getCurrentUser();
+//     if (!user) {
+//       const storedUser = await firebaseAuth.getStoredAuthData();
+//       if (!storedUser) {
+//         return;
+//       }
+//     }
+    
+//     const userId = user?.uid || user?.id;
+//     if (!userId) {
+//       return;
+//     }
+
+//     const isDeviceTracked = await firebaseAuth.isDeviceTracked(userId);
+//     if (!isDeviceTracked) {
+//       // Show error notification
+//       chrome.notifications.create('device-not-tracked', {
+//         type: 'basic',
+//         iconUrl: 'icons/icon128.png',
+//         title: 'Device Not Tracked',
+//         message: 'This device is no longer being tracked. Please log out and log in again to reactivate tracking.',
+//         priority: 2
+//       });
+
+//       // Also send message to popup if it's open
+//       chrome.runtime.sendMessage({
+//         action: 'deviceNotTracked',
+//         message: 'This device is no longer being tracked. Please log out and log in again to reactivate tracking.'
+//       }).catch(() => {
+//         // Popup might not be open, which is fine
+//       });
+
+//       console.warn('Limitter Background: Device not tracked, notification shown');
+//     }
+//   } catch (error) {
+//     console.error('Error checking device tracking:', error);
+//   }
+// }
+
+// // Add periodic check for device tracking
+// setInterval(checkDeviceTracking, 5 * 60 * 1000); // Check every 5 minutes
+
+// // Add notification click handler
+// chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) => {
+//   if (notificationId === 'device-not-tracked' && buttonIndex === 0) {
+//     // Open popup for login
+//     chrome.action.openPopup();
+//   }
+// });

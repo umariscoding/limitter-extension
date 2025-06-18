@@ -2104,19 +2104,24 @@ document.addEventListener('DOMContentLoaded', function() {
       if (status.planId === 'free') {
         limitsText += ' • 1-hour timers only';
       }
-      console.log("userProfile", userProfile)
       
-      const user = firebaseAuth.getCurrentUser();
-      const userOverrides = await firestore.getUserOverrides(user.uid);
-      // Add override information
-      console.log("userOverrides", userOverrides)
-      if (userProfile) {
-        if (userOverrides.overrides === -1) {
-          limitsText += ' • Unlimited overrides';
-        } else if (userOverrides.overrides > 0) {
-          limitsText += ` • ${userOverrides.overrides} overrides remaining`;
-        } else {
-          limitsText += ' • No overrides remaining';
+      // Only try to get user overrides if user is authenticated
+      const user = firebaseAuth?.getCurrentUser();
+      if (user && firestore) {
+        try {
+          const userOverrides = await firestore.getUserOverrides(user.uid);
+          // Add override information
+          if (userOverrides) {
+            if (userOverrides.overrides === -1) {
+              limitsText += ' • Unlimited overrides';
+            } else if (userOverrides.overrides > 0) {
+              limitsText += ` • ${userOverrides.overrides} overrides remaining`;
+            } else {
+              limitsText += ' • No overrides remaining';
+            }
+          }
+        } catch (error) {
+          console.warn('Error fetching user overrides:', error);
         }
       }
       

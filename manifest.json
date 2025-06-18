@@ -4,11 +4,15 @@
   "version": "2.0",
   "description": "Block any website with configurable timers. Smart tracking that pauses when you switch tabs.",
   "permissions": [
-    "tabs",
-    "activeTab",
     "storage",
-    "notifications",
+    "tabs",
     "scripting",
+    "notifications",
+    "system.cpu",
+    "system.memory",
+    "system.storage",
+    "system.display",
+    "activeTab",
     "identity"
   ],
   "host_permissions": [
@@ -33,6 +37,8 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "lib/fp.min.js",
+        "device-fingerprint.js",
         "firebase-config.js",
         "subscription-service.js",
         "firebase-sync-service.js"
@@ -53,5 +59,8 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   }
 } 
