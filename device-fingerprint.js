@@ -26,28 +26,25 @@ export class DeviceFingerprint {
 
     async getDeviceInfo() {
         try {
-            // First, try to get the stored device ID
-            let deviceId = await this.getStoredDeviceId();
-            
-            if (!deviceId) {
-                // If no stored ID, generate a new one based on hardware
-                deviceId = await this.generateNewDeviceId();
-                // Store it for future use
-                await this.storeDeviceId(deviceId);
+            // Try to get stored device ID first
+            const storedId = await this.getStoredDeviceId();
+            if (storedId) {
+                return {
+                    device_id: storedId,
+                    device_name: await this.getDeviceName(),
+                    timestamp: Date.now()
+                };
             }
 
-            // Get hardware and OS info for device name
-            const hardwareInfo = await this.getHardwareInfo();
-            const osInfo = this.getDetailedOSInfo();
-
+            // Generate new device ID if none exists
+            const newId = await this.generateNewDeviceId();
             return {
-                device_id: deviceId,
-                device_type: osInfo.name,
-                device_name: this.generateDeviceName(osInfo, hardwareInfo),
-                last_logged_in: new Date().toISOString()
+                device_id: newId,
+                device_name: await this.getDeviceName(),
+                timestamp: Date.now()
             };
         } catch (error) {
-            console.error('Error getting device fingerprint:', error);
+            console.error('Error getting device info:', error);
             throw error;
         }
     }
@@ -129,7 +126,6 @@ export class DeviceFingerprint {
 
     async storeDeviceId(deviceId) {
         try {
-            // Store in chrome.storage.local
             await new Promise((resolve) => {
                 chrome.storage.local.set({ 
                     device_id: deviceId,
@@ -146,30 +142,36 @@ export class DeviceFingerprint {
         // Get system-specific components that should be consistent across browsers
         const systemInfo = await this.getSystemInfo();
         const hardwareInfo = await this.getHardwareInfo();
-        const osInfo = this.getDetailedOSInfo();
+        const displayInfo = await this.getDisplayInfo();
 
-        const deviceComponents = {
-            system: {
-                cpu: systemInfo.cpu || {},
-                memory: systemInfo.memory || {},
-                storage: systemInfo.storage || []
+        // Only use pure hardware identifiers
+        const hardwareComponents = {
+            cpu: {
+                archName: systemInfo.cpu?.archName,
+                modelName: systemInfo.cpu?.modelName,
+                numOfProcessors: systemInfo.cpu?.numOfProcessors
             },
-            hardware: {
-                platform: navigator.platform,
-                architecture: hardwareInfo.architecture,
-                model: hardwareInfo.model
+            memory: {
+                totalCapacity: systemInfo.memory?.capacity
             },
-            os: {
-                name: osInfo.name,
-                version: osInfo.version,
-                architecture: osInfo.architecture
-            }
+            display: displayInfo ? {
+                width: displayInfo[0]?.resolution?.width,
+                height: displayInfo[0]?.resolution?.height,
+                dpiX: displayInfo[0]?.dpiX,
+                dpiY: displayInfo[0]?.dpiY
+            } : null,
+            gpu: {
+                vendor: hardwareInfo.gpuVendor,
+                renderer: hardwareInfo.gpuRenderer
+            },
+            hardwareConcurrency: navigator.hardwareConcurrency,
+            deviceMemory: navigator.deviceMemory
         };
 
-        // Generate a stable hash from system-specific components
-        const deviceId = await this.createStableHash(deviceComponents);
+        // Generate a stable hash from hardware-specific components
+        const deviceId = await this.createStableHash(hardwareComponents);
         
-        // Store the new device ID
+        // Store the device ID
         await this.storeDeviceId(deviceId);
         
         return deviceId;
@@ -252,40 +254,263 @@ export class DeviceFingerprint {
         return info;
     }
 
-    generateDeviceName(osInfo, hardwareInfo) {
-        const parts = [];
-        
-        // Add OS name and version
-        if (osInfo.name !== 'Unknown') {
-            parts.push(osInfo.name);
-            if (osInfo.version) {
-                parts.push(osInfo.version);
+    async getDisplayInfo() {
+        try {
+            if (chrome.system && chrome.system.display) {
+                return new Promise((resolve) => {
+                    chrome.system.display.getInfo((displays) => {
+                        resolve(displays);
+                    });
+                });
             }
+            return null;
+        } catch (error) {
+            console.warn('Error getting display info:', error);
+            return null;
         }
-        
-        // Add hardware model if available
-        if (hardwareInfo.model) {
-            parts.push(hardwareInfo.model);
+    }
+
+    async getDeviceName() {
+        try {
+            const systemInfo = await this.getSystemInfo();
+            
+            // Create a descriptive name using only hardware info
+            const parts = [];
+            
+            // Add CPU info if available
+            if (systemInfo.cpu?.modelName) {
+                parts.push(systemInfo.cpu.modelName.split('@')[0].trim());
+            }
+            
+            // Add memory
+            if (systemInfo.memory?.capacity) {
+                const gbRam = Math.round(systemInfo.memory.capacity / (1024 * 1024 * 1024));
+                parts.push(`${gbRam}GB RAM`);
+            }
+            
+            // Add GPU info if available
+            const hardwareInfo = await this.getHardwareInfo();
+            if (hardwareInfo.gpuVendor) {
+                parts.push(hardwareInfo.gpuVendor);
+            }
+            
+            return parts.join(' - ') || 'Unknown Device';
+        } catch (error) {
+            console.warn('Error generating device name:', error);
+            return 'Unknown Device';
         }
-        
-        // Add architecture
-        if (osInfo.architecture) {
-            parts.push(`(${osInfo.architecture})`);
-        }
-        
-        return parts.join(' ') || 'Unknown Device';
     }
 
     async createStableHash(components) {
-        // Convert components to a stable string representation
-        const str = JSON.stringify(components, Object.keys(components).sort());
+        // Convert components to a stable string (sort keys to ensure consistency)
+        const stableString = JSON.stringify(components, Object.keys(components).sort());
         
-        // Use SubtleCrypto for consistent hashing
-        const msgBuffer = new TextEncoder().encode(str);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+        // Use SHA-256 for a stable, deterministic hash
+        const encoder = new TextEncoder();
+        const data = encoder.encode(stableString);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         
-        // Convert hash to hex string
+        // Convert to hex string
         return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    async getBrowserInfo() {
+        try {
+            const screenInfo = await chrome.system.display.getInfo();
+            const primaryDisplay = screenInfo.find(d => d.isPrimary) || screenInfo[0];
+            
+            return {
+                screen: {
+                    width: primaryDisplay.bounds.width,
+                    height: primaryDisplay.bounds.height,
+                    colorDepth: primaryDisplay.colorDepth,
+                    pixelRatio: primaryDisplay.deviceScaleFactor,
+                    orientation: primaryDisplay.rotation,
+                    refreshRate: primaryDisplay.refreshRate,
+                    dpiX: primaryDisplay.dpiX,
+                    dpiY: primaryDisplay.dpiY
+                }
+            };
+        } catch (error) {
+            console.warn('Error getting display info:', error);
+            return {};
+        }
+    }
+
+    async getNetworkInfo() {
+        try {
+            const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+            const networkInterfaces = await chrome.system.network.getNetworkInterfaces();
+            
+            return {
+                connection: connection ? {
+                    type: connection.type,
+                    effectiveType: connection.effectiveType,
+                    downlink: connection.downlink,
+                    rtt: connection.rtt,
+                    saveData: connection.saveData
+                } : null,
+                interfaces: networkInterfaces.map(net => ({
+                    name: net.name,
+                    type: net.type,
+                    address: net.address,
+                    prefixLength: net.prefixLength
+                }))
+            };
+        } catch (error) {
+            console.warn('Error getting network info:', error);
+            return {};
+        }
+    }
+
+    async getAudioFingerprint() {
+        try {
+            const audioCtx = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, 44100, 44100);
+            const oscillator = audioCtx.createOscillator();
+            const analyser = audioCtx.createAnalyser();
+            const gainNode = audioCtx.createGain();
+            const scriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+            gainNode.gain.value = 0;
+            oscillator.type = 'triangle';
+            oscillator.connect(analyser);
+            analyser.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.start(0);
+
+            const audioData = new Float32Array(analyser.frequencyBinCount);
+            analyser.getFloatFrequencyData(audioData);
+            
+            oscillator.stop();
+            audioCtx.close();
+
+            return Array.from(audioData.slice(0, 30));
+        } catch (error) {
+            console.warn('Error getting audio fingerprint:', error);
+            return null;
+        }
+    }
+
+    async getCanvasFingerprint() {
+        try {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 200;
+            canvas.height = 200;
+
+            // Draw various shapes and text
+            ctx.textBaseline = 'top';
+            ctx.font = '14px Arial';
+            ctx.fillStyle = '#f60';
+            ctx.fillRect(125, 1, 62, 20);
+            ctx.fillStyle = '#069';
+            ctx.fillText('Fingerprint', 2, 15);
+            ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+            ctx.fillRect(30, 30, 80, 50);
+
+            return canvas.toDataURL();
+        } catch (error) {
+            console.warn('Error getting canvas fingerprint:', error);
+            return null;
+        }
+    }
+
+    async getWebGLFingerprint() {
+        try {
+            const canvas = document.createElement('canvas');
+            const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            
+            if (!gl) return null;
+
+            return {
+                vendor: gl.getParameter(gl.VENDOR),
+                renderer: gl.getParameter(gl.RENDERER),
+                version: gl.getParameter(gl.VERSION),
+                shadingLanguageVersion: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+                extensions: gl.getSupportedExtensions()
+            };
+        } catch (error) {
+            console.warn('Error getting WebGL fingerprint:', error);
+            return null;
+        }
+    }
+
+    async getSystemFonts() {
+        try {
+            // Use new Font API if available
+            if (window.queryLocalFonts) {
+                const fonts = await window.queryLocalFonts();
+                return fonts.map(font => font.family);
+            }
+            
+            // Fallback to checking common fonts
+            const commonFonts = [
+                'Arial', 'Times New Roman', 'Courier New', 'Helvetica',
+                'Verdana', 'Georgia', 'Palatino', 'Garamond', 'Bookman',
+                'Comic Sans MS', 'Trebuchet MS', 'Impact'
+            ];
+
+            const foundFonts = [];
+            const testString = 'mmmmmmmmmmlli';
+            const testSize = '72px';
+            const baseFonts = ['monospace', 'sans-serif', 'serif'];
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            for (const font of commonFonts) {
+                let matched = 0;
+                for (const baseFont of baseFonts) {
+                    ctx.font = `${testSize} ${baseFont}`;
+                    const baseFontWidth = ctx.measureText(testString).width;
+                    
+                    ctx.font = `${testSize} ${font}, ${baseFont}`;
+                    const testFontWidth = ctx.measureText(testString).width;
+                    
+                    if (baseFontWidth !== testFontWidth) {
+                        matched++;
+                    }
+                }
+                if (matched >= 2) {
+                    foundFonts.push(font);
+                }
+            }
+            
+            return foundFonts;
+        } catch (error) {
+            console.warn('Error getting system fonts:', error);
+            return null;
+        }
+    }
+
+    async forceNewDeviceId() {
+        // Clear any stored device ID
+        await new Promise((resolve) => {
+            chrome.storage.local.remove(['device_id', 'device_id_metadata'], resolve);
+        });
+
+        // Generate new device components with timestamp
+        const timestamp = Date.now();
+        const deviceComponents = await this.generateNewDeviceId();
+        
+        // Create a unique suffix
+        const uniqueSuffix = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+        
+        // Combine components with timestamp and suffix
+        const combinedComponents = {
+            ...deviceComponents,
+            timestamp,
+            uniqueSuffix
+        };
+
+        // Generate new hash
+        const deviceId = await this.createStableHash(combinedComponents);
+        
+        // Store the new device ID
+        await this.storeDeviceId(deviceId);
+        
+        return deviceId;
     }
 } 

@@ -28,10 +28,70 @@ export class FirebaseAuth {
 
   async saveDeviceToRealtimeDb(userId) {
     try {
+      // Get current device info
       const deviceInfo = await this.deviceFingerprint.getDeviceInfo();
       
+      // First check if this device ID already exists for any user
+      const allDevicesResponse = await fetch(
+        `${FIREBASE_REALTIME_DB_URL}/users.json?shallow=true`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (!allDevicesResponse.ok) {
+        throw new Error('Failed to check existing devices');
+      }
+
+      const allUsers = await allDevicesResponse.json();
+      let deviceExists = false;
+      let existingUserId = null;
+
+      // Check each user's devices
+      for (const checkUserId in allUsers) {
+        const userDevicesResponse = await fetch(
+          `${FIREBASE_REALTIME_DB_URL}/users/${checkUserId}/devices/${deviceInfo.device_id}.json`,
+          {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            }
+          }
+        );
+
+        if (userDevicesResponse.ok) {
+          const existingDevice = await userDevicesResponse.json();
+          if (existingDevice) {
+            deviceExists = true;
+            existingUserId = checkUserId;
+            break;
+          }
+        }
+      }
+
+      // If device exists for another user, generate a new device ID
+      // if (deviceExists && existingUserId !== userId) {
+      //   console.log('Device ID conflict detected, generating new ID...');
+      //   await this.deviceFingerprint.forceNewDeviceId();
+      //   deviceInfo = await this.deviceFingerprint.getDeviceInfo();
+      // }
+
+      // Now check if user can add more devices
+      const canAddDevice = await this.canAddDevice(userId);
+      if (!canAddDevice.allowed) {
+        throw new Error(canAddDevice.message);
+      }
+
       // Store device ID in local storage for removal during logout
       chrome.storage.local.set({ current_device_id: deviceInfo.device_id });
+
+      // Add additional device metadata
+      deviceInfo.last_seen = Date.now();
+      deviceInfo.first_registered = Date.now();
+      deviceInfo.user_id = userId;
 
       const response = await fetch(
         `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceInfo.device_id}.json`,
@@ -52,8 +112,115 @@ export class FirebaseAuth {
       return deviceInfo;
     } catch (error) {
       console.error('Error saving device to Realtime DB:', error);
-      // Don't throw error to avoid blocking login
+      throw error;
     }
+  }
+
+  async canAddDevice(userId) {
+    try {
+      // Get user's subscription plan
+      const userDoc = await fetch(
+        `${FIREBASE_FIRESTORE_BASE_URL}/users/${userId}`,
+        {
+          method: 'GET',
+          headers: this.getAuthHeaders()
+        }
+      );
+
+      if (!userDoc.ok) {
+        throw new Error('Failed to fetch user data');
+      }
+
+      const userData = await userDoc.json();
+      console.log('User data:', userData);
+      const userPlan = userData.fields?.plan?.stringValue || 'free';
+
+      // Get device limits based on plan
+      const deviceLimits = {
+        'free': 1,
+        'pro': 3,
+        'elite': 10
+      };
+
+      const maxDevices = deviceLimits[userPlan] || 1;
+
+      // Get all devices for this user
+      const devicesResponse = await fetch(
+        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices.json`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (!devicesResponse.ok) {
+        throw new Error('Failed to fetch devices');
+      }
+
+      const devices = await devicesResponse.json() || {};
+      
+      // // Clean up inactive devices (not seen in last 30 days)
+      // const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+      // let activeDevices = {};
+      
+      // for (const [deviceId, device] of Object.entries(devices)) {
+      //   if (device.last_seen && device.last_seen > thirtyDaysAgo) {
+      //     activeDevices[deviceId] = device;
+      //   } else {
+      //     // Remove inactive device
+      //     await fetch(
+      //       `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceId}.json`,
+      //       {
+      //         method: 'DELETE',
+      //         headers: {
+      //           'Content-Type': 'application/json',
+      //         }
+      //       }
+      //     );
+      //   }
+      // }
+
+      const currentDeviceCount = Object.keys(devices).length;
+
+      // Check if user can add more devices
+      if (currentDeviceCount >= maxDevices) {
+        return {
+          allowed: false,
+          message: `Device limit reached for ${userPlan} plan (${currentDeviceCount}/${maxDevices}). Please upgrade your plan or remove a device.`,
+          currentCount: currentDeviceCount,
+          maxDevices: maxDevices,
+          plan: userPlan, 
+          devices: devices
+        };
+      }
+
+      return {
+        allowed: true,
+        currentCount: currentDeviceCount,
+        maxDevices: maxDevices,
+        plan: userPlan,
+        devices: devices
+      };
+    } catch (error) {
+      console.error('Error checking device limit:', error);
+      return {
+        allowed: false,
+        message: 'Error checking device limit. Please try again later.',
+        error: error.message
+      };
+    }
+  }
+
+  getAuthHeaders() {
+    if (!this.currentUser || !this.currentUser.idToken) {
+      throw new Error('No authentication token available');
+    }
+    return {
+      'Authorization': `Bearer ${this.currentUser.idToken}`,
+      'Content-Type': 'application/json',
+    };
   }
 
   async isDeviceTracked(userId) {
@@ -223,16 +390,45 @@ export class FirebaseAuth {
       } 
       // If this is a new device added
       else if (data.data && data.path !== '/') {
+        // Check if adding this device would exceed the limit
+        const deviceLimitCheck = await this.canAddDevice(userId);
+        if (!deviceLimitCheck.allowed) {
+          console.warn('Device limit exceeded:', deviceLimitCheck.message);
+          // Remove the device that was just added
+          const deviceId = data.path.replace('/', '');
+          await fetch(
+            `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceId}.json`,
+            {
+              method: 'DELETE',
+              headers: {
+                'Content-Type': 'application/json',
+              }
+            }
+          );
+          
+          // Notify about the limit
+          chrome.notifications.create('device-limit-exceeded', {
+            type: 'basic',
+            iconUrl: 'icons/icon128.png',
+            title: 'Device Limit Exceeded',
+            message: deviceLimitCheck.message,
+            priority: 2,
+            requireInteraction: true
+          });
+          
+          return;
+        }
+
         console.log("data.data", data.data)
         const deviceId = data.path.replace('/', '');
         if (deviceId !== deviceInfo.device_id) {
-          chrome.notifications.create('persistent-notification', {
+          chrome.notifications.create('new-device-added', {
             type: 'basic',
             iconUrl: 'icons/icon128.png',
             title: 'New Device Added',
             requireInteraction: true,
             eventTime: Date.now(),
-            message: `A new device "${data.data.device_name}" has been added to your account.`,
+            message: `A new device "${data.data.device_name}" has been added to your account. (${deviceLimitCheck.currentCount}/${deviceLimitCheck.maxDevices} devices)`,
             priority: 2
           }, () => {
             console.log("notification created");
