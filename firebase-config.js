@@ -325,6 +325,7 @@ export class FirebaseAuth {
       console.log('Device change detected:', data);
 
       const deviceInfo = await this.deviceFingerprint.getDeviceInfo();
+      const deviceLimitCheck = await this.canAddDevice(userId);
       
       if (data.path === `/${deviceInfo.device_id}` && data.data === null) {
         chrome.notifications.create('device-removed', {
