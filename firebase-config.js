@@ -342,32 +342,31 @@ export class FirebaseAuth {
           new Promise(r => chrome.storage.sync.clear(r))
         ]);
 
-        // Notify background script to reset state
-        chrome.runtime.sendMessage({
-          action: 'userLoggedOut',
-          reason: 'device_removed'
+        await this.signOut();
+        
+        // First notify background script to reset state
+        await chrome.runtime.sendMessage({
+          action: 'resetBackgroundState'
         }).catch(() => {
           // Background script might be restarting, which is fine
         });
 
-        this.signOut().then(() => {
-          // Reset background script state
-          chrome.runtime.sendMessage({
-            action: 'resetBackgroundState'
-          }).catch(() => {
-            // Background script might be restarting, which is fine
-          });
+        // Then notify popup to show unauthenticated state
+        chrome.runtime.sendMessage({
+          action: 'forceLogout',
+          message: 'This device has been removed from your account.'
+        }).catch(() => {
+          // Popup might not be open, which is fine
+        });
 
-          chrome.tabs.query({}, (tabs) => {
-            tabs.forEach(tab => {
-              chrome.tabs.sendMessage(tab.id, {
-                action: 'forceLogout',
-                message: 'This device has been removed from your account.'
-              }).catch(err => console.log('Tab might not be ready:', err));
-            });
+        // Finally notify all tabs
+        chrome.tabs.query({}, (tabs) => {
+          tabs.forEach(tab => {
+            chrome.tabs.sendMessage(tab.id, {
+              action: 'forceLogout',
+              message: 'This device has been removed from your account.'
+            }).catch(err => console.log('Tab might not be ready:', err));
           });
-        }).catch(error => {
-          console.error('Error during forced logout:', error);
         });
       } 
       else if (data.data && data.path !== '/') {

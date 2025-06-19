@@ -33,60 +33,57 @@ const HEARTBEAT_INTERVAL = 25; // seconds
 
 async function initializeAuth() {
   try {
-    try {
-      firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
-      console.log('Limitter Background: FirebaseAuth created');
-    } catch (authError) {
-      console.warn('Limitter Background: FirebaseAuth creation failed, working in offline mode:', authError);
-      firebaseAuth = null;
-    }
-    
-    try {
-      firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
-      console.log('Limitter Background: FirebaseFirestore created');
-    } catch (firestoreError) {
-      console.warn('Limitter Background: FirebaseFirestore creation failed, working in offline mode:', firestoreError);
-      firestore = null;
-    }
-    
-    try {
-      subscriptionService = new SubscriptionService(firebaseAuth, firestore);
-      console.log('Limitter Background: SubscriptionService created');
-    } catch (subError) {
-      console.warn('Limitter Background: SubscriptionService creation failed:', subError);
-      subscriptionService = null;
-    }
-    
-    try {
-      if (firestore && firebaseAuth) {
-        firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
-        console.log('Limitter Background: FirebaseSyncService created successfully');
-      } else {
-        console.log('Limitter Background: Skipping FirebaseSyncService creation - dependencies not available');
-        firebaseSyncService = null;
-      }
-    } catch (syncServiceError) {
-      console.warn('Limitter Background: Error creating FirebaseSyncService, continuing without sync:', syncServiceError);
-      firebaseSyncService = null;
-    }
+    // Initialize Firebase services
+    firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
+    firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
+    subscriptionService = new SubscriptionService(firebaseAuth, firestore);
+    firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
 
-    // try {
-    //   if (firebaseAuth) {
-    //     realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
-    //     console.log('Limitter Background: FirebaseRealtimeDB created successfully');
-    //   } else {
-    //     console.log('Limitter Background: Skipping FirebaseRealtimeDB creation - auth not available');
-    //     realtimeDB = null;
-    //   }
-    // } catch (realtimeError) {
-    //   console.warn('Limitter Background: Error creating FirebaseRealtimeDB, continuing without realtime features:', realtimeError);
-    //   realtimeDB = null;
-    // }
-    console.log("firebaseAuth", firebaseAuth)
     let storedUser = null;
     if (firebaseAuth) {
       try {
         storedUser = await firebaseAuth.getStoredAuthData();
+        
+        // Add device check here for stored user
+        if (storedUser) {
+          const isDeviceTracked = await firestore.isDeviceTracked(storedUser.uid);
+          if (!isDeviceTracked) {
+            console.warn('Limitter Background: Device not tracked, forcing logout on browser restart');
+            
+            // Show notification
+            chrome.notifications.create('device-not-tracked', {
+              type: 'basic',
+              iconUrl: 'icons/icon128.png',
+              title: 'Device Access Issue',
+              message: 'This device is no longer authorized. Please log in again to continue.',
+              priority: 2,
+              requireInteraction: true,
+              buttons: [
+                { title: 'Login' }
+              ]
+            });
+            
+            // Force logout
+            await firebaseAuth.signOut();
+            isAuthenticated = false;
+
+            // Clear all timers and data
+            stopAllTimers();
+            await Promise.all([
+              new Promise(r => chrome.storage.local.clear(r)),
+              new Promise(r => chrome.storage.sync.clear(r))
+            ]);
+            
+            // Notify popup if open
+            chrome.runtime.sendMessage({
+              action: 'forceLogout',
+              message: 'Device access issue. Please log in again to continue.'
+            }).catch(() => {
+              // Popup might not be open, which is fine
+            });
+            storedUser = null;
+          }
+        }
       } catch (error) {
         console.warn('Limitter Background: Error checking stored auth data:', error);
       }
@@ -1020,66 +1017,6 @@ async function loadTimerStateFromFirebase(domain) {
       return null;
     }
 
-    // Get the stored device ID first
-    const deviceId = await new Promise((resolve) => {
-      chrome.storage.local.get(['device_id'], (result) => {
-        resolve(result.device_id);
-      });
-    });
-
-    if (!deviceId) {
-      console.warn('Limitter Background: No device ID found, device needs registration');
-      return null;
-    }
-
-    // Check if this device is being tracked
-    const isDeviceTracked = await firebaseAuth.isDeviceTracked(userId);
-    if (!isDeviceTracked) {
-    
-      try {
-          console.warn('Limitter Background: Device re-registration failed, forcing logout');
-          
-          // Show notification with retry
-          chrome.notifications.create('device-not-tracked', {
-            type: 'basic',
-            iconUrl: 'icons/icon128.png',
-            title: 'Device Access Issue',
-            message: 'This device is no longer authorized. Please log in again to continue.',
-            priority: 2,
-            requireInteraction: true,
-            buttons: [
-              { title: 'Login' }
-            ]
-          }, (notificationId) => {
-            if (chrome.runtime.lastError) {
-              console.error('Failed to show notification:', chrome.runtime.lastError);
-            }
-          });
-          
-          // Force logout
-          await firebaseAuth.signOut();
-          isAuthenticated = false;
-
-          // Clear all timers and data
-          stopAllTimers();
-          chrome.storage.sync.set({ blockedDomains: {} });
-          
-          // Notify popup if open
-          chrome.runtime.sendMessage({
-            action: 'forceLogout',
-            message: 'Device access issue. Please log in again to continue.'
-          }).catch(() => {
-            // Popup might not be open, which is fine
-          });
-
-          return null;
-        
-      } catch (error) {
-        console.error('Limitter Background: Device re-registration failed:', error);
-        return null;
-      }
-    }
-    
     // Normalize domain for consistency
     const timerDomain = domain.replace(/^www\./, '').toLowerCase();
     const timerSiteId = `${userId}_${timerDomain}`;
