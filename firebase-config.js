@@ -31,9 +31,9 @@ export class FirebaseAuth {
       // Get current device info
       const deviceInfo = await this.deviceFingerprint.getDeviceInfo();
       
-      // First check if this device ID already exists for any user
-      const allDevicesResponse = await fetch(
-        `${FIREBASE_REALTIME_DB_URL}/users.json?shallow=true`,
+      // First check if this specific device ID exists for this user
+      const deviceCheckResponse = await fetch(
+        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceInfo.device_id}.json`,
         {
           method: 'GET',
           headers: {
@@ -42,51 +42,41 @@ export class FirebaseAuth {
         }
       );
 
-      if (!allDevicesResponse.ok) {
-        throw new Error('Failed to check existing devices');
-      }
-
-      const allUsers = await allDevicesResponse.json();
-      let deviceExists = false;
-      let existingUserId = null;
-
-      // Check each user's devices
-      for (const checkUserId in allUsers) {
-        const userDevicesResponse = await fetch(
-          `${FIREBASE_REALTIME_DB_URL}/users/${checkUserId}/devices/${deviceInfo.device_id}.json`,
-          {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
+      if (deviceCheckResponse.ok) {
+        const existingDevice = await deviceCheckResponse.json();
+        if (existingDevice) {
+          console.log('Device already registered:', deviceInfo.device_id);
+          // Update last seen timestamp
+          await fetch(
+            `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceInfo.device_id}.json`,
+            {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                last_seen: Date.now()
+              })
             }
-          }
-        );
-
-        if (userDevicesResponse.ok) {
-          const existingDevice = await userDevicesResponse.json();
-          if (existingDevice) {
-            deviceExists = true;
-            existingUserId = checkUserId;
-            break;
-          }
+          );
+          return existingDevice;
         }
       }
 
-      // If device exists for another user, generate a new device ID
-      // if (deviceExists && existingUserId !== userId) {
-      //   console.log('Device ID conflict detected, generating new ID...');
-      //   await this.deviceFingerprint.forceNewDeviceId();
-      //   deviceInfo = await this.deviceFingerprint.getDeviceInfo();
-      // }
-
-      // Now check if user can add more devices
+      // If device doesn't exist, proceed with normal save
       const canAddDevice = await this.canAddDevice(userId);
       if (!canAddDevice.allowed) {
         throw new Error(canAddDevice.message);
       }
 
-      // Store device ID in local storage for removal during logout
-      chrome.storage.local.set({ current_device_id: deviceInfo.device_id });
+      // Store both device IDs consistently
+      await new Promise(resolve => {
+        chrome.storage.local.set({
+          current_device_id: deviceInfo.device_id,
+          device_id: deviceInfo.device_id,
+          device_id_timestamp: Date.now()
+        }, resolve);
+      });
 
       // Add additional device metadata
       deviceInfo.last_seen = Date.now();
@@ -278,12 +268,12 @@ export class FirebaseAuth {
 
   async removeDeviceFromRealtimeDb(userId) {
     try {
-      // Get the current device ID from storage
+      // Get both device IDs from storage
       const result = await new Promise((resolve) => {
-        chrome.storage.local.get(['current_device_id'], resolve);
+        chrome.storage.local.get(['current_device_id', 'device_id'], resolve);
       });
 
-      const deviceId = result.current_device_id;
+      const deviceId = result.current_device_id || result.device_id;
       if (!deviceId) {
         console.log('No device ID found to remove');
         return;
@@ -303,8 +293,11 @@ export class FirebaseAuth {
         throw new Error('Failed to remove device info');
       }
 
-      // Clear the device ID from storage
-      chrome.storage.local.remove(['current_device_id']);
+      // Clear both device IDs from storage
+      await new Promise(resolve => {
+        chrome.storage.local.remove(['current_device_id', 'device_id', 'device_id_timestamp'], resolve);
+      });
+      
       console.log('Device removed successfully:', deviceId);
     } catch (error) {
       console.error('Error removing device from Realtime DB:', error);
@@ -312,37 +305,28 @@ export class FirebaseAuth {
   }
 
   listenToDeviceChanges(userId) {
-    // Clean up any existing listener
     if (this.deviceListener) {
       this.deviceListener.close();
       this.deviceListener = null;
     }
 
-    // Create new EventSource for real-time updates
     const url = `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices.json`;
     this.deviceListener = new EventSource(`${url}?auth=${this.currentUser.idToken}`);
 
-    // Track connection state
     this.deviceListener.addEventListener('open', () => {
       console.log('Device listener connection established');
       this.lastConnectionTime = Date.now();
       this.isConnected = true;
     });
 
-    // Listen for all device changes
     this.deviceListener.addEventListener('put', async (event) => {
       this.lastConnectionTime = Date.now(); // Update last activity time
       const data = JSON.parse(event.data);
       console.log('Device change detected:', data);
 
-      // Get current device info to compare
       const deviceInfo = await this.deviceFingerprint.getDeviceInfo();
       
-      // If this is about our device being removed
       if (data.path === `/${deviceInfo.device_id}` && data.data === null) {
-        console.log('Current device was removed, forcing logout...');
-        
-        // First show notification
         chrome.notifications.create('device-removed', {
           type: 'basic',
           iconUrl: 'icons/icon128.png',
@@ -352,15 +336,28 @@ export class FirebaseAuth {
           requireInteraction: true
         });
 
-        // Force logout
+        // Clear both storages immediately on device removal
+        await Promise.all([
+          new Promise(r => chrome.storage.local.clear(r)),
+          new Promise(r => chrome.storage.sync.clear(r))
+        ]);
+
+        // Notify background script to reset state
+        chrome.runtime.sendMessage({
+          action: 'userLoggedOut',
+          reason: 'device_removed'
+        }).catch(() => {
+          // Background script might be restarting, which is fine
+        });
+
         this.signOut().then(() => {
-          console.log('Forced logout successful');
-          
-          // Clear all timers and data
-          chrome.storage.sync.set({ blockedDomains: {} });
-          chrome.storage.local.clear();
-          
-          // Notify all tabs to show force logout message and redirect to login
+          // Reset background script state
+          chrome.runtime.sendMessage({
+            action: 'resetBackgroundState'
+          }).catch(() => {
+            // Background script might be restarting, which is fine
+          });
+
           chrome.tabs.query({}, (tabs) => {
             tabs.forEach(tab => {
               chrome.tabs.sendMessage(tab.id, {
@@ -369,91 +366,45 @@ export class FirebaseAuth {
               }).catch(err => console.log('Tab might not be ready:', err));
             });
           });
-
-          // Notify popup if open
-          chrome.runtime.sendMessage({
-            action: 'forceLogout',
-            message: 'This device has been removed from your account.'
-          }).catch(() => {
-            // Popup might not be open, which is fine
-          });
-
-          // Reload all tabs to ensure clean state
-          chrome.tabs.query({}, (tabs) => {
-            tabs.forEach(tab => {
-              chrome.tabs.reload(tab.id);
-            });
-          });
         }).catch(error => {
           console.error('Error during forced logout:', error);
         });
       } 
-      // If this is a new device added
       else if (data.data && data.path !== '/') {
-        // Check if adding this device would exceed the limit
-        const deviceLimitCheck = await this.canAddDevice(userId);
-        if (!deviceLimitCheck.allowed) {
-          console.warn('Device limit exceeded:', deviceLimitCheck.message);
-          // Remove the device that was just added
-          const deviceId = data.path.replace('/', '');
-          await fetch(
-            `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceId}.json`,
-            {
-              method: 'DELETE',
-              headers: {
-                'Content-Type': 'application/json',
-              }
-            }
-          );
-          
-          // Notify about the limit
-          chrome.notifications.create('device-limit-exceeded', {
-            type: 'basic',
-            iconUrl: 'icons/icon128.png',
-            title: 'Device Limit Exceeded',
-            message: deviceLimitCheck.message,
-            priority: 2,
-            requireInteraction: true
-          });
-          
-          return;
-        }
-
-        console.log("data.data", data.data)
-        const deviceId = data.path.replace('/', '');
+        let deviceId = data.path.replace('/', '');
+        deviceId = deviceId.split('/')[0];
         if (deviceId !== deviceInfo.device_id) {
           chrome.notifications.create('new-device-added', {
             type: 'basic',
             iconUrl: 'icons/icon128.png',
-            title: 'New Device Added',
+            title: `${data.data?.device_name ? 'New Device Added': `Device Info Changed`} `,
             requireInteraction: true,
             eventTime: Date.now(),
-            message: `A new device "${data.data.device_name}" has been added to your account. (${deviceLimitCheck.currentCount}/${deviceLimitCheck.maxDevices} devices)`,
+            message: `${data.data?.device_name ? `A new device "${data.data.device_name}" has been added to your account. (${deviceLimitCheck.currentCount}/${deviceLimitCheck.maxDevices} devices)`: `Device info has been updated`}`,
             priority: 2
           }, () => {
-            console.log("notification created");
           });
         }
       }
     });
 
-    // Listen for specific device changes
-    this.deviceListener.addEventListener('patch', (event) => {
+    // // Listen for specific device changes
+    // this.deviceListener.addEventListener('patch', (event) => {
 
-      this.lastConnectionTime = Date.now(); // Update last activity time
-      const data = JSON.parse(event.data);
-      console.log('Device patch detected:', data);
+    //   this.lastConnectionTime = Date.now(); // Update last activity time
+    //   const data = JSON.parse(event.data);
+    //   console.log('Device patch detected:', data);
       
-      chrome.notifications.create('device-updated', {
-        type: 'basic',
-        iconUrl: 'icons/icon128.png',
-        title: 'Device Updated',
-        message: 'Device information has been updated.',
-        priority: 1
-      });
-    });
+    //   chrome.notifications.create('device-updated', {
+    //     type: 'basic',
+    //     iconUrl: 'icons/icon128.png',
+    //     title: 'Device Updated',
+    //     message: 'Device information has been updated.',
+    //     priority: 1
+    //   });
+    // });
 
-    // Handle connection errors
+    // // Handle connection errors
     this.deviceListener.onerror = (error) => {
       console.error('Device listener error:', error);
       this.isConnected = false;
@@ -532,7 +483,7 @@ export class FirebaseAuth {
         await this.storeAuthData(this.currentUser);
         
         // Then save device info and wait for it to complete
-        const deviceInfo = await this.saveDeviceToRealtimeDb(this.currentUser.uid);
+        await this.saveDeviceToRealtimeDb(this.currentUser.uid);
         
         // Start listening for device changes
         this.listenToDeviceChanges(this.currentUser.uid);
@@ -552,7 +503,7 @@ export class FirebaseAuth {
         );
         // Force logout if device tracking failed
         await this.signOut();
-        throw new Error('Device registration failed. Please try logging in again.');
+        throw new Error(storageError);
       }
 
       return this.currentUser;
@@ -565,12 +516,24 @@ export class FirebaseAuth {
   // Store user authentication data in Chrome storage
   async storeAuthData(userData) {
     return new Promise((resolve) => {
+      // Store in both local and sync storage for persistence
       chrome.storage.local.set(
         {
           firebaseUser: userData,
           authTimestamp: Date.now(),
+          isExplicitLogout: false
         },
-        resolve
+        () => {
+          // Also store in sync storage for persistence across restarts
+          chrome.storage.sync.set(
+            {
+              firebaseUser: userData,
+              authTimestamp: Date.now(),
+              isExplicitLogout: false
+            },
+            resolve
+          );
+        }
       );
     });
   }
@@ -578,12 +541,27 @@ export class FirebaseAuth {
   // Retrieve stored authentication data
   async getStoredAuthData() {
     return new Promise((resolve) => {
-      chrome.storage.local.get(["firebaseUser", "authTimestamp"], (result) => {
-        if (result.firebaseUser) {
-          this.currentUser = result.firebaseUser;
-          resolve(result.firebaseUser);
+      // Try local storage first, then sync storage as backup
+      chrome.storage.local.get(["firebaseUser", "authTimestamp", "isExplicitLogout"], (localResult) => {
+        if (localResult.firebaseUser && !localResult.isExplicitLogout) {
+          this.currentUser = localResult.firebaseUser;
+          resolve(localResult.firebaseUser);
         } else {
-          resolve(null);
+          // Try sync storage if local storage is empty
+          chrome.storage.sync.get(["firebaseUser", "authTimestamp", "isExplicitLogout"], (syncResult) => {
+            if (syncResult.firebaseUser && !syncResult.isExplicitLogout) {
+              // Found in sync storage, restore to local
+              chrome.storage.local.set({
+                firebaseUser: syncResult.firebaseUser,
+                authTimestamp: syncResult.authTimestamp,
+                isExplicitLogout: false
+              });
+              this.currentUser = syncResult.firebaseUser;
+              resolve(syncResult.firebaseUser);
+            } else {
+              resolve(null);
+            }
+          });
         }
       });
     });
@@ -606,7 +584,11 @@ export class FirebaseAuth {
 
     this.currentUser = null;
     return new Promise((resolve) => {
-      chrome.storage.local.remove(["firebaseUser", "authTimestamp"], resolve);
+      // Clear both storages on explicit logout
+      Promise.all([
+        new Promise(r => chrome.storage.local.clear(r)),
+        new Promise(r => chrome.storage.sync.clear(r))
+      ]).then(() => resolve());
     });
   }
 

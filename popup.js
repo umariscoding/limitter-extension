@@ -687,9 +687,12 @@ document.addEventListener('DOMContentLoaded', function() {
       emailInput.value = '';
       passwordInput.value = '';
       
-      // Notify background script of login
-      safeChromeCall(() => {
-        chrome.runtime.sendMessage({ action: 'userLoggedIn' });
+      // Notify background script of login and wait for response
+      await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ action: 'userLoggedIn' }, (response) => {
+          console.log('Login notification sent to background, response:', response);
+          resolve();
+        });
       });
       
       // Load plans and user data
@@ -702,27 +705,19 @@ document.addEventListener('DOMContentLoaded', function() {
       // Now show the full authenticated state
       updateDomainStates();
       showAuthenticatedState(user);
-      if (!isExtensionContextValid()) {
-        console.warn('Extension context invalid, clearing interval');
-        if (updateInterval) {
-          clearInterval(updateInterval);
-          updateInterval = null;
-        }
-        return;
-      }
       
-      // Only update if user is authenticated
-      if (!isUserAuthenticated()) {
-        console.warn('User not authenticated, stopping timer updates');
-        if (updateInterval) {
-          clearInterval(updateInterval);
-          updateInterval = null;
-        }
-        return;
-      }
-      
-      updateDomainStates();
-      // startPeriodicUpdates();
+      // Force reload all tabs to ensure clean state
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => {
+          if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+            try {
+              chrome.tabs.reload(tab.id, { bypassCache: true });
+            } catch (error) {
+              console.error('Failed to reload tab:', error);
+            }
+          }
+        });
+      });
       
     } catch (error) {
       console.error('Login error:', error);

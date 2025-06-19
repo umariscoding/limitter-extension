@@ -13,7 +13,10 @@
     "system.storage",
     "system.display",
     "activeTab",
-    "identity"
+    "identity",
+    "power",
+    "alarms",
+    "background"
   ],
   "host_permissions": [
     "<all_urls>",

@@ -27,6 +27,9 @@ const lastUpdateTimestamps = new Map();
 const UPDATE_DEBOUNCE_INTERVAL = 2000; // 2 seconds
 let recoveryAttempts = 0;
 const MAX_RECOVERY_ATTEMPTS = 2;
+let wakeLock = null;
+let heartbeatInterval = null;
+const HEARTBEAT_INTERVAL = 25; // seconds
 
 async function initializeAuth() {
   try {
@@ -160,6 +163,9 @@ async function initializeAuth() {
     } else {
       console.log('Limitter Background: User not authenticated or subscription service not available');
     }
+    
+    // Start keep-alive mechanism
+    await keepAlive();
     
     console.log('Limitter Background: Authentication initialized, isAuthenticated:', isAuthenticated, 'syncService available:', !!firebaseSyncService);
   } catch (error) {
@@ -319,8 +325,12 @@ function initializeTimer(domainInfo) {
 
 // Handle messages from content scripts and popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  // console.log('Limitter: Background received message:', request);
-  
+  // Return false for synchronous responses
+  if (!request.action) {
+    sendResponse({ error: 'No action specified' });
+    return false;
+  }
+
   switch (request.action) {
     case 'showNotification':
       // console.log('Limitter Background: Forwarding notification to popup:', request);
@@ -335,7 +345,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log('Limitter Background: No popup available for notification');
       });
       sendResponse({ received: true });
-      break;
+      return false; // Synchronous response
       
     case 'checkEnabled':
       sendResponse({ 
@@ -343,11 +353,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         domainConfig: (sender.tab && isAuthenticated) ? isTrackedDomain(sender.tab.url) : null,
         isAuthenticated: isAuthenticated
       });
-      break;
+      return false; // Synchronous response
       
     case 'incrementCount':
       if (!isAuthenticated) {
         sendResponse({ success: false, error: 'Not authenticated' });
+        return false; // Synchronous response
         break;
       }
       chrome.storage.local.get(['blockedCount'], (result) => {
@@ -383,7 +394,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           
           firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
           firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
-          // realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
           
           // Initialize sync service
           firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
@@ -394,19 +404,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           await subscriptionService.initializePlan();
           
           console.log('Limitter Background: All Firebase services reinitialized successfully');
-          console.log('Limitter Background: Service status after login:', {
-            hasFirebaseAuth: !!firebaseAuth,
-            hasFirestore: !!firestore,
-            // hasRealtimeDB: !!realtimeDB,
-            hasFirebaseSyncService: !!firebaseSyncService,
-            hasSubscriptionService: !!subscriptionService
-          });
           
           // Only proceed with tab updates if everything is ready
           if (firebaseSyncService) {
             console.log('Limitter Background: All services ready - loading configuration and updating tabs');
             
-            // Load configuration first, then update tabs
+            // Load configuration first
             await loadConfiguration();
             console.log('Limitter Background: Configuration loaded, blocked domains:', Object.keys(blockedDomains));
             
@@ -419,13 +422,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               reloadAllTabs();
             }, 3000);
           } else {
-            console.error('Limitter Background: Firebase services still not available after login');
-            console.error('Limitter Background: Service status:', {
-              hasFirebaseSyncService: !!firebaseSyncService,
-              // hasRealtimeDB: !!realtimeDB,
-              hasFirebaseAuth: !!firebaseAuth,
-              hasFirestore: !!firestore
-            });
+            console.error('Limitter Background: Firebase services not available after login');
           }
           
         } catch (error) {
@@ -445,6 +442,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       // Clear background script's cached data
       blockedDomains = {};
       isEnabled = true; // Reset to default
+      
+      sendResponse({ success: true });
+      break;
+      
+    case 'resetBackgroundState':
+      console.log('Limitter Background: Resetting all background state...');
+      // Reset all state variables
+      isAuthenticated = false;
+      isEnabled = true;
+      blockedDomains = {};
+      
+      // Clear services
+      if (firebaseAuth) {
+        firebaseAuth = null;
+      }
+      if (firestore) {
+        firestore = null;
+      }
+      if (subscriptionService) {
+        subscriptionService = null;
+      }
+      if (firebaseSyncService) {
+        firebaseSyncService = null;
+      }
+      
+      // Stop all timers and intervals
+      stopAllTimers();
+      
+      // Force reload all tabs to clear any lingering state
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => {
+          chrome.tabs.reload(tab.id);
+        });
+      });
       
       sendResponse({ success: true });
       break;
@@ -1862,3 +1893,66 @@ async function syncTimerStateToFirestore(domain, timerState) {
 //     chrome.action.openPopup();
 //   }
 // });
+
+// Add this function to keep service worker alive
+async function keepAlive() {
+  // Request wake lock if available in service worker
+  try {
+    if ('wakeLock' in globalThis) {
+      wakeLock = await globalThis.wakeLock.request('screen');
+      console.log('Wake Lock is active');
+    }
+  } catch (err) {
+    console.log(`Wake Lock error: ${err.name}, ${err.message}`);
+  }
+
+  // Set up alarms for persistence
+  chrome.alarms.create('keepAlive', {
+    periodInMinutes: 1
+  });
+
+  // Start heartbeat
+  if (!heartbeatInterval) {
+    heartbeatInterval = setInterval(() => {
+      console.log('Service worker heartbeat');
+      checkServices();
+    }, HEARTBEAT_INTERVAL * 1000);
+  }
+}
+
+// Function to check and recover services
+async function checkServices() {
+  try {
+    // Check if Firebase auth is still valid
+    const user = firebaseAuth?.getCurrentUser();
+    if (!user) {
+      const storedUser = await firebaseAuth?.getStoredAuthData();
+      if (storedUser) {
+        // Reinitialize services if needed
+        await recoverFirebaseServices();
+      }
+      return; // Exit early if no user
+    }
+
+    // Check if device is still being tracked;
+  } catch (error) {
+    console.warn('Service check error:', error);
+  }
+}
+
+// Handle wake lock in service worker context
+chrome.runtime.onStartup.addListener(async () => {
+  await keepAlive();
+});
+
+// Reacquire wake lock on service worker activation
+chrome.runtime.onInstalled.addListener(async () => {
+  await keepAlive();
+});
+
+// Set up alarm listener to keep service worker alive
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'keepAlive') {
+    await keepAlive();
+  }
+});
