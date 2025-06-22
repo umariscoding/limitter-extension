@@ -323,7 +323,11 @@ export class FirebaseAuth {
     }
 
     const url = `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices.json`;
-    this.deviceListener = new EventSource(`${url}?auth=${this.currentUser.idToken}`);
+    const fullUrl = `${url}?auth=${this.currentUser.idToken}`;
+    console.log('Device listener URL (without token):', url);
+    console.log('Complete device listener URL:', fullUrl);
+    
+    this.deviceListener = new EventSource(fullUrl);
 
     this.deviceListener.addEventListener('open', () => {
       console.log('Device listener connection established');
@@ -429,21 +433,22 @@ export class FirebaseAuth {
 
       // Try to reconnect if token expired
       if (this.currentUser) {
-        this.refreshAuthToken(this.currentUser.refreshToken)
-          .then(() => {
-            // Restart listener with new token
-            this.listenToDeviceChanges(userId);
-          })
-          .catch((refreshError) => {
-            console.error('Failed to refresh token for device listener:', refreshError);
-            chrome.notifications.create('device-listener-error', {
-              type: 'basic',
-              iconUrl: 'icons/icon128.png',
-              title: 'Connection Error',
-              message: 'Lost connection to device tracking. Attempting to reconnect...',
-              priority: 1
-            });
-          });
+        // this.refreshAuthToken(this.currentUser.refreshToken)
+        //   .then(() => {
+        //     // Restart listener with new token
+        //     this.listenToDeviceChanges(userId);
+        //   })
+        //   .catch((refreshError) => {
+        //     console.error('Failed to refresh token for device listener:', refreshError);
+        //     chrome.notifications.create('device-listener-error', {
+        //       type: 'basic',
+        //       iconUrl: 'icons/icon128.png',
+        //       title: 'Connection Error',
+        //       message: 'Lost connection to device tracking. Attempting to reconnect...',
+        //       priority: 1
+        //     });
+        //   });
+        this.listenToDeviceChanges(userId);
       }
     };
   }
