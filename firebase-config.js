@@ -1,20 +1,13 @@
 // Firebase Configuration
 import { DeviceFingerprint } from './device-fingerprint.js';
+import { FIREBASE_SECRET_CONFIG } from './firebase.config.secret.js';
 
-export const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyDmeE0h4qlRTs8c87bQhvh8Hvfe0NZsqmQ",
-  authDomain: "testing-396cd.firebaseapp.com",
-  projectId: "testing-396cd",
-  storageBucket: "testing-396cd.firebasestorage.app",
-  messagingSenderId: "327238443846",
-  appId: "1:327238443846:web:72732cb7e7d200c4327b47",
-  measurementId: "G-XKPB99GTGF"
-};
+export const FIREBASE_CONFIG = FIREBASE_SECRET_CONFIG;
 
-// Firebase Auth API endpoints
-const FIREBASE_AUTH_BASE_URL = "https://identitytoolkit.googleapis.com/v1/accounts";
-const FIREBASE_FIRESTORE_BASE_URL = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
-const FIREBASE_REALTIME_DB_URL = 'https://testing-396cd-default-rtdb.firebaseio.com';
+// Firebase API endpoints
+export const FIREBASE_AUTH_BASE_URL = "https://identitytoolkit.googleapis.com/v1/accounts";
+export const FIREBASE_FIRESTORE_BASE_URL = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
+export const FIREBASE_REALTIME_DB_URL = FIREBASE_CONFIG.databaseURL;
 
 // Firebase Authentication class
 export class FirebaseAuth {
@@ -28,12 +21,16 @@ export class FirebaseAuth {
 
   async saveDeviceToRealtimeDb(userId) {
     try {
+      if (!this.currentUser || !this.currentUser.idToken) {
+        throw new Error('No authentication token available');
+      }
+
       // Get current device info
       const deviceInfo = await this.deviceFingerprint.getDeviceInfo();
       
       // First check if this specific device ID exists for this user
       const deviceCheckResponse = await fetch(
-        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceInfo.device_id}.json`,
+        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceInfo.device_id}.json?auth=${this.currentUser.idToken}`,
         {
           method: 'GET',
           headers: {
@@ -42,25 +39,38 @@ export class FirebaseAuth {
         }
       );
 
-      if (deviceCheckResponse.ok) {
-        const existingDevice = await deviceCheckResponse.json();
-        if (existingDevice) {
-          console.log('Device already registered:', deviceInfo.device_id);
-          // Update last seen timestamp
-          await fetch(
-            `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceInfo.device_id}.json`,
-            {
-              method: 'PATCH',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                last_seen: Date.now()
-              })
-            }
-          );
-          return existingDevice;
+      if (!deviceCheckResponse.ok) {
+        if (deviceCheckResponse.status === 401) {
+          // Try refreshing the token
+          await this.refreshAuthToken();
+          // Retry the request with new token
+          return this.saveDeviceToRealtimeDb(userId);
         }
+        throw new Error('Failed to check device existence');
+      }
+
+      const existingDevice = await deviceCheckResponse.json();
+      if (existingDevice) {
+        console.log('Device already registered:', deviceInfo.device_id);
+        // Update last seen timestamp
+        const updateResponse = await fetch(
+          `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceInfo.device_id}.json?auth=${this.currentUser.idToken}`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              last_seen: Date.now()
+            })
+          }
+        );
+
+        if (!updateResponse.ok) {
+          throw new Error('Failed to update device last seen timestamp');
+        }
+
+        return existingDevice;
       }
 
       // If device doesn't exist, proceed with normal save
@@ -84,7 +94,7 @@ export class FirebaseAuth {
       deviceInfo.user_id = userId;
 
       const response = await fetch(
-        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceInfo.device_id}.json`,
+        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceInfo.device_id}.json?auth=${this.currentUser.idToken}`,
         {
           method: 'PUT',
           headers: {
@@ -108,6 +118,10 @@ export class FirebaseAuth {
 
   async canAddDevice(userId) {
     try {
+      if (!this.currentUser || !this.currentUser.idToken) {
+        throw new Error('No authentication token available');
+      }
+
       // Get user's subscription plan
       const userDoc = await fetch(
         `${FIREBASE_FIRESTORE_BASE_URL}/users/${userId}`,
@@ -136,7 +150,7 @@ export class FirebaseAuth {
 
       // Get all devices for this user
       const devicesResponse = await fetch(
-        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices.json`,
+        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices.json?auth=${this.currentUser.idToken}`,
         {
           method: 'GET',
           headers: {
@@ -146,32 +160,16 @@ export class FirebaseAuth {
       );
 
       if (!devicesResponse.ok) {
+        if (devicesResponse.status === 401) {
+          // Try refreshing the token
+          await this.refreshAuthToken();
+          // Retry the request
+          return this.canAddDevice(userId);
+        }
         throw new Error('Failed to fetch devices');
       }
 
       const devices = await devicesResponse.json() || {};
-      
-      // // Clean up inactive devices (not seen in last 30 days)
-      // const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
-      // let activeDevices = {};
-      
-      // for (const [deviceId, device] of Object.entries(devices)) {
-      //   if (device.last_seen && device.last_seen > thirtyDaysAgo) {
-      //     activeDevices[deviceId] = device;
-      //   } else {
-      //     // Remove inactive device
-      //     await fetch(
-      //       `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceId}.json`,
-      //       {
-      //         method: 'DELETE',
-      //         headers: {
-      //           'Content-Type': 'application/json',
-      //         }
-      //       }
-      //     );
-      //   }
-      // }
-
       const currentDeviceCount = Object.keys(devices).length;
 
       // Check if user can add more devices
@@ -195,11 +193,7 @@ export class FirebaseAuth {
       };
     } catch (error) {
       console.error('Error checking device limit:', error);
-      return {
-        allowed: false,
-        message: 'Error checking device limit. Please try again later.',
-        error: error.message
-      };
+      throw error;
     }
   }
 
@@ -224,7 +218,7 @@ export class FirebaseAuth {
         try {
           // Check if device exists in realtime db
           const response = await fetch(
-            `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceId}.json`,
+            `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceId}.json?auth=${this.currentUser.idToken}`,
             {
               method: 'GET',
               headers: {
@@ -266,21 +260,10 @@ export class FirebaseAuth {
     }
   }
 
-  async removeDeviceFromRealtimeDb(userId) {
+  async removeDeviceFromRealtimeDb(userId, deviceId) {
     try {
-      // Get both device IDs from storage
-      const result = await new Promise((resolve) => {
-        chrome.storage.local.get(['current_device_id', 'device_id'], resolve);
-      });
-
-      const deviceId = result.current_device_id || result.device_id;
-      if (!deviceId) {
-        console.log('No device ID found to remove');
-        return;
-      }
-
       const response = await fetch(
-        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceId}.json`,
+        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceId}.json?auth=${this.currentUser.idToken}`,
         {
           method: 'DELETE',
           headers: {
@@ -293,14 +276,10 @@ export class FirebaseAuth {
         throw new Error('Failed to remove device info');
       }
 
-      // Clear both device IDs from storage
-      await new Promise(resolve => {
-        chrome.storage.local.remove(['current_device_id', 'device_id', 'device_id_timestamp'], resolve);
-      });
-      
-      console.log('Device removed successfully:', deviceId);
+      return true;
     } catch (error) {
       console.error('Error removing device from Realtime DB:', error);
+      throw error;
     }
   }
 
@@ -585,7 +564,19 @@ export class FirebaseAuth {
       }
 
       if (this.currentUser) {
-        await this.removeDeviceFromRealtimeDb(this.currentUser.uid);
+        // Get the device ID from storage
+        const result = await new Promise((resolve) => {
+          chrome.storage.local.get(['current_device_id', 'device_id'], resolve);
+        });
+
+        const deviceId = result.current_device_id || result.device_id;
+        if (deviceId) {
+          await this.removeDeviceFromRealtimeDb(this.currentUser.uid, deviceId);
+          // Clear device IDs from storage
+          await new Promise(resolve => {
+            chrome.storage.local.remove(['current_device_id', 'device_id', 'device_id_timestamp'], resolve);
+          });
+        }
       }
     } catch (error) {
       console.warn('Error during sign out:', error);
@@ -605,7 +596,7 @@ export class FirebaseAuth {
       }
 
       if (this.currentUser) {
-        await this.removeDeviceFromRealtimeDb(this.currentUser.uid);
+        await this.removeDeviceFromRealtimeDb(this.currentUser.uid, this.currentUser.uid);
       }
     } catch (error) {
       console.warn('Error during force logout:', error);
@@ -1083,9 +1074,9 @@ export class FirebaseFirestore {
       }
 
       const response = await fetch(
-        `${this.baseUrl}/override_history/${historyId}`,
+        `${this.baseUrl}/override_history?documentId=${historyId}`,
         {
-          method: "PATCH",
+          method: "POST",
           headers: this.getAuthHeaders(),
           body: JSON.stringify({
             fields: firestoreData,

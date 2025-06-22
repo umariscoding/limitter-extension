@@ -1,0 +1,17 @@
+{
+  "rules": {
+    "users": {
+      "$userId": {
+        "devices": {
+          ".read": "auth != null",
+          ".write": "auth != null",
+          "$deviceId": {
+            ".read": "auth != null",
+            ".write": "auth != null && (!data.exists() || data.child('user_id').val() == auth.uid)",
+            ".validate": "newData.hasChild('user_id') && (!data.exists() || data.child('user_id').val() == auth.uid)"
+          }
+        }
+      }
+    }
+  }
+} 

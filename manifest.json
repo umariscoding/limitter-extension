@@ -44,7 +44,8 @@
         "device-fingerprint.js",
         "firebase-config.js",
         "subscription-service.js",
-        "firebase-sync-service.js"
+        "firebase-sync-service.js",
+        "config.js"
       ],
       "matches": ["<all_urls>"]
     }

@@ -1,0 +1,120 @@
+	rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
+      allow create: if isAuthenticated() && isOwner(userId);
+      allow update: if isAuthenticated() && (isOwner(userId) || isAdmin());
+      allow delete: if isAdmin();
+    }
+    
+    // Blocked sites collection
+    match /blocked_sites/{siteId} {
+      allow read: if isAuthenticated() && (
+        siteId.matches('^' + request.auth.uid + '_.*') || 
+        resource.data.user_id == request.auth.uid ||
+        isAdmin()
+      );
+      allow write: if isAuthenticated() && (
+        siteId.matches('^' + request.auth.uid + '_.*') || 
+        request.resource.data.user_id == request.auth.uid ||
+        isAdmin()
+      );
+    }
+    
+    // Subscriptions collection
+    match /subscriptions/{userId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
+      allow write: if isAuthenticated() && (isOwner(userId) || isAdmin());
+    }
+    
+    // User overrides collection
+    match /user_overrides/{userId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
+      allow write: if isAuthenticated() && (isOwner(userId) || isAdmin());
+    }
+    
+    // Transactions collection
+    match /transactions/{transactionId} {
+      allow read: if isAuthenticated() && (
+        resource.data.user_id == request.auth.uid || 
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && (
+        request.resource.data.user_id == request.auth.uid || 
+        isAdmin()
+      );
+      allow update, delete: if isAdmin();
+    }
+    
+    // User activity collection
+    match /user_activity/{activityId} {
+      allow read: if isAuthenticated() && (
+        resource.data.user_id == request.auth.uid || 
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && (
+        request.resource.data.user_id == request.auth.uid || 
+        isAdmin()
+      );
+      allow update, delete: if isAdmin();
+    }
+    
+    match /override_history/{historyId} {
+      function isValidOverrideHistory() {
+        let data = request.resource.data;
+        return data.keys().hasAll(['user_id', 'site_url', 'timestamp', 'month', 'override_type', 'plan', 'created_at']) &&
+          data.user_id == request.auth.uid &&
+          data.site_url is string &&
+          data.timestamp is string &&
+          data.month is string &&
+          data.override_type is string &&
+          data.plan is string &&
+          data.created_at is string;
+      }
+
+      allow read: if isAuthenticated() && (
+        resource.data.user_id == request.auth.uid || 
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && isValidOverrideHistory();
+      allow update: if false;  // Immutable records
+      allow delete: if false;  // No deletion allowed
+    }
+
+    
+    // Admin collections - only accessible by admins
+    match /admin_stats/{docId} {
+      allow read, write: if isAdmin();
+    }
+    
+    match /admin_audit/{docId} {
+      allow read, write: if isAdmin();
+    }
+    
+    match /admin_audit_log/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Default deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+} 

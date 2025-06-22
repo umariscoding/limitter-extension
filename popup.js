@@ -1,5 +1,5 @@
 // Limitter Popup Script
-import { FIREBASE_CONFIG, FirebaseAuth, FirebaseFirestore } from './firebase-config.js';
+import { FIREBASE_CONFIG, FirebaseAuth, FirebaseFirestore, FIREBASE_FIRESTORE_BASE_URL } from './firebase-config.js';
 import { SubscriptionService } from './subscription-service.js';
 
 // Check if extension context is valid
@@ -1438,6 +1438,9 @@ document.addEventListener('DOMContentLoaded', function() {
       // Sync to Firestore (create new site)
       await syncDomainToFirestore(cleanDomain, totalSeconds);
       
+      // Update admin stats for new site
+      await updateAdminStats();
+      
       showFeedback(`Added ${cleanDomain} with ${formatTime(totalSeconds)} timer. Open tabs for this site will be reloaded.`);
     }
     
@@ -2291,4 +2294,214 @@ document.addEventListener('DOMContentLoaded', () => {
   // Make functions available globally for onclick handlers
   window.handlePlanAction = handlePlanAction;
   window.showSubscriptionModal = showSubscriptionModal;
+
+  async function updateAdminStats() {
+    try {
+      const statsDocPath = `${FIREBASE_FIRESTORE_BASE_URL}/admin_stats/global`;
+      
+      // First get the current value
+      const getResponse = await fetch(statsDocPath, {
+        method: 'GET',
+        headers: firebaseAuth.getAuthHeaders()
+      });
+
+      if (!getResponse.ok) {
+        throw new Error('Failed to fetch current admin stats');
+      }
+
+      console.log("getResponse", getResponse);
+      const statsData = await getResponse.json();
+      const currentTotal = parseInt(statsData?.fields?.sites?.mapValue?.fields?.total?.integerValue || '0');
+      const newTotal = currentTotal + 1;
+
+      // Update with the new incremented value, using updateMask to only update sites.total
+      const updateResponse = await fetch(`${statsDocPath}?updateMask.fieldPaths=sites.total`, {
+        method: 'PATCH',
+        headers: firebaseAuth.getAuthHeaders(),
+        body: JSON.stringify({
+          fields: {
+            sites: {
+              mapValue: {
+                fields: {
+                  total: {
+                    integerValue: newTotal.toString()
+                  }
+                }
+              }
+            }
+          }
+        })
+      });
+
+      if (!updateResponse.ok) {
+        const errorData = await updateResponse.json();
+        console.error('Admin stats update failed:', errorData);
+        throw new Error('Failed to update admin stats');
+      }
+    } catch (error) {
+      console.error('Error updating admin stats:', error);
+      // Don't throw the error - we don't want to block domain addition if stats update fails
+    }
+  }
+
+  async function addDomain() {
+    // Check if user is authenticated
+    if (!isUserAuthenticated()) {
+      showError('Please log in to add domains');
+      return;
+    }
+
+    const domain = domainInput.value.trim().toLowerCase();
+    const userPlan = subscriptionService.getCurrentPlan();
+    
+    let hours, minutes, seconds, totalSeconds;
+    
+    if (userPlan.id === 'free') {
+      // Free plan: force 1 hour timer
+      hours = 1;
+      minutes = 0;
+      seconds = 0;
+      totalSeconds = 3600; // 1 hour
+    } else {
+      // Pro/Elite plans: use user input
+      hours = parseInt(hoursInput.value) || 0;
+      minutes = parseInt(minutesInput.value) || 0;
+      seconds = parseInt(secondsInput.value) || 0;
+      totalSeconds = hours * 3600 + minutes * 60 + seconds;
+      
+      // Validate time input for non-free plans
+      if (totalSeconds < 1) {
+        showError('Please enter a time greater than 0');
+        return;
+      }
+      
+      if (totalSeconds > 86400) { // 24 hours max
+        showError('Timer cannot exceed 24 hours');
+        return;
+      }
+    }
+    
+    if (!domain) {
+      showError('Please enter a domain');
+      return;
+    }
+    
+    // Check subscription limits for domain count
+    const currentDomainCount = Object.keys(domains).length;
+    const canAdd = await subscriptionService.canAddDomain(currentDomainCount);
+    
+    if (!canAdd) {
+      const maxDomains = subscriptionService.getMaxDomains();
+      showError('You have reached your domains limit of current plan. Upgrade to Pro for unlimited domains.');
+      showPlanLimitError(`You've reached your limit of ${maxDomains} domains. Upgrade to Pro for unlimited domains.`, 'pro');
+      return;
+    }
+    
+    // Clean domain (remove everything before www, then remove www, then remove path)
+    const cleanDomain = cleanDomainFromUrl(domain);
+    
+    // Validate the cleaned domain format
+    if (!isValidDomainFormat(cleanDomain)) {
+      showError('Please enter a valid domain (e.g., google.com, facebook.net, amazon.co.uk)');
+      return;
+    }
+    
+    // Check if domain already exists in Firestore
+    const user = firebaseAuth.getCurrentUser();
+    if (!user) {
+      showError('Please log in to add domains');
+      return;
+    }
+
+    // const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
+    const siteId = `${user.uid}_${cleanDomain}`;
+    // const existingSite = await realtimeDB.getBlockedSite(siteId);
+    const existingSite = await firestore.getBlockedSite(siteId);
+    
+    if (existingSite) {
+      if (existingSite.is_active) {
+        // Site already exists and is active - show message and return
+        showWarning(`${cleanDomain} is already being tracked`);
+        return;
+      } else {
+        // Site exists but is inactive - reactivate it without changing time_limit or time_remaining
+        console.log(`Reactivating inactive site: ${cleanDomain}`);
+        const now = new Date();
+        const reactivatedSiteData = {
+          ...existingSite,
+          is_active: true,
+          updated_at: now,
+          last_accessed: now.toISOString(),
+          last_reset_timestamp: existingSite.last_reset_timestamp
+        };
+        
+        await firestore.updateBlockedSite(siteId, reactivatedSiteData, ['url']);
+        
+        // Add to local domains with existing time_limit
+        domains[cleanDomain] = existingSite.time_limit;
+        saveDomains();
+        
+        showFeedback(`Reactivated ${cleanDomain} with existing ${formatTime(existingSite.time_limit)} timer`);
+      }
+    } else {
+      // New site - add normally
+      domains[cleanDomain] = totalSeconds;
+      saveDomains();
+      
+      // Sync to Firestore (create new site)
+      await syncDomainToFirestore(cleanDomain, totalSeconds);
+      
+      // Update admin stats for new site
+      await updateAdminStats();
+      
+      showFeedback(`Added ${cleanDomain} with ${formatTime(totalSeconds)} timer. Open tabs for this site will be reloaded.`);
+    }
+    
+    // Common actions for both new and reactivated sites
+    // Notify background script that a domain was added
+    safeChromeCall(() => {
+      chrome.runtime.sendMessage({ action: 'domainAdded', domain: cleanDomain });
+    });
+    
+    // Clear any existing daily block for this domain to allow fresh timer
+    clearDailyBlock(cleanDomain);
+    
+    // Reload existing tabs that match the new domain
+    chrome.tabs.query({}, (tabs) => {
+      tabs.forEach(tab => {
+        if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+          try {
+            const hostname = new URL(tab.url).hostname.toLowerCase();
+            const cleanHostname = hostname.replace(/^www\./, '');
+            if (cleanHostname === cleanDomain || hostname === cleanDomain) {
+              // Reload the tab so the extension can start tracking immediately
+              chrome.tabs.reload(tab.id).catch((error) => {
+                console.log(`Could not reload tab ${tab.id}:`, error);
+              });
+              // console.log(`Reloaded tab ${tab.id} for domain ${cleanDomain}`);
+            }
+          } catch (error) {
+            // Invalid URL, ignore
+          }
+        }
+      });
+    });
+    
+    updateDomainStates();
+    updateStats();
+    
+    // Clear inputs and reset to plan defaults
+    domainInput.value = '';
+    const planForClear = subscriptionService.getCurrentPlan();
+    if (planForClear.id === 'free') {
+      // Keep 1 hour for free plan (inputs are disabled)
+      hoursInput.value = '1';
+      minutesInput.value = '0';
+      secondsInput.value = '0';
+    } else {
+      hoursInput.value = '';
+      minutesInput.value = '';
+      secondsInput.value = '';
+    }
+  }
 }); 
