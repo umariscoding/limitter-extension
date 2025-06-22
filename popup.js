@@ -709,11 +709,30 @@ document.addEventListener('DOMContentLoaded', function() {
       
     } catch (error) {
       console.error('Login error:', error);
-      showAuthError(error.message || 'Login failed. Please check your credentials.');
-    } finally {
-      loginBtn.disabled = false;
-      loginBtn.textContent = 'Sign In';
+      
+      // Handle maximum attempts error specifically
+      if (error.message.includes('Maximum login attempts reached')) {
+        showAuthError('Maximum login attempts reached. Please try again later.');
+        
+        // Show a more prominent notification
+        chrome.notifications.create('max-attempts-reached', {
+          type: 'basic',
+          iconUrl: 'icons/icon128.png',
+          title: 'Login Attempts Exceeded',
+          message: 'You have exceeded the maximum number of login attempts. Please try again later.',
+          priority: 2
+        });
+        
+        // Clear the form
+        emailInput.value = '';
+        passwordInput.value = '';
+      } else {
+        showAuthError(error.message || 'Login failed. Please check your credentials.');
+      }
     }
+    
+    loginBtn.disabled = false;
+    loginBtn.textContent = 'Sign In';
   }
   
   function handleRegister() {

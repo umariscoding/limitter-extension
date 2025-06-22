@@ -30,6 +30,7 @@ const MAX_RECOVERY_ATTEMPTS = 2;
 let wakeLock = null;
 let heartbeatInterval = null;
 const HEARTBEAT_INTERVAL = 25; // seconds
+let isInitializing = false;
 
 async function initializeAuth() {
   try {
@@ -1809,8 +1810,8 @@ async function syncTimerStateToFirestore(domain, timerState) {
 
 // Add this function to keep service worker alive
 async function keepAlive() {
-  // Request wake lock if available in service worker
   try {
+    // Request wake lock if available
     if ('wakeLock' in globalThis) {
       wakeLock = await globalThis.wakeLock.request('screen');
       console.log('Wake Lock is active');
@@ -1824,10 +1825,9 @@ async function keepAlive() {
     periodInMinutes: 1
   });
 
-  // Start heartbeat
+  // Start heartbeat and service check
   if (!heartbeatInterval) {
     heartbeatInterval = setInterval(() => {
-      console.log('Service worker heartbeat');
       checkServices();
     }, HEARTBEAT_INTERVAL * 1000);
   }
@@ -1835,37 +1835,79 @@ async function keepAlive() {
 
 // Function to check and recover services
 async function checkServices() {
+  if (isInitializing) return; // Prevent multiple initializations
+  
   try {
-    // Check if Firebase auth is still valid
-    const user = firebaseAuth?.getCurrentUser();
-    if (!user) {
-      const storedUser = await firebaseAuth?.getStoredAuthData();
-      if (storedUser) {
-        // Reinitialize services if needed
-        await recoverFirebaseServices();
+    const authStatus = await chrome.storage.local.get(['firebaseUser', 'isExplicitLogout']);
+    const hasStoredAuth = authStatus.firebaseUser && !authStatus.isExplicitLogout;
+    
+    // If we have stored auth but services aren't initialized
+    if (hasStoredAuth && (!firebaseAuth || !firestore || !subscriptionService || !firebaseSyncService)) {
+      console.log('Limitter Background: Services need reinitialization');
+      isInitializing = true;
+      
+      try {
+        // Reinitialize all Firebase services
+        firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
+        const storedUser = await firebaseAuth.getStoredAuthData();
+        
+        if (storedUser) {
+          console.log('Limitter Background: Restoring auth state');
+          firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
+          subscriptionService = new SubscriptionService(firebaseAuth, firestore);
+          firebaseSyncService = new FirebaseSyncService(firestore, firebaseAuth);
+          
+          // Initialize services
+          await Promise.all([
+            subscriptionService.initializePlan(),
+            firebaseSyncService.init()
+          ]);
+          
+          isAuthenticated = true;
+          console.log('Limitter Background: Services reinitialized successfully');
+          
+          // Reload configuration and update tabs
+          await loadConfiguration();
+          updateAllTrackedTabs();
+        }
+      } catch (error) {
+        console.error('Limitter Background: Error reinitializing services:', error);
+      } finally {
+        isInitializing = false;
       }
-      return; // Exit early if no user
     }
-
-    // Check if device is still being tracked;
   } catch (error) {
-    console.warn('Service check error:', error);
+    console.error('Limitter Background: Error checking services:', error);
+    isInitializing = false;
   }
 }
 
 // Handle wake lock in service worker context
 chrome.runtime.onStartup.addListener(async () => {
+  console.log('Limitter Background: Extension startup');
+  await initializeAuth();
   await keepAlive();
 });
 
 // Reacquire wake lock on service worker activation
 chrome.runtime.onInstalled.addListener(async () => {
+  console.log('Limitter Background: Extension installed/updated');
+  await initializeAuth();
   await keepAlive();
 });
 
-// Set up alarm listener to keep service worker alive
+// Set up alarm listener to keep service worker alive and check services
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'keepAlive') {
     await keepAlive();
   }
+});
+
+// Handle service worker activation
+self.addEventListener('activate', event => {
+  event.waitUntil(async function() {
+    console.log('Limitter Background: Service worker activated');
+    await initializeAuth();
+    await keepAlive();
+  }());
 });

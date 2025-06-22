@@ -17,6 +17,39 @@ export class FirebaseAuth {
     this.currentUser = null;
     this.deviceFingerprint = new DeviceFingerprint();
     this.deviceListener = null;
+    this.failedAuthAttempts = 0;
+    this.tokenRefreshInterval = null;
+    this.TOKEN_REFRESH_INTERVAL = 45 * 60 * 1000; // 45 minutes
+  }
+
+  // Reset failed attempts counter
+  resetFailedAttempts() {
+    this.failedAuthAttempts = 0;
+  }
+
+  // Increment failed attempts and check if max reached
+  incrementFailedAttempts() {
+    this.failedAuthAttempts++;
+    return this.failedAuthAttempts >= 3;
+  }
+
+  // Start token refresh interval
+  startTokenRefresh() {
+    if (this.tokenRefreshInterval) {
+      clearInterval(this.tokenRefreshInterval);
+    }
+    
+    this.tokenRefreshInterval = setInterval(async () => {
+      await this.refreshAuthToken();
+    }, this.TOKEN_REFRESH_INTERVAL);
+  }
+
+  // Stop token refresh interval
+  stopTokenRefresh() {
+    if (this.tokenRefreshInterval) {
+      clearInterval(this.tokenRefreshInterval);
+      this.tokenRefreshInterval = null;
+    }
   }
 
   async saveDeviceToRealtimeDb(userId) {
@@ -446,8 +479,19 @@ export class FirebaseAuth {
 
       if (!response.ok) {
         console.warn("Firebase sign in failed:", data.error?.message);
+        
+        // Increment failed attempts and check if max reached
+        if (this.incrementFailedAttempts()) {
+          // Force logout after 3 failed attempts
+          await this.handleForceLogout();
+          throw new Error("Maximum login attempts reached. Please try again later.");
+        }
+        
         throw new Error(data.error?.message || "Login failed");
       }
+
+      // Reset failed attempts on successful login
+      this.resetFailedAttempts();
 
       this.currentUser = {
         uid: data.localId,
@@ -487,7 +531,6 @@ export class FirebaseAuth {
 
       return this.currentUser;
     } catch (error) {
-      console.warn("Firebase sign in error:", error);
       throw error;
     }
   }
@@ -498,7 +541,8 @@ export class FirebaseAuth {
       const authData = {
         firebaseUser: userData,
         authTimestamp: Date.now(),
-        isExplicitLogout: false
+        isExplicitLogout: false,
+        lastTokenRefresh: Date.now()
       };
       
       // Store in both local and sync storage for persistence
@@ -509,30 +553,100 @@ export class FirebaseAuth {
     });
   }
 
-  // Retrieve stored authentication data
+  // Retrieve stored authentication data with token refresh check
   async getStoredAuthData() {
     return new Promise((resolve) => {
       // Try local storage first, then sync storage as backup
-      chrome.storage.local.get(["firebaseUser", "authTimestamp", "isExplicitLogout"], (localResult) => {
-        if (localResult.firebaseUser && !localResult.isExplicitLogout) {
-          this.currentUser = localResult.firebaseUser;
-          resolve(localResult.firebaseUser);
-        } else {
-          // Try sync storage if local storage is empty
-          chrome.storage.sync.get(["firebaseUser", "authTimestamp", "isExplicitLogout"], (syncResult) => {
-            if (syncResult.firebaseUser && !syncResult.isExplicitLogout) {
-              // Found in sync storage, restore to local
-              chrome.storage.local.set({
-                firebaseUser: syncResult.firebaseUser,
-                authTimestamp: syncResult.authTimestamp,
-                isExplicitLogout: false
-              });
-              this.currentUser = syncResult.firebaseUser;
-              resolve(syncResult.firebaseUser);
-            } else {
-              resolve(null);
+      chrome.storage.local.get(["firebaseUser", "authTimestamp", "isExplicitLogout", "lastTokenRefresh"], async (localResult) => {
+        try {
+          if (localResult.firebaseUser && !localResult.isExplicitLogout) {
+            // Check if token needs refresh (if last refresh was more than 45 minutes ago)
+            const now = Date.now();
+            const lastRefresh = localResult.lastTokenRefresh || 0;
+            const timeSinceLastRefresh = now - lastRefresh;
+
+            // Set current user first to enable API calls
+            this.currentUser = localResult.firebaseUser;
+
+            // If token is older than 45 minutes or no lastTokenRefresh, try to refresh
+            if (timeSinceLastRefresh > this.TOKEN_REFRESH_INTERVAL || !lastRefresh) {
+              try {
+                console.log('Token needs refresh, attempting refresh...');
+                const refreshedUser = await this.refreshAuthToken();
+                if (refreshedUser) {
+                  this.startTokenRefresh(); // Start refresh interval
+                  resolve(refreshedUser);
+                  return;
+                }
+              } catch (error) {
+                console.warn('Token refresh failed during auth restore:', error);
+                // Don't immediately fail - try sync storage or continue with current token
+              }
             }
+
+            // If token is still valid or refresh failed but token might still work
+            if (timeSinceLastRefresh <= this.TOKEN_REFRESH_INTERVAL || this.currentUser.idToken) {
+              this.startTokenRefresh(); // Start refresh interval
+              resolve(this.currentUser);
+              return;
+            }
+          }
+
+          // Try sync storage if local storage is empty or token refresh failed
+          chrome.storage.sync.get(["firebaseUser", "authTimestamp", "isExplicitLogout", "lastTokenRefresh"], async (syncResult) => {
+            if (syncResult.firebaseUser && !syncResult.isExplicitLogout) {
+              const now = Date.now();
+              const lastRefresh = syncResult.lastTokenRefresh || 0;
+              const timeSinceLastRefresh = now - lastRefresh;
+
+              // Set current user to enable API calls
+              this.currentUser = syncResult.firebaseUser;
+
+              // If token is older than 45 minutes or no lastTokenRefresh, try to refresh
+              if (timeSinceLastRefresh > this.TOKEN_REFRESH_INTERVAL || !lastRefresh) {
+                try {
+                  console.log('Token needs refresh (sync storage), attempting refresh...');
+                  const refreshedUser = await this.refreshAuthToken();
+                  if (refreshedUser) {
+                    // Restore to local storage
+                    await new Promise(r => chrome.storage.local.set({
+                      firebaseUser: refreshedUser,
+                      authTimestamp: Date.now(),
+                      isExplicitLogout: false,
+                      lastTokenRefresh: Date.now()
+                    }, r));
+                    this.startTokenRefresh(); // Start refresh interval
+                    resolve(refreshedUser);
+                    return;
+                  }
+                } catch (error) {
+                  console.warn('Token refresh failed during auth restore from sync:', error);
+                }
+              }
+
+              // If token is still valid or we couldn't refresh but token might work
+              if (timeSinceLastRefresh <= this.TOKEN_REFRESH_INTERVAL || this.currentUser.idToken) {
+                // Restore to local storage
+                await new Promise(r => chrome.storage.local.set({
+                  firebaseUser: this.currentUser,
+                  authTimestamp: syncResult.authTimestamp,
+                  isExplicitLogout: false,
+                  lastTokenRefresh: syncResult.lastTokenRefresh
+                }, r));
+                this.startTokenRefresh(); // Start refresh interval
+                resolve(this.currentUser);
+                return;
+              }
+            }
+            
+            // If we get here, we couldn't restore auth from either storage
+            this.currentUser = null;
+            resolve(null);
           });
+        } catch (error) {
+          console.error('Error during auth data retrieval:', error);
+          this.currentUser = null;
+          resolve(null);
         }
       });
     });
@@ -558,6 +672,7 @@ export class FirebaseAuth {
   // Sign out current user
   async signOut() {
     try {
+      this.stopTokenRefresh(); // Stop token refresh interval
       if (this.deviceListener) {
         this.deviceListener.close();
         this.deviceListener = null;
@@ -590,6 +705,7 @@ export class FirebaseAuth {
   // Handle force logout (e.g., device removed)
   async handleForceLogout() {
     try {
+      this.stopTokenRefresh(); // Stop token refresh interval
       if (this.deviceListener) {
         this.deviceListener.close();
         this.deviceListener = null;
@@ -619,20 +735,20 @@ export class FirebaseAuth {
 
   // Refresh expired authentication token
   async refreshAuthToken() {
-    if (!this.currentUser?.refreshToken) {
-      throw new Error("No refresh token available");
-    }
-
-    const url = `https://securetoken.googleapis.com/v1/token?key=${this.apiKey}`;
-
     try {
+      if (!this.currentUser?.refreshToken) {
+        console.warn('No refresh token available');
+        return null;
+      }
+
+      const url = `${FIREBASE_AUTH_BASE_URL}:token?key=${this.apiKey}`;
       const response = await fetch(url, {
-        method: "POST",
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          grant_type: "refresh_token",
+          grant_type: 'refresh_token',
           refresh_token: this.currentUser.refreshToken,
         }),
       });
@@ -640,17 +756,35 @@ export class FirebaseAuth {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error?.message || "Token refresh failed");
+        // Only throw if it's a critical error
+        if (response.status === 400 || response.status === 401) {
+          throw new Error(data.error?.message || 'Token refresh failed');
+        }
+        // For other errors, log warning but don't throw
+        console.warn('Non-critical token refresh error:', data.error?.message);
+        return null;
       }
 
-      this.currentUser.idToken = data.id_token;
-      this.currentUser.refreshToken = data.refresh_token;
+      // Update current user with new tokens
+      this.currentUser = {
+        ...this.currentUser,
+        idToken: data.id_token,
+        refreshToken: data.refresh_token,
+        expiresIn: data.expires_in,
+      };
 
+      // Store updated auth data
       await this.storeAuthData(this.currentUser);
-
+      
       return this.currentUser;
     } catch (error) {
-      console.error("Token refresh error:", error);
+      console.error('Token refresh failed:', error);
+      // Only force logout for critical auth errors
+      if (error.message.includes('TOKEN_EXPIRED') || 
+          error.message.includes('USER_NOT_FOUND') ||
+          error.message.includes('INVALID_REFRESH_TOKEN')) {
+        await this.handleForceLogout();
+      }
       throw error;
     }
   }
