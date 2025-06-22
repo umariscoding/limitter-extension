@@ -516,25 +516,17 @@ export class FirebaseAuth {
   // Store user authentication data in Chrome storage
   async storeAuthData(userData) {
     return new Promise((resolve) => {
+      const authData = {
+        firebaseUser: userData,
+        authTimestamp: Date.now(),
+        isExplicitLogout: false
+      };
+      
       // Store in both local and sync storage for persistence
-      chrome.storage.local.set(
-        {
-          firebaseUser: userData,
-          authTimestamp: Date.now(),
-          isExplicitLogout: false
-        },
-        () => {
-          // Also store in sync storage for persistence across restarts
-          chrome.storage.sync.set(
-            {
-              firebaseUser: userData,
-              authTimestamp: Date.now(),
-              isExplicitLogout: false
-            },
-            resolve
-          );
-        }
-      );
+      Promise.all([
+        new Promise(r => chrome.storage.local.set(authData, r)),
+        new Promise(r => chrome.storage.sync.set(authData, r))
+      ]).then(() => resolve());
     });
   }
 
@@ -567,6 +559,23 @@ export class FirebaseAuth {
     });
   }
 
+  // Clear auth data only during explicit logout
+  async clearAuthData() {
+    console.log("clearAuthData")
+    return new Promise((resolve) => {
+      const clearData = {
+        firebaseUser: null,
+        authTimestamp: null,
+        isExplicitLogout: true
+      };
+      
+      Promise.all([
+        new Promise(r => chrome.storage.local.set(clearData, r)),
+        new Promise(r => chrome.storage.sync.set(clearData, r))
+      ]).then(() => resolve());
+    });
+  }
+
   // Sign out current user
   async signOut() {
     try {
@@ -583,13 +592,28 @@ export class FirebaseAuth {
     }
 
     this.currentUser = null;
-    return new Promise((resolve) => {
-      // Clear both storages on explicit logout
-      Promise.all([
-        new Promise(r => chrome.storage.local.clear(r)),
-        new Promise(r => chrome.storage.sync.clear(r))
-      ]).then(() => resolve());
-    });
+    // Only clear auth data, not entire storage
+    return this.clearAuthData();
+  }
+
+  // Handle force logout (e.g., device removed)
+  async handleForceLogout() {
+    try {
+      if (this.deviceListener) {
+        this.deviceListener.close();
+        this.deviceListener = null;
+      }
+
+      if (this.currentUser) {
+        await this.removeDeviceFromRealtimeDb(this.currentUser.uid);
+      }
+    } catch (error) {
+      console.warn('Error during force logout:', error);
+    }
+
+    this.currentUser = null;
+    // Only clear auth data, not entire storage
+    return this.clearAuthData();
   }
 
   // Check if user is signed in

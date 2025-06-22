@@ -244,33 +244,21 @@ document.addEventListener('DOMContentLoaded', function() {
       // Show error notification
       showError(message.message || 'You have been logged out.');
       
-      // Clear all data
-      clearAllChromeStorageData().then(() => {
-        // Update UI to unauthenticated state
-        showUnauthenticatedState();
-        
-        // Clear domains list
-        domains = {};
-        domainStates = {};
-        renderDomainsList();
-        
-        // Stop any active timers
-        if (updateInterval) {
-          clearInterval(updateInterval);
-          updateInterval = null;
-        }
-        
-        // // Hide active timer display if visible
-        // hideActiveTimerDisplay();
-        
-        // // Update stats
-        // updateStats();
-        
-        console.log('Popup: Force logout completed');
-      }).catch(error => {
-        console.error('Error during force logout cleanup:', error);
-      });
+      // Update UI to unauthenticated state
+      showUnauthenticatedState();
       
+      // Clear app state
+      domains = {};
+      domainStates = {};
+      renderDomainsList();
+      
+      // Stop any active timers
+      if (updateInterval) {
+        clearInterval(updateInterval);
+        updateInterval = null;
+      }
+      
+      console.log('Popup: Force logout completed');
       sendResponse({ success: true });
     }
   });
@@ -737,17 +725,14 @@ document.addEventListener('DOMContentLoaded', function() {
     try {
       await firebaseAuth.signOut();
       
-      // Notify background script of logout (this will stop all timers)
+      // Notify background script of logout
       safeChromeCall(() => {
         chrome.runtime.sendMessage({ action: 'userLoggedOut' });
       });
       
-      // Clear all Chrome storage data
-      await clearAllChromeStorageData();
-      
       showUnauthenticatedState();
       
-      // Clear app data
+      // Clear app state
       domains = {};
       domainStates = {};
       if (updateInterval) {

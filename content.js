@@ -837,7 +837,7 @@
             loadTimerStateFromFirebase().then(firebaseState => {
                 // Mark that we've attempted to load from Firebase
                 hasLoadedFromFirebase = true;
-                
+                console.log("hasLoadedFromFirebase", hasLoadedFromFirebase, firebaseState)
                 // // Set up real-time listener for this specific blocked site
                 // try {
                 //     chrome.runtime.sendMessage({

@@ -63,16 +63,10 @@ async function initializeAuth() {
               ]
             });
             
-            // Force logout
-            await firebaseAuth.signOut();
+            // Force logout but preserve other data
+            await firebaseAuth.handleForceLogout();
             isAuthenticated = false;
-
-            // Clear all timers and data
             stopAllTimers();
-            await Promise.all([
-              new Promise(r => chrome.storage.local.clear(r)),
-              new Promise(r => chrome.storage.sync.clear(r))
-            ]);
             
             // Notify popup if open
             chrome.runtime.sendMessage({
@@ -436,43 +430,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       console.log('Limitter Background: User logged out, stopping all timers and clearing data');
       stopAllTimers();
       
-      // Clear background script's cached data
+      // Reset app state but preserve storage
       blockedDomains = {};
-      isEnabled = true; // Reset to default
-      
+      isEnabled = true;
       sendResponse({ success: true });
       break;
       
     case 'resetBackgroundState':
-      console.log('Limitter Background: Resetting all background state...');
-      // Reset all state variables
+      console.log('Limitter Background: Resetting background state...');
       isAuthenticated = false;
       isEnabled = true;
       blockedDomains = {};
       
-      // Clear services
-      if (firebaseAuth) {
-        firebaseAuth = null;
-      }
-      if (firestore) {
-        firestore = null;
-      }
-      if (subscriptionService) {
-        subscriptionService = null;
-      }
-      if (firebaseSyncService) {
-        firebaseSyncService = null;
-      }
+      // Clear services but don't clear storage
+      firebaseAuth = null;
+      firestore = null;
+      subscriptionService = null;
+      firebaseSyncService = null;
       
-      // Stop all timers and intervals
+      // Stop all timers
       stopAllTimers();
-      
-      // Force reload all tabs to clear any lingering state
-      chrome.tabs.query({}, (tabs) => {
-        tabs.forEach(tab => {
-          chrome.tabs.reload(tab.id);
-        });
-      });
       
       sendResponse({ success: true });
       break;
@@ -666,14 +643,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
     case 'loadTimerFromFirebase':
       // Load timer state from Firebase for cross-device syncing
+      console.log("loadTimerFromFirebase", request)
       if (!firebaseAuth) {
         sendResponse({ success: false, error: 'Not authenticated or services not available' });
         break;
       }
       
-      // console.log('Limitter Background: Loading timer from Firebase for domain:', request.domain);
+      console.log('Limitter Background: Loading timer from Firebase for domain:', request.domain);
       loadTimerStateFromFirebase(request.domain)
         .then(timerState => {
+          console.log("timerState", timerState)
           if (timerState) {
             sendResponse({ success: true, timerState });
           } else {
@@ -996,21 +975,24 @@ function updateAllTrackedTabs() {
 
 // Load timer state from Firebase for cross-device syncing
 async function loadTimerStateFromFirebase(domain) {
+  console.log("loadTimerStateFromFirebase", domain)
   try {
     if (!firebaseAuth) {
       console.log('Limitter Background: Not authenticated or services not available for Firebase load');
       return null;
     }
-    
+    console.log("firebaseAuth", firebaseAuth)
     const user = firebaseAuth.getCurrentUser();
     if (!user) {
       // Try stored auth data as fallback
+      console.log("getStoredAuthData")
       const storedUser = await firebaseAuth.getStoredAuthData();
+      console.log("storedUser", storedUser)
       if (!storedUser) {
         return null;
       }
     }
-    
+    console.log("user", user)
     const userId = user?.uid || user?.id;
     if (!userId) {
       console.log('Limitter Background: No user ID available for Firebase load');
@@ -1022,15 +1004,12 @@ async function loadTimerStateFromFirebase(domain) {
     const timerSiteId = `${userId}_${timerDomain}`;
     
     const siteData = await firestore.getBlockedSite(timerSiteId);
+    console.log("siteData", siteData)
     if (siteData) {
       // Rest of the existing timer state loading code...
       const today = getTodayString();
       const lastResetDate = siteData.last_reset_date;
-      
-      if (lastResetDate !== today) {
-        return null;
-      }
-      
+ 
       if (siteData.is_blocked && siteData.time_remaining <= 0) {
         return {
           timeRemaining: 0,
@@ -1691,10 +1670,7 @@ async function loadTimerStateFromFirestore(domain) {
       // Check if it's a new day
       const today = getTodayString();
       const lastResetDate = siteData.last_reset_date;
-      
-      if (lastResetDate !== today) {
-        return null; // Let timer start fresh for new day
-      }
+  
       
       return {
         time_remaining: siteData.time_remaining,
