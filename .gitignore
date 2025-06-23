@@ -1,0 +1,4 @@
+.env
+firebase.config.secret.js
+.DS_Store
+node_modules/ 

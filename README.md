@@ -1,4 +1,4 @@
-# Smart Tab Blocker Chrome Extension
+# Limitter Chrome Extension
 
 A Chrome extension that helps you stay focused by blocking any website with configurable timers. Features smart tracking that pauses when you switch tabs and resumes when you return, with individual timers for each domain.
 
@@ -207,4 +207,12 @@ This project is open source and available under the MIT License.
 
 **Stay focused across the entire web! 🌐⏰**
 
-*Now with configurable domains and individual timers - your productivity, your rules!* 
+*Now with configurable domains and individual timers - your productivity, your rules!*
+
+## Firebase Configuration Setup
+
+1. Copy `firebase.config.template.js` to `firebase.config.secret.js`
+2. Fill in your Firebase credentials in `firebase.config.secret.js`
+3. Make sure not to commit `firebase.config.secret.js` to version control
+
+The `firebase.config.secret.js` file contains sensitive Firebase credentials and is ignored by git. Never commit this file to version control. 

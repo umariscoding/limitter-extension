@@ -1,15 +1,22 @@
 {
   "manifest_version": 3,
-  "name": "Smart Tab Blocker",
+  "name": "Limitter",
   "version": "2.0",
   "description": "Block any website with configurable timers. Smart tracking that pauses when you switch tabs.",
   "permissions": [
-    "tabs",
-    "activeTab",
     "storage",
-    "notifications",
+    "tabs",
     "scripting",
-    "identity"
+    "notifications",
+    "system.cpu",
+    "system.memory",
+    "system.storage",
+    "system.display",
+    "activeTab",
+    "identity",
+    "power",
+    "alarms",
+    "background"
   ],
   "host_permissions": [
     "<all_urls>",
@@ -19,19 +26,33 @@
     "https://firestore.googleapis.com/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["subscription-service.js", "content.js"],
+      "js": ["content.js"],
       "css": ["content.css"],
       "run_at": "document_start"
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "lib/fp.min.js",
+        "device-fingerprint.js",
+        "firebase-config.js",
+        "subscription-service.js",
+        "firebase-sync-service.js",
+        "config.js"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Smart Tab Blocker",
+    "default_title": "Limitter",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -42,5 +63,8 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   }
 } 

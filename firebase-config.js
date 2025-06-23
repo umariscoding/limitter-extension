@@ -1,27 +1,466 @@
-const firebaseConfig = {
-  apiKey: "AIzaSyCRcKOOzsp_nX8auUOhAFR-UVhGqIgmOjU",
-  authDomain: "test-ext-ad0b2.firebaseapp.com",
-  projectId: "test-ext-ad0b2",
-  storageBucket: "test-ext-ad0b2.firebasestorage.app",
-  messagingSenderId: "642984588666",
-  appId: "1:642984588666:web:dd1fcd739567df3a4d92c3",
-  measurementId: "G-B0MC8CDXCK",
-};
+// Firebase Configuration
+import { DeviceFingerprint } from './device-fingerprint.js';
+import { FIREBASE_SECRET_CONFIG } from './firebase.config.secret.js';
 
-// Initialize Firebase (will be done in the popup script)
-const FIREBASE_CONFIG = firebaseConfig;
+export const FIREBASE_CONFIG = FIREBASE_SECRET_CONFIG;
 
-// Firebase Auth API endpoints
-const FIREBASE_AUTH_BASE_URL =
-  "https://identitytoolkit.googleapis.com/v1/accounts";
-const FIREBASE_FIRESTORE_BASE_URL = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents`;
+// Firebase API endpoints
+export const FIREBASE_AUTH_BASE_URL = "https://identitytoolkit.googleapis.com/v1/accounts";
+export const FIREBASE_FIRESTORE_BASE_URL = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
+export const FIREBASE_REALTIME_DB_URL = FIREBASE_CONFIG.databaseURL;
 
 // Firebase Authentication class
-class FirebaseAuth {
+export class FirebaseAuth {
   constructor(config) {
     this.config = config;
     this.apiKey = config.apiKey;
     this.currentUser = null;
+    this.deviceFingerprint = new DeviceFingerprint();
+    this.deviceListener = null;
+    this.failedAuthAttempts = 0;
+    this.tokenRefreshInterval = null;
+    this.TOKEN_REFRESH_INTERVAL = 45 * 60 * 1000; // 45 minutes
+  }
+
+  // Reset failed attempts counter
+  resetFailedAttempts() {
+    this.failedAuthAttempts = 0;
+  }
+
+  // Increment failed attempts and check if max reached
+  incrementFailedAttempts() {
+    this.failedAuthAttempts++;
+    return this.failedAuthAttempts >= 3;
+  }
+
+  // Start token refresh interval
+  startTokenRefresh() {
+    if (this.tokenRefreshInterval) {
+      clearInterval(this.tokenRefreshInterval);
+    }
+    
+    this.tokenRefreshInterval = setInterval(async () => {
+      await this.refreshAuthToken();
+    }, this.TOKEN_REFRESH_INTERVAL);
+  }
+
+  // Stop token refresh interval
+  stopTokenRefresh() {
+    if (this.tokenRefreshInterval) {
+      clearInterval(this.tokenRefreshInterval);
+      this.tokenRefreshInterval = null;
+    }
+  }
+
+  async saveDeviceToRealtimeDb(userId) {
+    try {
+      if (!this.currentUser || !this.currentUser.idToken) {
+        throw new Error('No authentication token available');
+      }
+
+      // Get current device info
+      const deviceInfo = await this.deviceFingerprint.getDeviceInfo();
+      
+      // First check if this specific device ID exists for this user
+      const deviceCheckResponse = await fetch(
+        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceInfo.device_id}.json?auth=${this.currentUser.idToken}`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (!deviceCheckResponse.ok) {
+        if (deviceCheckResponse.status === 401) {
+          // Try refreshing the token
+          await this.refreshAuthToken();
+          // Retry the request with new token
+          return this.saveDeviceToRealtimeDb(userId);
+        }
+        throw new Error('Failed to check device existence');
+      }
+
+      const existingDevice = await deviceCheckResponse.json();
+      if (existingDevice) {
+        console.log('Device already registered:', deviceInfo.device_id);
+        // Update last seen timestamp
+        const updateResponse = await fetch(
+          `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceInfo.device_id}.json?auth=${this.currentUser.idToken}`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              last_seen: Date.now()
+            })
+          }
+        );
+
+        if (!updateResponse.ok) {
+          throw new Error('Failed to update device last seen timestamp');
+        }
+
+        return existingDevice;
+      }
+
+      // If device doesn't exist, proceed with normal save
+      const canAddDevice = await this.canAddDevice(userId);
+      if (!canAddDevice.allowed) {
+        throw new Error(canAddDevice.message);
+      }
+
+      // Store both device IDs consistently
+      await new Promise(resolve => {
+        chrome.storage.local.set({
+          current_device_id: deviceInfo.device_id,
+          device_id: deviceInfo.device_id,
+          device_id_timestamp: Date.now()
+        }, resolve);
+      });
+
+      // Add additional device metadata
+      deviceInfo.last_seen = Date.now();
+      deviceInfo.first_registered = Date.now();
+      deviceInfo.user_id = userId;
+
+      const response = await fetch(
+        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceInfo.device_id}.json?auth=${this.currentUser.idToken}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(deviceInfo)
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error('Failed to save device info');
+      }
+
+      console.log('Device saved successfully:', deviceInfo);
+      return deviceInfo;
+    } catch (error) {
+      console.error('Error saving device to Realtime DB:', error);
+      throw error;
+    }
+  }
+
+  async canAddDevice(userId) {
+    try {
+      if (!this.currentUser || !this.currentUser.idToken) {
+        throw new Error('No authentication token available');
+      }
+
+      // Get user's subscription plan
+      const userDoc = await fetch(
+        `${FIREBASE_FIRESTORE_BASE_URL}/users/${userId}`,
+        {
+          method: 'GET',
+          headers: this.getAuthHeaders()
+        }
+      );
+
+      if (!userDoc.ok) {
+        throw new Error('Failed to fetch user data');
+      }
+
+      const userData = await userDoc.json();
+      console.log('User data:', userData);
+      const userPlan = userData.fields?.plan?.stringValue || 'free';
+
+      // Get device limits based on plan
+      const deviceLimits = {
+        'free': 1,
+        'pro': 3,
+        'elite': 10
+      };
+
+      const maxDevices = deviceLimits[userPlan] || 1;
+
+      // Get all devices for this user
+      const devicesResponse = await fetch(
+        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices.json?auth=${this.currentUser.idToken}`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (!devicesResponse.ok) {
+        if (devicesResponse.status === 401) {
+          // Try refreshing the token
+          await this.refreshAuthToken();
+          // Retry the request
+          return this.canAddDevice(userId);
+        }
+        throw new Error('Failed to fetch devices');
+      }
+
+      const devices = await devicesResponse.json() || {};
+      const currentDeviceCount = Object.keys(devices).length;
+
+      // Check if user can add more devices
+      if (currentDeviceCount >= maxDevices) {
+        return {
+          allowed: false,
+          message: `Device limit reached for ${userPlan} plan (${currentDeviceCount}/${maxDevices}). Please upgrade your plan or remove a device.`,
+          currentCount: currentDeviceCount,
+          maxDevices: maxDevices,
+          plan: userPlan, 
+          devices: devices
+        };
+      }
+
+      return {
+        allowed: true,
+        currentCount: currentDeviceCount,
+        maxDevices: maxDevices,
+        plan: userPlan,
+        devices: devices
+      };
+    } catch (error) {
+      console.error('Error checking device limit:', error);
+      throw error;
+    }
+  }
+
+  getAuthHeaders() {
+    if (!this.currentUser || !this.currentUser.idToken) {
+      throw new Error('No authentication token available');
+    }
+    return {
+      'Authorization': `Bearer ${this.currentUser.idToken}`,
+      'Content-Type': 'application/json',
+    };
+  }
+
+  async isDeviceTracked(userId) {
+    try {
+      // Get current device info
+      const deviceInfo = await this.deviceFingerprint.getDeviceInfo();
+      const deviceId = deviceInfo.device_id;
+
+      // Try up to 3 times with a delay between attempts
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          // Check if device exists in realtime db
+          const response = await fetch(
+            `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceId}.json?auth=${this.currentUser.idToken}`,
+            {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+              }
+            }
+          );
+
+          if (!response.ok) {
+            throw new Error('Failed to check device tracking status');
+          }
+
+          const data = await response.json();
+          const isTracked = data !== null;
+          console.log('Device tracking status:', { deviceId, isTracked, attempt });
+          
+          if (isTracked) {
+            return true;
+          }
+          
+          // If not tracked and not last attempt, wait before retrying
+          if (attempt < 3) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        } catch (error) {
+          console.warn(`Device tracking check attempt ${attempt} failed:`, error);
+          if (attempt < 3) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } else {
+            throw error;
+          }
+        }
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Error checking device tracking status:', error);
+      return false;
+    }
+  }
+
+  async removeDeviceFromRealtimeDb(userId, deviceId) {
+    try {
+      const response = await fetch(
+        `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices/${deviceId}.json?auth=${this.currentUser.idToken}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error('Failed to remove device info');
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error removing device from Realtime DB:', error);
+      throw error;
+    }
+  }
+
+  listenToDeviceChanges(userId) {
+    if (this.deviceListener) {
+      this.deviceListener.close();
+      this.deviceListener = null;
+    }
+
+    const url = `${FIREBASE_REALTIME_DB_URL}/users/${userId}/devices.json`;
+    const fullUrl = `${url}?auth=${this.currentUser.idToken}`;
+    console.log('Device listener URL (without token):', url);
+    console.log('Complete device listener URL:', fullUrl);
+    
+    this.deviceListener = new EventSource(fullUrl);
+
+    this.deviceListener.addEventListener('open', () => {
+      console.log('Device listener connection established');
+      this.lastConnectionTime = Date.now();
+      this.isConnected = true;
+    });
+
+    this.deviceListener.addEventListener('put', async (event) => {
+      this.lastConnectionTime = Date.now(); // Update last activity time
+      const data = JSON.parse(event.data);
+      console.log('Device change detected:', data);
+
+      const deviceInfo = await this.deviceFingerprint.getDeviceInfo();
+      const deviceLimitCheck = await this.canAddDevice(userId);
+      
+      if (data.path === `/${deviceInfo.device_id}` && data.data === null) {
+        chrome.notifications.create('device-removed', {
+          type: 'basic',
+          iconUrl: 'icons/icon128.png',
+          title: 'Device Removed',
+          message: 'This device has been removed. Logging out...',
+          priority: 2,
+          requireInteraction: true
+        });
+
+        // Clear both storages immediately on device removal
+        await Promise.all([
+          new Promise(r => chrome.storage.local.clear(r)),
+          new Promise(r => chrome.storage.sync.clear(r))
+        ]);
+
+        await this.signOut();
+        
+        // First notify background script to reset state
+        await chrome.runtime.sendMessage({
+          action: 'resetBackgroundState'
+        }).catch(() => {
+          // Background script might be restarting, which is fine
+        });
+
+        // Then notify popup to show unauthenticated state
+        chrome.runtime.sendMessage({
+          action: 'forceLogout',
+          message: 'This device has been removed from your account.'
+        }).catch(() => {
+          // Popup might not be open, which is fine
+        });
+
+        // Finally notify all tabs
+        chrome.tabs.query({}, (tabs) => {
+          tabs.forEach(tab => {
+            chrome.tabs.sendMessage(tab.id, {
+              action: 'forceLogout',
+              message: 'This device has been removed from your account.'
+            }).catch(err => console.log('Tab might not be ready:', err));
+          });
+        });
+      } 
+      else if (data.data && data.path !== '/') {
+        let deviceId = data.path.replace('/', '');
+        deviceId = deviceId.split('/')[0];
+        if (deviceId !== deviceInfo.device_id) {
+          chrome.notifications.create('new-device-added', {
+            type: 'basic',
+            iconUrl: 'icons/icon128.png',
+            title: `${data.data?.device_name ? 'New Device Added': `Device Info Changed`} `,
+            requireInteraction: true,
+            eventTime: Date.now(),
+            message: `${data.data?.device_name ? `A new device "${data.data.device_name}" has been added to your account. (${deviceLimitCheck.currentCount}/${deviceLimitCheck.maxDevices} devices)`: `Device info has been updated`}`,
+            priority: 2
+          }, () => {
+          });
+        }
+      }
+    });
+
+    // // Listen for specific device changes
+    // this.deviceListener.addEventListener('patch', (event) => {
+
+    //   this.lastConnectionTime = Date.now(); // Update last activity time
+    //   const data = JSON.parse(event.data);
+    //   console.log('Device patch detected:', data);
+      
+    //   chrome.notifications.create('device-updated', {
+    //     type: 'basic',
+    //     iconUrl: 'icons/icon128.png',
+    //     title: 'Device Updated',
+    //     message: 'Device information has been updated.',
+    //     priority: 1
+    //   });
+    // });
+
+    // // Handle connection errors
+    this.deviceListener.onerror = (error) => {
+      console.error('Device listener error:', error);
+      this.isConnected = false;
+      
+      // Close the existing connection
+      if (this.deviceListener) {
+        this.deviceListener.close();
+        this.deviceListener = null;
+      }
+
+      // Try to reconnect if token expired
+      if (this.currentUser) {
+        // this.refreshAuthToken(this.currentUser.refreshToken)
+        //   .then(() => {
+        //     // Restart listener with new token
+        //     this.listenToDeviceChanges(userId);
+        //   })
+        //   .catch((refreshError) => {
+        //     console.error('Failed to refresh token for device listener:', refreshError);
+        //     chrome.notifications.create('device-listener-error', {
+        //       type: 'basic',
+        //       iconUrl: 'icons/icon128.png',
+        //       title: 'Connection Error',
+        //       message: 'Lost connection to device tracking. Attempting to reconnect...',
+        //       priority: 1
+        //     });
+        //   });
+        this.listenToDeviceChanges(userId);
+      }
+    };
+  }
+
+  isDeviceListenerActive() {
+    if (!this.deviceListener) return false;
+    
+    // Check if we have a recent connection (within last 10 seconds)
+    const isRecentlyActive = Date.now() - (this.lastConnectionTime || 0) < 10000;
+    
+    // Check if connection is open and we've received activity recently
+    return this.isConnected && isRecentlyActive && this.deviceListener.readyState === EventSource.OPEN;
   }
 
   // Authenticate user with email and password with better error handling
@@ -45,8 +484,19 @@ class FirebaseAuth {
 
       if (!response.ok) {
         console.warn("Firebase sign in failed:", data.error?.message);
+        
+        // Increment failed attempts and check if max reached
+        if (this.incrementFailedAttempts()) {
+          // Force logout after 3 failed attempts
+          await this.handleForceLogout();
+          throw new Error("Maximum login attempts reached. Please try again later.");
+        }
+        
         throw new Error(data.error?.message || "Login failed");
       }
+
+      // Reset failed attempts on successful login
+      this.resetFailedAttempts();
 
       this.currentUser = {
         uid: data.localId,
@@ -57,17 +507,35 @@ class FirebaseAuth {
       };
 
       try {
+        // First store auth data
         await this.storeAuthData(this.currentUser);
+        
+        // Then save device info and wait for it to complete
+        await this.saveDeviceToRealtimeDb(this.currentUser.uid);
+        
+        // Start listening for device changes
+        this.listenToDeviceChanges(this.currentUser.uid);
+        
+        // Add a small delay to ensure the device info is properly saved
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Verify device was properly saved
+        const isTracked = await this.isDeviceTracked(this.currentUser.uid);
+        if (!isTracked) {
+          throw new Error('Failed to save device info');
+        }
       } catch (storageError) {
         console.warn(
-          "Firebase auth: Failed to store auth data, but continuing:",
+          "Firebase auth: Failed to store auth data or save device:",
           storageError
         );
+        // Force logout if device tracking failed
+        await this.signOut();
+        throw new Error(storageError);
       }
 
       return this.currentUser;
     } catch (error) {
-      console.warn("Firebase sign in error:", error);
       throw error;
     }
   }
@@ -75,42 +543,189 @@ class FirebaseAuth {
   // Store user authentication data in Chrome storage
   async storeAuthData(userData) {
     return new Promise((resolve) => {
-      chrome.storage.local.set(
-        {
-          firebaseUser: userData,
-          authTimestamp: Date.now(),
-        },
-        resolve
-      );
+      const authData = {
+        firebaseUser: userData,
+        authTimestamp: Date.now(),
+        isExplicitLogout: false,
+        lastTokenRefresh: Date.now()
+      };
+      
+      // Store in both local and sync storage for persistence
+      Promise.all([
+        new Promise(r => chrome.storage.local.set(authData, r)),
+        new Promise(r => chrome.storage.sync.set(authData, r))
+      ]).then(() => resolve());
     });
   }
 
-  // Retrieve stored authentication data
+  // Retrieve stored authentication data with token refresh check
   async getStoredAuthData() {
     return new Promise((resolve) => {
-      chrome.storage.local.get(["firebaseUser", "authTimestamp"], (result) => {
-        if (result.firebaseUser && result.authTimestamp) {
-          const hourInMs = 60 * 60 * 1000;
-          if (Date.now() - result.authTimestamp < hourInMs) {
-            this.currentUser = result.firebaseUser;
-            resolve(result.firebaseUser);
-          } else {
-            this.signOut();
-            resolve(null);
+      // Try local storage first, then sync storage as backup
+      chrome.storage.local.get(["firebaseUser", "authTimestamp", "isExplicitLogout", "lastTokenRefresh"], async (localResult) => {
+        try {
+          if (localResult.firebaseUser && !localResult.isExplicitLogout) {
+            // Check if token needs refresh (if last refresh was more than 45 minutes ago)
+            const now = Date.now();
+            const lastRefresh = localResult.lastTokenRefresh || 0;
+            const timeSinceLastRefresh = now - lastRefresh;
+
+            // Set current user first to enable API calls
+            this.currentUser = localResult.firebaseUser;
+
+            // If token is older than 45 minutes or no lastTokenRefresh, try to refresh
+            if (timeSinceLastRefresh > this.TOKEN_REFRESH_INTERVAL || !lastRefresh) {
+              try {
+                console.log('Token needs refresh, attempting refresh...');
+                const refreshedUser = await this.refreshAuthToken();
+                if (refreshedUser) {
+                  this.startTokenRefresh(); // Start refresh interval
+                  resolve(refreshedUser);
+                  return;
+                }
+              } catch (error) {
+                console.warn('Token refresh failed during auth restore:', error);
+                // Don't immediately fail - try sync storage or continue with current token
+              }
+            }
+
+            // If token is still valid or refresh failed but token might still work
+            if (timeSinceLastRefresh <= this.TOKEN_REFRESH_INTERVAL || this.currentUser.idToken) {
+              this.startTokenRefresh(); // Start refresh interval
+              resolve(this.currentUser);
+              return;
+            }
           }
-        } else {
+
+          // Try sync storage if local storage is empty or token refresh failed
+          chrome.storage.sync.get(["firebaseUser", "authTimestamp", "isExplicitLogout", "lastTokenRefresh"], async (syncResult) => {
+            if (syncResult.firebaseUser && !syncResult.isExplicitLogout) {
+              const now = Date.now();
+              const lastRefresh = syncResult.lastTokenRefresh || 0;
+              const timeSinceLastRefresh = now - lastRefresh;
+
+              // Set current user to enable API calls
+              this.currentUser = syncResult.firebaseUser;
+
+              // If token is older than 45 minutes or no lastTokenRefresh, try to refresh
+              if (timeSinceLastRefresh > this.TOKEN_REFRESH_INTERVAL || !lastRefresh) {
+                try {
+                  console.log('Token needs refresh (sync storage), attempting refresh...');
+                  const refreshedUser = await this.refreshAuthToken();
+                  if (refreshedUser) {
+                    // Restore to local storage
+                    await new Promise(r => chrome.storage.local.set({
+                      firebaseUser: refreshedUser,
+                      authTimestamp: Date.now(),
+                      isExplicitLogout: false,
+                      lastTokenRefresh: Date.now()
+                    }, r));
+                    this.startTokenRefresh(); // Start refresh interval
+                    resolve(refreshedUser);
+                    return;
+                  }
+                } catch (error) {
+                  console.warn('Token refresh failed during auth restore from sync:', error);
+                }
+              }
+
+              // If token is still valid or we couldn't refresh but token might work
+              if (timeSinceLastRefresh <= this.TOKEN_REFRESH_INTERVAL || this.currentUser.idToken) {
+                // Restore to local storage
+                await new Promise(r => chrome.storage.local.set({
+                  firebaseUser: this.currentUser,
+                  authTimestamp: syncResult.authTimestamp,
+                  isExplicitLogout: false,
+                  lastTokenRefresh: syncResult.lastTokenRefresh
+                }, r));
+                this.startTokenRefresh(); // Start refresh interval
+                resolve(this.currentUser);
+                return;
+              }
+            }
+            
+            // If we get here, we couldn't restore auth from either storage
+            this.currentUser = null;
+            resolve(null);
+          });
+        } catch (error) {
+          console.error('Error during auth data retrieval:', error);
+          this.currentUser = null;
           resolve(null);
         }
       });
     });
   }
 
+  // Clear auth data only during explicit logout
+  async clearAuthData() {
+    console.log("clearAuthData")
+    return new Promise((resolve) => {
+      const clearData = {
+        firebaseUser: null,
+        authTimestamp: null,
+        isExplicitLogout: true
+      };
+      
+      Promise.all([
+        new Promise(r => chrome.storage.local.set(clearData, r)),
+        new Promise(r => chrome.storage.sync.set(clearData, r))
+      ]).then(() => resolve());
+    });
+  }
+
   // Sign out current user
   async signOut() {
+    try {
+      this.stopTokenRefresh(); // Stop token refresh interval
+      if (this.deviceListener) {
+        this.deviceListener.close();
+        this.deviceListener = null;
+      }
+
+      if (this.currentUser) {
+        // Get the device ID from storage
+        const result = await new Promise((resolve) => {
+          chrome.storage.local.get(['current_device_id', 'device_id'], resolve);
+        });
+
+        const deviceId = result.current_device_id || result.device_id;
+        if (deviceId) {
+          await this.removeDeviceFromRealtimeDb(this.currentUser.uid, deviceId);
+          // Clear device IDs from storage
+          await new Promise(resolve => {
+            chrome.storage.local.remove(['current_device_id', 'device_id', 'device_id_timestamp'], resolve);
+          });
+        }
+      }
+    } catch (error) {
+      console.warn('Error during sign out:', error);
+    }
+
     this.currentUser = null;
-    return new Promise((resolve) => {
-      chrome.storage.local.remove(["firebaseUser", "authTimestamp"], resolve);
-    });
+    // Only clear auth data, not entire storage
+    return this.clearAuthData();
+  }
+
+  // Handle force logout (e.g., device removed)
+  async handleForceLogout() {
+    try {
+      this.stopTokenRefresh(); // Stop token refresh interval
+      if (this.deviceListener) {
+        this.deviceListener.close();
+        this.deviceListener = null;
+      }
+
+      if (this.currentUser) {
+        await this.removeDeviceFromRealtimeDb(this.currentUser.uid, this.currentUser.uid);
+      }
+    } catch (error) {
+      console.warn('Error during force logout:', error);
+    }
+
+    this.currentUser = null;
+    // Only clear auth data, not entire storage
+    return this.clearAuthData();
   }
 
   // Check if user is signed in
@@ -125,20 +740,20 @@ class FirebaseAuth {
 
   // Refresh expired authentication token
   async refreshAuthToken() {
-    if (!this.currentUser?.refreshToken) {
-      throw new Error("No refresh token available");
-    }
-
-    const url = `https://securetoken.googleapis.com/v1/token?key=${this.apiKey}`;
-
     try {
+      if (!this.currentUser?.refreshToken) {
+        console.warn('No refresh token available');
+        return null;
+      }
+
+      const url = `${FIREBASE_AUTH_BASE_URL}:token?key=${this.apiKey}`;
       const response = await fetch(url, {
-        method: "POST",
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          grant_type: "refresh_token",
+          grant_type: 'refresh_token',
           refresh_token: this.currentUser.refreshToken,
         }),
       });
@@ -146,24 +761,42 @@ class FirebaseAuth {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error?.message || "Token refresh failed");
+        // Only throw if it's a critical error
+        if (response.status === 400 || response.status === 401) {
+          throw new Error(data.error?.message || 'Token refresh failed');
+        }
+        // For other errors, log warning but don't throw
+        console.warn('Non-critical token refresh error:', data.error?.message);
+        return null;
       }
 
-      this.currentUser.idToken = data.id_token;
-      this.currentUser.refreshToken = data.refresh_token;
+      // Update current user with new tokens
+      this.currentUser = {
+        ...this.currentUser,
+        idToken: data.id_token,
+        refreshToken: data.refresh_token,
+        expiresIn: data.expires_in,
+      };
 
+      // Store updated auth data
       await this.storeAuthData(this.currentUser);
-
+      
       return this.currentUser;
     } catch (error) {
-      console.error("Token refresh error:", error);
+      console.error('Token refresh failed:', error);
+      // Only force logout for critical auth errors
+      if (error.message.includes('TOKEN_EXPIRED') || 
+          error.message.includes('USER_NOT_FOUND') ||
+          error.message.includes('INVALID_REFRESH_TOKEN')) {
+        await this.handleForceLogout();
+      }
       throw error;
     }
   }
 }
 
 // Firebase Firestore class
-class FirebaseFirestore {
+export class FirebaseFirestore {
   constructor(config, authInstance) {
     this.config = config;
     this.auth = authInstance;
@@ -580,9 +1213,9 @@ class FirebaseFirestore {
       }
 
       const response = await fetch(
-        `${this.baseUrl}/override_history/${historyId}`,
+        `${this.baseUrl}/override_history?documentId=${historyId}`,
         {
-          method: "PATCH",
+          method: "POST",
           headers: this.getAuthHeaders(),
           body: JSON.stringify({
             fields: firestoreData,
@@ -629,481 +1262,4 @@ class FirebaseFirestore {
     }
     return fields;
   }
-}
-
-// Firebase Realtime Database class
-class FirebaseRealtimeDB {
-  constructor(config, authInstance) {
-    this.config = config;
-    this.auth = authInstance;
-    this.databaseURL = `https://${config.projectId}-default-rtdb.firebaseio.com`;
-  }
-
-  // Get authorization headers for API requests
-  getAuthHeaders() {
-    const user = this.auth.getCurrentUser();
-    if (!user || !user.idToken) {
-      throw new Error("User not authenticated");
-    }
-    return {
-      "Content-Type": "application/json",
-    };
-  }
-
-  // Encode a string to be safe for use in a Firebase path
-  encodePath(str) {
-    return str
-      .replace(/\./g, '_')  // Replace dots with underscores for domain format
-      .replace(/#/g, '_hash_')
-      .replace(/\$/g, '_dollar_')
-      .replace(/\[/g, '_lbracket_')
-      .replace(/\]/g, '_rbracket_')
-      .replace(/\//g, '_slash_');
-  }
-
-  // Decode a Firebase path back to original string
-  decodePath(str) {
-    return str
-      .replace(/_hash_/g, '#')
-      .replace(/_dollar_/g, '$')
-      .replace(/_lbracket_/g, '[')
-      .replace(/_rbracket_/g, ']')
-      .replace(/_slash_/g, '/')
-      .replace(/_/g, '.');  // Replace underscores back to dots for domain format
-  }
-
-  // Format domain for Firebase keys (userId_domain_com format)
-  formatDomainForFirebase(domain) {
-    return domain.replace(/^www\./, '').toLowerCase().replace(/\./g, '_');
-  }
-
-  // Get all blocked sites
-  async getBlockedSites() {
-    try {
-      const user = this.auth.getCurrentUser();
-      if (!user) {
-        throw new Error("User not authenticated");
-      }
-
-      const url = `${this.databaseURL}/blockedSites.json?auth=${user.idToken}`;
-      const response = await fetch(url, {
-        method: "GET",
-        headers: this.getAuthHeaders()
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to get blocked sites: ${response.status}`);
-      }
-
-      const data = await response.json();
-      if (!data) return [];
-
-      // Convert the data to an array and decode the site IDs
-      return Object.entries(data).map(([encodedId, siteData]) => ({
-        ...siteData,
-        id: encodedId,
-        url: encodedId.split('_').slice(1).join('_').replace(/_/g, '.') // Remove userId_ prefix and convert underscores back to dots
-      }));
-    } catch (error) {
-      console.error("Get blocked sites error:", error);
-      throw error;
-    }
-  }
-
-  // Get a specific blocked site
-  async getBlockedSite(siteId) {
-    try {
-      const user = this.auth.getCurrentUser();
-      if (!user) {
-        throw new Error("User not authenticated");
-      }
-
-      // The siteId should already be in the correct format (userId_domain_com)
-      const encodedSiteId = siteId;
-
-      const url = `${this.databaseURL}/blockedSites/${encodedSiteId}.json?auth=${user.idToken}`;
-      const response = await fetch(url, {
-        method: "GET",
-        headers: this.getAuthHeaders()
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to get blocked site: ${response.status}`);
-      }
-
-      const data = await response.json();
-      if (!data) return null;
-
-      // Return the data with decoded URL
-      return {
-        ...data,
-        id: encodedSiteId,
-        url: siteId.split('_').slice(1).join('_').replace(/_/g, '.') // Remove userId_ prefix and convert underscores back to dots
-      };
-    } catch (error) {
-      console.error("Get blocked site error:", error);
-      throw error;
-    }
-  }
-
-  // Get site data (alias for getBlockedSite for unified API)
-  async getSiteData(siteId) {
-    return this.getBlockedSite(siteId);
-  }
-
-  // Add a blocked site to the Realtime Database
-  async addBlockedSite(siteId, siteData) {
-    try {
-      const user = this.auth.getCurrentUser();
-      if (!user) {
-        throw new Error("User not authenticated");
-      }
-
-      // Clean and validate the data
-      const cleanData = {
-        ...siteData,
-        created_at: siteData.created_at ? siteData.created_at : new Date().toISOString(),
-        updated_at: siteData.updated_at ? siteData.updated_at : new Date().toISOString()
-      };
-
-      // The siteId should already be in the correct format (userId_domain_com)
-      const encodedSiteId = siteId;
-
-      // Store directly under blockedSites node
-      const url = `${this.databaseURL}/blockedSites/${encodedSiteId}.json?auth=${user.idToken}`;
-      const response = await fetch(url, {
-        method: "PUT",
-        headers: this.getAuthHeaders(),
-        body: JSON.stringify(cleanData)
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Realtime DB Error Response:', errorText);
-        throw new Error(`Failed to add blocked site: ${response.status} - ${errorText}`);
-      }
-
-      return await response.json();
-    } catch (error) {
-      console.error("Add blocked site error:", error);
-      throw error;
-    }
-  }
-
-  // Listen for real-time changes to a specific blocked site
-  listenToBlockedSite(siteId, callback) {
-    try {
-      const user = this.auth.getCurrentUser();
-      if (!user) {
-        throw new Error("User not authenticated");
-      }
-
-      const encodedSiteId = siteId;
-      const url = `${this.databaseURL}/blockedSites/${encodedSiteId}.json?auth=${user.idToken}`;
-      
-      const eventSource = new EventSource(url);
-      
-      eventSource.addEventListener('put', (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data && data.data) {
-            const siteData = {
-              ...data.data,
-              id: encodedSiteId,
-              url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
-            };
-            console.log('Firebase Realtime DB: Received update for site:', siteId, siteData);
-            callback(siteData);
-          }
-        } catch (error) {
-          console.error('Firebase Realtime DB: Error parsing event data:', error);
-        }
-      });
-
-      eventSource.addEventListener('patch', (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data && data.data) {
-            console.log('Firebase Realtime DB: Received patch update for site:', siteId, data.data);
-            
-            // If this is a tab switch event, we need the complete site data including time_remaining
-            if (data.data.tab_switch_active === true) {
-              console.log('Firebase Realtime DB: Tab switch detected in patch, fetching complete site data...');
-              console.log('Firebase Realtime DB: Patch data received:', data.data);
-              
-              // Add a small delay to ensure Firebase has been updated completely
-              setTimeout(async () => {
-                try {
-                  // Fetch complete site data to get time_remaining
-                  const completeData = await this.getBlockedSite(siteId);
-                  if (completeData) {
-                    console.log('Firebase Realtime DB: Complete site data for tab switch:', completeData);
-                    // Merge patch data with complete data, prioritizing patch data
-                    const mergedData = {
-                      ...completeData,
-                      ...data.data,
-                      id: encodedSiteId,
-                      url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
-                    };
-                    console.log('Firebase Realtime DB: Final merged data for tab switch:', mergedData);
-                    callback(mergedData);
-                  } else {
-                    console.warn('Firebase Realtime DB: No complete data found, using patch data only');
-                    // Fallback to patch data only with URL
-                    const fallbackData = {
-                      ...data.data,
-                      id: encodedSiteId,
-                      url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
-                    };
-                    callback(fallbackData);
-                  }
-                } catch (error) {
-                  console.error('Firebase Realtime DB: Error fetching complete site data:', error);
-                  // Fallback to patch data only with URL
-                  const fallbackData = {
-                    ...data.data,
-                    id: encodedSiteId,
-                    url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
-                  };
-                  callback(fallbackData);
-                }
-              }, 100); // Small delay to ensure Firebase consistency
-            } else if (data.data.site_opened_active === true) {
-              console.log('Firebase Realtime DB: Site opened detected in patch, fetching complete site data...');
-              console.log('Firebase Realtime DB: Site opened patch data received:', data.data);
-              
-              // Add a small delay to ensure Firebase has been updated completely
-              setTimeout(async () => {
-                try {
-                  // Fetch complete site data to get time_remaining
-                  const completeData = await this.getBlockedSite(siteId);
-                  if (completeData) {
-                    console.log('Firebase Realtime DB: Complete site data for site opened:', completeData);
-                    // Merge patch data with complete data, prioritizing patch data
-                    const mergedData = {
-                      ...completeData,
-                      ...data.data,
-                      id: encodedSiteId,
-                      url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
-                    };
-                    console.log('Firebase Realtime DB: Final merged data for site opened:', mergedData);
-                    callback(mergedData);
-                  } else {
-                    console.warn('Firebase Realtime DB: No complete data found for site opened, using patch data only');
-                    // Fallback to patch data only with URL
-                    const fallbackData = {
-                      ...data.data,
-                      id: encodedSiteId,
-                      url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
-                    };
-                    callback(fallbackData);
-                  }
-                } catch (error) {
-                  console.error('Firebase Realtime DB: Error fetching complete site data for site opened:', error);
-                  // Fallback to patch data only with URL
-                  const fallbackData = {
-                    ...data.data,
-                    id: encodedSiteId,
-                    url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
-                  };
-                  callback(fallbackData);
-                }
-              }, 100); // Small delay to ensure Firebase consistency
-            } else {
-              // For non-tab-switch and non-site-opened updates, patch data is sufficient
-              const nonSpecialEventData = {
-                ...data.data,
-                id: encodedSiteId,
-                url: siteId.split('_').slice(1).join('_').replace(/_/g, '.')
-              };
-              callback(nonSpecialEventData);
-            }
-          }
-        } catch (error) {
-          console.error('Firebase Realtime DB: Error parsing patch data:', error);
-        }
-      });
-
-      eventSource.addEventListener('error', (error) => {
-        console.error('Firebase Realtime DB: EventSource error:', error);
-      });
-
-      return eventSource; // Return so it can be closed later
-    } catch (error) {
-      console.error("Listen to blocked site error:", error);
-      throw error;
-    }
-  }
-
-  // Update site with tab switch event
-  async updateSiteTabSwitch(siteId, tabSwitchData) {
-    try {
-      const user = this.auth.getCurrentUser();
-      if (!user) {
-        throw new Error("User not authenticated");
-      }
-
-      const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
-      
-      // First set the tab switch event
-      const updateData = {
-        tab_switch_active: true,
-        tab_switch_timestamp: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        time_remaining: tabSwitchData.timeRemaining,
-        deviceId: tabSwitchData.deviceId
-      };
-      console.log("tabSwitchData", tabSwitchData)
-      // Always include time_remaining, even if it's null/undefined for debugging
-      updateData.time_remaining = tabSwitchData.timeRemaining;
-      console.log(`Always including time_remaining: ${tabSwitchData.timeRemaining} (type: ${typeof tabSwitchData.timeRemaining})`);
-      console.log(`Including deviceId: ${tabSwitchData.deviceId}`);
-      
-      console.log("Final updateData being sent to Firebase:", updateData);
-      
-      const response = await fetch(url, {
-        method: "PATCH",
-        headers: this.getAuthHeaders(),
-        body: JSON.stringify(updateData)
-      });
-      
-      console.log("Firebase response status:", response.status);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to update tab switch: ${response.status}`);
-      }
-
-      const responseData = await response.json();
-      console.log("Firebase response data:", responseData);
-
-      // Clear the tab switch flag after a short delay to allow for next detection
-      setTimeout(async () => {
-        try {
-          await fetch(url, {
-            method: "PATCH",
-            headers: this.getAuthHeaders(),
-            body: JSON.stringify({
-              tab_switch_active: false,
-              updated_at: new Date().toISOString()
-            })
-          });
-        } catch (error) {
-          console.error("Error clearing tab switch flag:", error);
-        }
-      }, 3000); // Increased from 1000ms to 3000ms to give other devices more time
-
-      return responseData;
-    } catch (error) {
-      console.error("Update site tab switch error:", error);
-      throw error;
-    }
-  }
-
-  // Update site with synchronized timer value
-  async updateSiteSyncedTimer(siteId, timeRemaining) {
-    try {
-      const user = this.auth.getCurrentUser();
-      if (!user) {
-        throw new Error("User not authenticated");
-      }
-
-      const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
-      const siteData = await this.getBlockedSite(siteId);
-      console.log("Sited Data", siteData)
-      const updateData = {
-        tab_switch_active: true,
-        time_remaining: timeRemaining,
-        updated_at: new Date().toISOString()
-      };
-      
-      console.log(`🔄 Updating Firebase timer for ${siteId} to ${timeRemaining}s`);
-      
-      const response = await fetch(url, {
-        method: "PATCH",
-        headers: this.getAuthHeaders(),
-        body: JSON.stringify(updateData)
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to update synced timer: ${response.status}`);
-      }
-
-      const responseData = await response.json();
-      console.log(`✅ Firebase timer updated successfully for ${siteId}`, responseData);
-      return responseData;
-    } catch (error) {
-      console.error("Update site synced timer error:", error);
-      throw error;
-    }
-  }
-
-  // Update site with site opened event (for fresh tabs/reloads)
-  async updateSiteOpened(siteId, siteOpenedData) {
-    try {
-      const user = this.auth.getCurrentUser();
-      if (!user) {
-        throw new Error("User not authenticated");
-      }
-
-      const url = `${this.databaseURL}/blockedSites/${siteId}.json?auth=${user.idToken}`;
-      
-      // First set the site opened event
-      const updateData = {
-        site_opened_active: true,
-        site_opened_timestamp: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        time_remaining: siteOpenedData.timeRemaining,
-        deviceId: siteOpenedData.deviceId
-      };
-      
-      console.log("siteOpenedData", siteOpenedData);
-      // Always include time_remaining, even if it's null/undefined for debugging
-      updateData.time_remaining = siteOpenedData.timeRemaining;
-      console.log(`Site opened - including time_remaining: ${siteOpenedData.timeRemaining} (type: ${typeof siteOpenedData.timeRemaining})`);
-      console.log(`Site opened - including deviceId: ${siteOpenedData.deviceId}`);
-      
-      console.log("Final site opened updateData being sent to Firebase:", updateData);
-      
-      const response = await fetch(url, {
-        method: "PATCH",
-        headers: this.getAuthHeaders(),
-        body: JSON.stringify(updateData)
-      });
-      
-      console.log("Firebase site opened response status:", response.status);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to update site opened: ${response.status}`);
-      }
-
-      const responseData = await response.json();
-      console.log("Firebase site opened response data:", responseData);
-
-      // Clear the site opened flag after a delay to allow other devices to process
-      setTimeout(async () => {
-        try {
-          await fetch(url, {
-            method: "PATCH",
-            headers: this.getAuthHeaders(),
-            body: JSON.stringify({
-              site_opened_active: false,
-              updated_at: new Date().toISOString()
-            })
-          });
-        } catch (error) {
-          console.error("Error clearing site opened flag:", error);
-        }
-      }, 3000); // Same timeout as tab switch
-
-      return responseData;
-    } catch (error) {
-      console.error("Update site opened error:", error);
-      throw error;
-    }
-  }
-}
-
-// Export for use in other scripts
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = { FirebaseAuth, FirebaseFirestore, FirebaseRealtimeDB, FIREBASE_CONFIG };
 }

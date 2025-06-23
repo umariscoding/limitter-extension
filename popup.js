@@ -1,4 +1,6 @@
-// Smart Tab Blocker Popup Script
+// Limitter Popup Script
+import { FIREBASE_CONFIG, FirebaseAuth, FirebaseFirestore, FIREBASE_FIRESTORE_BASE_URL } from './firebase-config.js';
+import { SubscriptionService } from './subscription-service.js';
 
 // Check if extension context is valid
 function isExtensionContextValid() {
@@ -28,7 +30,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // Initialize Firebase Auth and Firestore
   const firebaseAuth = new FirebaseAuth(FIREBASE_CONFIG);
   const firestore = new FirebaseFirestore(FIREBASE_CONFIG, firebaseAuth);
-  const realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
+  // const realtimeDB = new FirebaseRealtimeDB(FIREBASE_CONFIG, firebaseAuth);
   
   // Initialize Subscription Service
   const subscriptionService = new SubscriptionService(firebaseAuth, firestore);
@@ -168,7 +170,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // Listen for notification messages from background script
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'displayNotification') {
-      // console.log('Smart Tab Blocker Popup: Received notification:', message);
+      // console.log('Limitter Popup: Received notification:', message);
       
              if (message.isError) {
          showError(message.message);
@@ -186,9 +188,11 @@ document.addEventListener('DOMContentLoaded', function() {
       
       sendResponse({ displayed: true });
     } else if (message.action === 'triggerDomainListRefresh') {
-      // console.log('Smart Tab Blocker Popup: Refreshing domain list due to deactivation');
-      loadDomainsFromFirestore().then(() => {
-        renderDomainsList();
+      // console.log('Limitter Popup: Refreshing domain list due to deactivation');
+      console.log("refreshing domain list")
+      loadDomainsFromFirestore().then(async () => {
+        await updateSubscriptionUI(); // Update subscription UI first
+        renderDomainsList(false); // Then render domains with subscription update
       }).catch(error => {
         console.log('Error refreshing domain list:', error);
       });
@@ -234,6 +238,28 @@ document.addEventListener('DOMContentLoaded', function() {
         // Show notification to user
         showFeedback(`${message.domain} was removed from another device`);
       }
+    } else if (message.action === 'forceLogout') {
+      console.log('Popup: Received force logout message');
+      
+      // Show error notification
+      showError(message.message || 'You have been logged out.');
+      
+      // Update UI to unauthenticated state
+      showUnauthenticatedState();
+      
+      // Clear app state
+      domains = {};
+      domainStates = {};
+      renderDomainsList();
+      
+      // Stop any active timers
+      if (updateInterval) {
+        clearInterval(updateInterval);
+        updateInterval = null;
+      }
+      
+      console.log('Popup: Force logout completed');
+      sendResponse({ success: true });
     }
   });
   
@@ -275,7 +301,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <ol style="text-align: left; margin: 0 0 20px 0; padding-left: 20px;">
         <li>Close this popup</li>
         <li>Go to chrome://extensions/</li>
-        <li>Find "Smart Tab Blocker" and click "Remove"</li>
+        <li>Find "Limitter" and click "Remove"</li>
         <li>Reinstall the extension from the Chrome Web Store</li>
         <li>Sign in again with your account</li>
       </ol>
@@ -397,7 +423,7 @@ document.addEventListener('DOMContentLoaded', function() {
       console.log('User data loaded successfully, domains:', domains);
       
       // Update subscription UI
-      updateSubscriptionUI();
+      await updateSubscriptionUI();
       
       // Update timer inputs for plan
       updateTimerInputsForPlan();
@@ -412,63 +438,64 @@ document.addEventListener('DOMContentLoaded', function() {
 
   async function syncDomainToFirestore(domain, timer) {
     try {
-      const user = firebaseAuth.getCurrentUser();
-      if (!user) return;
+        const user = firebaseAuth.getCurrentUser();
+        if (!user) return;
 
-      const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-      const siteId = `${user.uid}_${formattedDomain}`;
-      const now = new Date();
-      const todayString = getTodayString();
-      
-      // This function now only handles creating new sites
-      console.log(`Creating new site ${domain} in Firebase`);
-      
-      const siteData = {
-        user_id: user.uid,
-        url: domain,
-        name: domain,
-        time_limit: timer,
-        time_remaining: timer,
-        time_spent_today: 0,
-        last_reset_date: todayString,
-        is_blocked: false,
-        override_active: false,
-        is_active: true,
-        blocked_until: null,
-        schedule: null,
-        created_at: now,
-        updated_at: now
-      };
+        // const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+        const siteId = `${user.uid}_${domain}`;
+        const now = new Date();
+        const todayString = getTodayString();
+        
+        // This function now only handles creating new sites
+        console.log(`Creating new site ${domain} in Firebase`);
+        
+        const siteData = {
+            user_id: user.uid,
+            url: domain,
+            name: domain,
+            time_limit: timer,
+            time_remaining: timer,
+            time_spent_today: 0,
+            last_reset_date: todayString,
+            last_reset_timestamp: 0,
+            last_sync_timestamp: Date.now(),
+            is_blocked: false,
+            override_active: false,
+            override_initiated_by: null,
+            override_initiated_at: null,
+            is_active: true,
+            blocked_until: null,
+            schedule: null,
+            created_at: now,
+            updated_at: now
+        };
 
-      console.log('Syncing site data:', {
-        siteId,
-        data: siteData
-      });
+        console.log('Syncing site data:', {
+            siteId,
+            data: siteData
+        });
 
-      // Add to both Firestore and Realtime Database
-      await Promise.all([
-        // firestore.updateBlockedSite(siteId, siteData),
-        realtimeDB.addBlockedSite(siteId, siteData)
-      ]);
+        // Add to both Firestore and Realtime Database
+       await firestore.updateBlockedSite(siteId, siteData);
 
-      // Update user profile stats if we have one
-      if (userProfile) {
-        userProfile.total_sites_blocked = Object.keys(domains).length;
-        userProfile.updated_at = now;
-        await firestore.updateUserProfile(user.uid, userProfile);
-      }
+        // Update user profile stats if we have one
+        if (userProfile) {
+            userProfile.total_sites_blocked = Object.keys(domains).length;
+            userProfile.updated_at = now;
+            await firestore.updateUserProfile(user.uid, userProfile);
+        }
     } catch (error) {
-      console.error('Error syncing domain to Firebase:', error);
+        console.error('Error syncing domain to Firebase:', error);
     }
-  }
+}
 
   async function removeDomainFromFirestore(domain) {
     try {
       const user = firebaseAuth.getCurrentUser();
       if (!user) return;
 
-      const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-      const siteId = `${user.uid}_${formattedDomain}`;
+      // const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+      const siteId = `${user.uid}_${domain}`;
       
       // First, get the existing site data to preserve it
       const existingSite = await firestore.getBlockedSite(siteId);
@@ -486,6 +513,7 @@ document.addEventListener('DOMContentLoaded', function() {
         time_limit: existingSite.time_limit,
         time_remaining: existingSite.time_remaining,
         last_reset_date: existingSite.last_reset_date,
+        last_reset_timestamp: existingSite.last_reset_timestamp,
         // Only include these if they exist and are not null/undefined
         ...(existingSite.override_active !== undefined && { override_active: existingSite.override_active }),
         ...(existingSite.override_initiated_by && { override_initiated_by: existingSite.override_initiated_by }),
@@ -499,7 +527,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
       // Update both Firestore and Realtime Database
       await Promise.all([
-        realtimeDB.addBlockedSite(siteId, siteData)
+        firestore.updateBlockedSite(siteId, siteData, ['url', 'last_reset_date']),
+        // realtimeDB.addBlockedSite(siteId, siteData)
       ]);
 
       console.log(`Removed domain ${domain} from Firebase (marked as inactive)`);
@@ -531,7 +560,28 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Now show the full authenticated state
         showAuthenticatedState(storedUser);
-        startPeriodicUpdates();
+        // startPeriodicUpdates();
+          updateDomainStates();
+      if (!isExtensionContextValid()) {
+        console.warn('Extension context invalid, clearing interval');
+        if (updateInterval) {
+          clearInterval(updateInterval);
+          updateInterval = null;
+        }
+        return;
+      }
+      
+      // Only update if user is authenticated
+      if (!isUserAuthenticated()) {
+        console.warn('User not authenticated, stopping timer updates');
+        if (updateInterval) {
+          clearInterval(updateInterval);
+          updateInterval = null;
+        }
+        return;
+      }
+      
+      updateDomainStates();
       } else {
         showUnauthenticatedState();
       }
@@ -560,13 +610,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
   
-  function showAuthenticatedState(user) {
+  async function showAuthenticatedState(user) {
     authContent.classList.add('authenticated');
     userSection.style.display = 'block';
     mainContent.classList.add('authenticated');
     userEmail.textContent = user.email;
     hideAuthError();
-    updateSubscriptionUI();
+    await updateSubscriptionUI();
     updateTimerInputsForPlan();
   }
   
@@ -625,9 +675,12 @@ document.addEventListener('DOMContentLoaded', function() {
       emailInput.value = '';
       passwordInput.value = '';
       
-      // Notify background script of login
-      safeChromeCall(() => {
-        chrome.runtime.sendMessage({ action: 'userLoggedIn' });
+      // Notify background script of login and wait for response
+      await new Promise((resolve) => {
+        chrome.runtime.sendMessage({ action: 'userLoggedIn' }, (response) => {
+          console.log('Login notification sent to background, response:', response);
+          resolve();
+        });
       });
       
       // Load plans and user data
@@ -638,16 +691,48 @@ document.addEventListener('DOMContentLoaded', function() {
       ]);
       
       // Now show the full authenticated state
+      updateDomainStates();
       showAuthenticatedState(user);
-      startPeriodicUpdates();
+      
+      // Force reload all tabs to ensure clean state
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => {
+          if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+            try {
+              chrome.tabs.reload(tab.id, { bypassCache: true });
+            } catch (error) {
+              console.error('Failed to reload tab:', error);
+            }
+          }
+        });
+      });
       
     } catch (error) {
       console.error('Login error:', error);
-      showAuthError(error.message || 'Login failed. Please check your credentials.');
-    } finally {
-      loginBtn.disabled = false;
-      loginBtn.textContent = 'Sign In';
+      
+      // Handle maximum attempts error specifically
+      if (error.message.includes('Maximum login attempts reached')) {
+        showAuthError('Maximum login attempts reached. Please try again later.');
+        
+        // Show a more prominent notification
+        chrome.notifications.create('max-attempts-reached', {
+          type: 'basic',
+          iconUrl: 'icons/icon128.png',
+          title: 'Login Attempts Exceeded',
+          message: 'You have exceeded the maximum number of login attempts. Please try again later.',
+          priority: 2
+        });
+        
+        // Clear the form
+        emailInput.value = '';
+        passwordInput.value = '';
+      } else {
+        showAuthError(error.message || 'Login failed. Please check your credentials.');
+      }
     }
+    
+    loginBtn.disabled = false;
+    loginBtn.textContent = 'Sign In';
   }
   
   function handleRegister() {
@@ -659,17 +744,14 @@ document.addEventListener('DOMContentLoaded', function() {
     try {
       await firebaseAuth.signOut();
       
-      // Notify background script of logout (this will stop all timers)
+      // Notify background script of logout
       safeChromeCall(() => {
         chrome.runtime.sendMessage({ action: 'userLoggedOut' });
       });
       
-      // Clear all Chrome storage data
-      await clearAllChromeStorageData();
-      
       showUnauthenticatedState();
       
-      // Clear app data
+      // Clear app state
       domains = {};
       domainStates = {};
       if (updateInterval) {
@@ -689,19 +771,19 @@ document.addEventListener('DOMContentLoaded', function() {
   // Clear all Chrome storage data on logout
   async function clearAllChromeStorageData() {
     return new Promise((resolve) => {
-      // console.log('Smart Tab Blocker: Clearing all Chrome storage data on logout');
+      // console.log('Limitter: Clearing all Chrome storage data on logout');
       
       // Clear sync storage (blocked domains)
       safeChromeCall(() => {
         chrome.storage.sync.clear(() => {
-          console.log('Smart Tab Blocker: Sync storage cleared');
+          console.log('Limitter: Sync storage cleared');
         });
       });
       
       // Clear local storage (timer states, daily blocks, etc.)
       safeChromeCall(() => {
         chrome.storage.local.clear(() => {
-          console.log('Smart Tab Blocker: Local storage cleared');
+          console.log('Limitter: Local storage cleared');
           resolve();
         });
       });
@@ -1048,7 +1130,8 @@ document.addEventListener('DOMContentLoaded', function() {
       console.log('Loading blocked sites from Firebase Realtime Database');
       
       // Get user's blocked sites from Realtime Database
-      const blockedSites = await realtimeDB.getBlockedSites();
+      // const blockedSites = await realtimeDB.getBlockedSites();
+      const blockedSites = await firestore.getUserBlockedSites(user.uid);
       
       // Clear existing domains object
       domains = {};
@@ -1063,105 +1146,102 @@ document.addEventListener('DOMContentLoaded', function() {
             console.log(`Loaded site from Firebase: ${site.url} with ${site.time_limit}s timer`);
             
             // Set up real-time listener for each blocked site
-            const formattedDomain = realtimeDB.formatDomainForFirebase(site.url);
-            const siteId = `${user.uid}_${formattedDomain}`;
+            // const formattedDomain = realtimeDB.formatDomainForFirebase(site.url);
+            // const siteId = `${user.uid}_${formattedDomain}`;
             
-            try {
-              realtimeDB.listenToBlockedSite(siteId, (updatedSiteData) => {
-                console.log(`Firebase Realtime Update - Site: ${site.url}, override_active: ${updatedSiteData.override_active}`);
+            // try {
+            //   realtimeDB.listenToBlockedSite(siteId, (updatedSiteData) => {
+            //     console.log(`🔥 Firebase Update: ${site.url}`, updatedSiteData);
                 
-                // Check if override_active property changed
-                if (updatedSiteData.override_active !== undefined) {
-                  console.log(`Override active changed for ${site.url}: ${updatedSiteData.override_active}`);
+            //     // Handle override changes
+            //     if (updatedSiteData.override_active !== undefined) {
+            //       console.log(`Override active changed for ${site.url}: ${updatedSiteData.override_active}`);
                   
-                  if (updatedSiteData.override_active) {
-                    console.log(`Override activated for ${site.url} from another device`);
+            //       if (updatedSiteData.override_active) {
+            //         console.log(`Override activated for ${site.url} from another device`);
                     
-                    // Update Chrome local storage with reset timer state
-                    console.log("updatedSiteData", updatedSiteData)
-                    const timerKey = `timerState_${site.url}`;
-                    const resetTimerState = {
-                      timeRemaining: updatedSiteData.time_limit,
-                      gracePeriod: updatedSiteData.time_limit,
-                      isActive: true,
-                      isPaused: false,
-                      timestamp: Date.now(),
-                      date: getTodayString(),
-                      url: site.url,
-                      override_active: true,
-                      override_initiated_by: updatedSiteData.override_initiated_by,
-                      override_initiated_at: updatedSiteData.override_initiated_at,
-                      time_limit: updatedSiteData.time_limit
-                    };
+            //         // Update Chrome local storage with reset timer state
+            //         console.log("updatedSiteData", updatedSiteData)
+            //         const timerKey = `timerState_${site.url}`;
+            //         const resetTimerState = {
+            //           timeRemaining: updatedSiteData.time_limit,
+            //           gracePeriod: updatedSiteData.time_limit,
+            //           isActive: true,
+            //           isPaused: false,
+            //           timestamp: Date.now(),
+            //           date: getTodayString(),
+            //           url: site.url,
+            //           override_active: true,
+            //           override_initiated_by: updatedSiteData.override_initiated_by,
+            //           override_initiated_at: updatedSiteData.override_initiated_at,
+            //           time_limit: updatedSiteData.time_limit
+            //         };
 
-                    safeChromeCall(() => {
-                      chrome.storage.local.set({
-                        [timerKey]: resetTimerState
-                      }, () => {
-                        console.log(`Chrome local storage updated for ${site.url} - override activated`);
-                      });
-                    });
+            //         safeChromeCall(() => {
+            //           chrome.storage.local.set({
+            //             [timerKey]: resetTimerState
+            //           }, () => {
+            //             console.log(`Chrome local storage updated for ${site.url} - override activated`);
+            //           });
+            //         });
 
-                    // Clear daily block
-                    clearDailyBlock(site.url);
+            //         // Clear daily block
+            //         clearDailyBlock(site.url);
                     
-                    // Update domains object for Chrome sync storage
-                    domains[site.url] = updatedSiteData.time_limit;
-                    saveDomains(); // This saves to Chrome sync storage
+            //         // Update domains object for Chrome sync storage
+            //         domains[site.url] = updatedSiteData.time_limit;
+            //         saveDomains(); // This saves to Chrome sync storage
                     
-                    // Update domain states for UI
-                    domainStates[site.url] = {
-                      status: 'running',
-                      timeRemaining: updatedSiteData.time_remaining || updatedSiteData.time_limit,
-                      isActive: true
-                    };
+            //         // Update domain states for UI
+            //         domainStates[site.url] = {
+            //           status: 'running',
+            //           timeRemaining: updatedSiteData.time_remaining || updatedSiteData.time_limit,
+            //           isActive: true
+            //         };
                     
-                    // Re-render the domains list to show updated state
-                    renderDomainsList();
+            //         // Re-render the domains list with skipSubscriptionUpdate=true to prevent loops
+            //         renderDomainsList(true);
                     
-                    console.log(`Domains object and Chrome sync storage updated for ${site.url}`);
+            //         console.log(`Domains object and Chrome sync storage updated for ${site.url}`);
                     
-                  } else {
-                    console.log(`Override deactivated for ${site.url} from another device`);
+            //       } else {
+            //         console.log(`Override deactivated for ${site.url} from another device`);
                     
-                    // Update Chrome local storage to clear override state
-                    const timerKey = `timerState_${site.url}`;
-                    safeChromeCall(() => {
-                      chrome.storage.local.get([timerKey], (result) => {
-                        if (result[timerKey]) {
-                          const updatedState = {
-                            ...result[timerKey],
-                            override_active: false,
-                            override_initiated_by: null,
-                            override_initiated_at: null,
-                            timestamp: Date.now()
-                          };
+            //         // Update Chrome local storage to clear override state
+            //         const timerKey = `timerState_${site.url}`;
+            //         safeChromeCall(() => {
+            //           chrome.storage.local.get([timerKey], (result) => {
+            //             if (result[timerKey]) {
+            //               const updatedState = {
+            //                 ...result[timerKey],
+            //                 timestamp: Date.now()
+            //               };
                           
-                          chrome.storage.local.set({
-                            [timerKey]: updatedState
-                          }, () => {
-                            console.log(`Chrome local storage updated for ${site.url} - override cleared`);
-                          });
-                        }
-                      });
-                    });
+            //               chrome.storage.local.set({
+            //                 [timerKey]: updatedState
+            //               }, () => {
+            //                 console.log(`Chrome local storage updated for ${site.url} - override cleared`);
+            //               });
+            //             }
+            //           });
+            //         });
                     
-                    // Update domain states for UI
-                    if (domainStates[site.url]) {
-                      domainStates[site.url] = {
-                        ...domainStates[site.url],
-                        // Keep existing state but ensure override is cleared
-                      };
-                    }
+            //         // Update domain states for UI
+            //         if (domainStates[site.url]) {
+            //           domainStates[site.url] = {
+            //             ...domainStates[site.url],
+            //             // Keep existing state but ensure override is cleared
+            //           };
+            //         }
                     
-                    // Re-render the domains list
-                    renderDomainsList();
-                  }
-                }
-              });
-            } catch (error) {
-              console.error(`Failed to set up listener for ${site.url}:`, error);
-            }
+            //         // Re-render the domains list
+            //         renderDomainsList();
+            //       }
+            //     }
+            //   });
+            // } catch (error) {
+            //   console.error(`Failed to set up listener for ${site.url}:`, error);
+            // }
           }
         });
         
@@ -1202,7 +1282,7 @@ document.addEventListener('DOMContentLoaded', function() {
               // If this domain is not in our legitimate domains list, mark for removal
               if (!legitimateDomains.includes(domain)) {
                 keysToRemove.push(key);
-                console.log(`Smart Tab Blocker: Marking leftover storage key for removal: ${key}`);
+                console.log(`Limitter: Marking leftover storage key for removal: ${key}`);
               }
             }
           });
@@ -1210,7 +1290,7 @@ document.addEventListener('DOMContentLoaded', function() {
           // Remove leftover keys
           if (keysToRemove.length > 0) {
             chrome.storage.local.remove(keysToRemove, () => {
-              console.log(`Smart Tab Blocker: Cleaned up ${keysToRemove.length} leftover storage entries`);
+              console.log(`Limitter: Cleaned up ${keysToRemove.length} leftover storage entries`);
             });
           }
         });
@@ -1228,7 +1308,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const hostname = new URL(tab.url).hostname.toLowerCase();
             const cleanHostname = hostname.replace(/^www\./, '');
             if (cleanHostname === domain || hostname === domain) {
-              console.log(`Smart Tab Blocker: Sending stop tracking for removed domain ${domain} to tab ${tab.id}`);
+              console.log(`Limitter: Sending stop tracking for removed domain ${domain} to tab ${tab.id}`);
               
               // Send explicit stopTracking message
               chrome.tabs.sendMessage(tab.id, {
@@ -1257,14 +1337,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const blockKey = `dailyBlock_${domain}`;
     const timerKey = `timerState_${domain}`;
     
-    // console.log(`Smart Tab Blocker: Clearing storage for domain: ${domain}`);
+    // console.log(`Limitter: Clearing storage for domain: ${domain}`);
     
     safeChromeCall(() => {
       chrome.storage.local.remove([blockKey, timerKey], () => {
         if (chrome.runtime.lastError) {
           console.error('Storage clear error:', chrome.runtime.lastError);
         } else {
-          console.log(`Smart Tab Blocker: Successfully cleared storage for ${domain}`);
+          console.log(`Limitter: Successfully cleared storage for ${domain}`);
         }
       });
     });
@@ -1318,6 +1398,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     if (!canAdd) {
       const maxDomains = subscriptionService.getMaxDomains();
+      showError('You have reached your domains limit of current plan. Upgrade to Pro for unlimited domains.');
       showPlanLimitError(`You've reached your limit of ${maxDomains} domains. Upgrade to Pro for unlimited domains.`, 'pro');
       return;
     }
@@ -1338,9 +1419,10 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-    const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
-    const siteId = `${user.uid}_${formattedDomain}`;
-    const existingSite = await realtimeDB.getBlockedSite(siteId);
+    // const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
+    const siteId = `${user.uid}_${cleanDomain}`;
+    // const existingSite = await realtimeDB.getBlockedSite(siteId);
+    const existingSite = await firestore.getBlockedSite(siteId);
     
     if (existingSite) {
       if (existingSite.is_active) {
@@ -1352,25 +1434,14 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log(`Reactivating inactive site: ${cleanDomain}`);
         const now = new Date();
         const reactivatedSiteData = {
-          // Preserve essential existing data but be selective
-          user_id: existingSite.user_id,
-          url: existingSite.url,
-          time_limit: existingSite.time_limit,
-          time_remaining: existingSite.time_remaining,
-          last_reset_date: existingSite.last_reset_date,
-          // Only include these if they exist and are not null/undefined
-          ...(existingSite.override_active !== undefined && { override_active: existingSite.override_active }),
-          ...(existingSite.override_initiated_by && { override_initiated_by: existingSite.override_initiated_by }),
-          ...(existingSite.override_initiated_at && { override_initiated_at: existingSite.override_initiated_at }),
-          ...(existingSite.blocked_until && { blocked_until: existingSite.blocked_until }),
-          ...(existingSite.last_accessed && { last_accessed: existingSite.last_accessed }),
-          // Override the fields we're specifically updating
+          ...existingSite,
           is_active: true,
-          updated_at: now
-          // Don't change time_limit or time_remaining
+          updated_at: now,
+          last_accessed: now.toISOString(),
+          last_reset_timestamp: existingSite.last_reset_timestamp
         };
         
-        await realtimeDB.addBlockedSite(siteId, reactivatedSiteData);
+        await firestore.updateBlockedSite(siteId, reactivatedSiteData, ['url', 'last_reset_date']);
         
         // Add to local domains with existing time_limit
         domains[cleanDomain] = existingSite.time_limit;
@@ -1385,6 +1456,9 @@ document.addEventListener('DOMContentLoaded', function() {
       
       // Sync to Firestore (create new site)
       await syncDomainToFirestore(cleanDomain, totalSeconds);
+      
+      // Update admin stats for new site
+      await updateAdminStats();
       
       showFeedback(`Added ${cleanDomain} with ${formatTime(totalSeconds)} timer. Open tabs for this site will be reloaded.`);
     }
@@ -1452,8 +1526,7 @@ document.addEventListener('DOMContentLoaded', function() {
       }
 
       // Format domain for Firebase
-      const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-      const siteId = `${user.uid}_${formattedDomain}`;
+      const siteId = `${user.uid}_${domain}`;
 
       console.log(`Removing domain ${domain} from both local storage and Firebase (siteId: ${siteId})`);
 
@@ -1462,52 +1535,31 @@ document.addEventListener('DOMContentLoaded', function() {
       delete domainStates[domain];
       saveDomains();
 
-      // Remove from both Firestore (mark as inactive) and Realtime Database (delete completely)
-      await Promise.all([
-        // Mark as inactive in Firestore
-        // removeDomainFromFirestore(domain),
-        
-        // Set is_active: false in Realtime Database so other devices can detect the change
-        (async () => {
-          try {
-            const existingSite = await realtimeDB.getBlockedSite(siteId);
-            if (existingSite) {
-              const updatedSiteData = {
-                // Preserve essential existing data but be selective
-                user_id: existingSite.user_id,
-                url: existingSite.url,
-                time_limit: existingSite.time_limit,
-                time_remaining: existingSite.time_remaining,
-                last_reset_date: existingSite.last_reset_date,
-                // Only include these if they exist and are not null/undefined
-                ...(existingSite.override_active !== undefined && { override_active: existingSite.override_active }),
-                ...(existingSite.override_initiated_by && { override_initiated_by: existingSite.override_initiated_by }),
-                ...(existingSite.override_initiated_at && { override_initiated_at: existingSite.override_initiated_at }),
-                ...(existingSite.blocked_until && { blocked_until: existingSite.blocked_until }),
-                ...(existingSite.last_accessed && { last_accessed: existingSite.last_accessed }),
-                // Set as inactive - this is what other devices will detect
-                is_active: false,
-                updated_at: new Date().toISOString()
-              };
-              
-              await realtimeDB.addBlockedSite(siteId, updatedSiteData);
-              console.log(`Successfully set is_active: false for ${domain} in Realtime Database`);
-            } else {
-              console.log(`No existing site found for ${domain} in Realtime Database`);
-            }
-          } catch (error) {
-            console.error(`Error setting is_active: false for ${domain} in Realtime Database:`, error);
-            // Don't throw here - we still want to continue with other cleanup
-          }
-        })()
-      ]);
+      // Remove from Firestore (mark as inactive)
+      try {
+        const existingSite = await firestore.getBlockedSite(siteId);
+        if (existingSite) {
+          const updatedSiteData = {
+            ...existingSite,
+            is_active: false,
+            updated_at: new Date().toISOString(),
+            last_reset_timestamp: existingSite.last_reset_timestamp
+          };
+          
+          await firestore.updateBlockedSite(siteId, updatedSiteData, ['url', 'last_reset_date']);
+          console.log(`Successfully set is_active: false for ${domain} in Firestore`);
+        } else {
+          console.log(`No existing site found for ${domain} in Firestore`);
+        }
+      } catch (error) {
+        console.error(`Error setting is_active: false for ${domain} in Firestore:`, error);
+      }
 
       // Clear local timer states
       clearDailyBlock(domain);
       stopTrackingDomain(domain);
 
-      // Notify background script to reload tabs for this domain across all devices
-      // This ensures inactive tabs also stop tracking the removed domain
+      // Notify background script to reload tabs for this domain
       safeChromeCall(() => {
         chrome.runtime.sendMessage({ 
           action: 'domainRemoved', 
@@ -1515,8 +1567,12 @@ document.addEventListener('DOMContentLoaded', function() {
         });
       });
 
-      renderDomainsList();
-      updateStats();
+      // Update all UI elements in sequence
+      await updateDomainStates();
+      await updateStats();
+      await updateSubscriptionUI();
+      await renderDomainsList(false); // Force subscription UI update
+
       showFeedback(`Deactivated ${domain} - all devices will immediately stop tracking this domain`);
       
     } catch (error) {
@@ -1562,10 +1618,14 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
 
-      // Check if user has overrides available
+      // Check if user has overrides availabl
+      // e
+      console.log("userOverrides", userOverrides)
       if (userOverrides.overrides <= 0) {
         // No overrides available - redirect to checkout
-        window.location.href = 'http://localhost:3000/checkout?overrides=1';
+        console.log("No overrides available - opening checkout in new tab")
+        chrome.tabs.create({ url: 'http://localhost:3000/checkout?overrides=1' });
+        window.close(); // Close the popup after opening the new tab
         return;
       }
 
@@ -1588,80 +1648,37 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
 
-      // Format domain for Firebase
-      const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
-      const siteId = `${userId}_${formattedDomain}`;
+    // Format domain for Firebase
+    // const formattedDomain = realtimeDB.formatDomainForFirebase(domain);
+    const siteId = `${userId}_${domain}`;
 
-    // Get existing site data
-    const existingSite = await realtimeDB.getBlockedSite(siteId);
-    if (!existingSite) {
-      showError('Site not found in database');
-      return;
-    }
+    try {
+      // Get existing site data
+      // const existingSite = await realtimeDB.getBlockedSite(siteId);
+      const existingSite = await firestore.getBlockedSite(siteId);
+      if (!existingSite) {
+        showError('Site not found in database');
+        return;
+      }
 
+      console.log("setting override");
       // Create updated site data with reset timer and override active
       const now = new Date();
       const updatedSiteData = {
-        // Preserve essential existing data but be selective
-        user_id: existingSite.user_id,
-        url: existingSite.url,
-        last_reset_date: existingSite.last_reset_date,
-        // Only include these if they exist and are not null/undefined  
-        ...(existingSite.last_accessed && { last_accessed: existingSite.last_accessed }),
-        // Override the fields we're specifically updating
+        ...existingSite,
         time_remaining: originalTimeLimit, // Reset to original time limit
         time_limit: originalTimeLimit,
         override_active: true, // Set override active
+        override_initiated_by: userId,
+        override_initiated_at: now.toISOString(),
         is_blocked: false, // Unblock the site
         blocked_until: null, // Clear blocked until
         updated_at: now.toISOString(),
-        last_accessed: now.toISOString()
+        last_accessed: now.toISOString(), 
+        last_reset_timestamp: now.getTime()
       };
 
-    // Update Firebase Realtime Database
-    await realtimeDB.addBlockedSite(siteId, updatedSiteData);
-
-    // Create override history record
-    const historyId = crypto.randomUUID();
-    const historyData = {
-      user_id: userId,
-      site_url: domain,
-      timestamp: now.toISOString(),
-      month: now.toISOString().slice(0, 7),
-      override_type: userPlan === 'elite' ? 'unlimited' : 'override',
-      plan: userPlan,
-      created_at: now.toISOString()
-    };
-
-    await firestore.createOverrideHistory(historyId, historyData);
-
-    // Update user overrides if not elite
-    if (userPlan !== 'elite') {
-      const userOverrides = await firestore.getUserOverrides(userId);
-      const currentMonth = now.toISOString().slice(0, 7);
-      const monthlyStats = userOverrides?.monthly_stats || {};
-      const thisMonthStats = monthlyStats[currentMonth] || {
-        overrides_used: 0,
-        total_spent_this_month: 0
-      };
-
-      // Update stats
-      thisMonthStats.overrides_used++;
-      
-      await firestore.updateUserOverrides(userId, {
-        overrides: Math.max(0, (userOverrides?.overrides || 0) - 1),
-        overrides_used_total: (userOverrides?.overrides_used_total || 0) + 1,
-        monthly_stats: {
-          ...monthlyStats,
-          [currentMonth]: thisMonthStats
-        },
-        updated_at: now.toISOString()
-      });
-    }
-
-    // Clear daily block in Chrome storage
-    clearDailyBlock(domain);
-
+      // First update local state
       // Reset timer state in Chrome storage
       const timerKey = `timerState_${domain}`;
       const resetTimerState = {
@@ -1675,18 +1692,67 @@ document.addEventListener('DOMContentLoaded', function() {
         override_active: true,
         override_initiated_by: userId,
         override_initiated_at: now.toISOString(),
-        time_limit: originalTimeLimit
+        time_limit: originalTimeLimit,
+        last_reset_timestamp: now.getTime()
       };
+      
 
-      safeChromeCall(() => {
-        chrome.storage.local.set({
-          [timerKey]: resetTimerState
+      // Update Chrome storage first
+      await new Promise((resolve) => {
+        safeChromeCall(() => {
+          chrome.storage.local.set({
+            [timerKey]: resetTimerState
+          }, resolve);
         });
       });
+      // Clear daily block in Chrome storage
+      await clearDailyBlock(domain);
+
+      // Update Firebase Realtime Database
+      await firestore.updateBlockedSite(siteId, updatedSiteData, ['url', 'last_reset_date']);
+      // await realtimeDB.addBlockedSite(siteId, updatedSiteData);
+
+      // Create override history record
+      const historyId = crypto.randomUUID();
+      const historyData = {
+        user_id: userId,
+        site_url: domain,
+        timestamp: now.toISOString(),
+        month: now.toISOString().slice(0, 7),
+        override_type: userPlan === 'elite' ? 'unlimited' : 'override',
+        plan: userPlan,
+        created_at: now.toISOString()
+      };
+
+      await firestore.createOverrideHistory(historyId, historyData);
+
+      // Update user overrides if not elite
+      if (userPlan !== 'elite') {
+        const userOverrides = await firestore.getUserOverrides(userId);
+        const currentMonth = now.toISOString().slice(0, 7);
+        const monthlyStats = userOverrides?.monthly_stats || {};
+        const thisMonthStats = monthlyStats[currentMonth] || {
+          overrides_used: 0,
+          total_spent_this_month: 0
+        };
+
+        // Update stats
+        thisMonthStats.overrides_used++;
+        
+        await firestore.updateUserOverrides(userId, {
+          overrides: Math.max(0, (userOverrides?.overrides || 0) - 1),
+          overrides_used_total: (userOverrides?.overrides_used_total || 0) + 1,
+          monthly_stats: {
+            ...monthlyStats,
+            [currentMonth]: thisMonthStats
+          },
+          updated_at: now.toISOString()
+        });
+      }
 
       // Update the domains object and save to Chrome sync storage
       domains[domain] = originalTimeLimit;
-      saveDomains();
+      await saveDomains();
 
       domainStates[domain] = {
         status: 'running',
@@ -1694,20 +1760,75 @@ document.addEventListener('DOMContentLoaded', function() {
         isActive: true
       };
 
-      safeChromeCall(() => {
-        chrome.runtime.sendMessage({
-          action: 'domainOverrideActivated',
-          domain: domain,
-          timeLimit: originalTimeLimit
+      // Notify content script about override
+      await new Promise((resolve) => {
+        safeChromeCall(() => {
+          chrome.runtime.sendMessage({
+            action: 'domainOverrideActivated',
+            domain: domain,
+            timeLimit: originalTimeLimit
+          }, resolve);
         });
       });
 
-      renderDomainsList();
-      updateStats();
-      
-      showFeedback(`Override activated for ${domain} - timer reset to ${formatTime(originalTimeLimit)}`);
+      // Set timeout to clear override after 3 seconds
+      setTimeout(async () => {
+        const time = now.getTime()
+        try {
+          console.log("clearing override");
+          const clearedOverrideData = {
+            ...updatedSiteData,
+            override_active: false,
+            updated_at: new Date().toISOString()
+          };
+          console.log("clearedOverrideData", clearedOverrideData)
+          // Update Firebase first
+          await firestore.updateBlockedSite(siteId, clearedOverrideData, ['url', 'last_reset_date']);
+          // await realtimeDB.addBlockedSite(siteId, clearedOverrideData);
 
-   
+          // Then update local storage
+          await new Promise((resolve) => {
+            safeChromeCall(() => {
+              chrome.storage.local.get([timerKey], (result) => {
+                if (result[timerKey]) {
+                  const updatedState = {
+                    ...result[timerKey],
+                    override_active: false,
+                    override_initiated_by: '',
+                    override_initiated_at: '',
+                    timestamp: time,
+                    last_reset_timestamp: time
+                  };
+                  
+                  chrome.storage.local.set({
+                    [timerKey]: updatedState
+                  }, () => {
+                    console.log(`Chrome local storage updated for ${domain} - override cleared`);
+                    resolve();
+                  });
+                } else {
+                  resolve();
+                }
+              });
+            });
+
+          });
+          renderDomainsList();
+          updateStats();
+          showFeedback(`Override activated for ${domain} - timer reset to ${formatTime(originalTimeLimit)}`);
+          console.log(`Override cleared for ${domain} after 3 seconds`);
+        } catch (error) {
+          console.error('Error clearing override:', error);
+        }
+      }, 6000);
+
+
+      
+
+    } catch (error) {
+      console.error('Error in processOverride:', error);
+      showError('Failed to process override');
+    }
   }
 
 
@@ -1716,7 +1837,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
   
-  async function renderDomainsList() {
+  async function renderDomainsList(skipSubscriptionUpdate = false) {
+    console.log("rendering domains list")
     const domainKeys = Object.keys(domains);
     
     if (domainKeys.length === 0) {
@@ -1739,37 +1861,22 @@ document.addEventListener('DOMContentLoaded', function() {
     const newDomains = sortedDomains.filter(domain => !previousDomainOrder.includes(domain));
     
     domainsList.innerHTML = sortedDomains.map(domain => {
-      const state = domainStates[domain] || { status: 'ready', timeRemaining: domains[domain], isActive: false };
+      const state = domainStates[domain] || { status: 'unknown', timeRemaining: 0 };
       const isActive = domain === activeDomain;
       const isNewlyAdded = newDomains.includes(domain);
-      
-      // console.log('Domain state:', state);
       
       let statusText = '';
       let statusClass = '';
       
-      switch (state.status) {
-        case 'blocked':
-          statusText = 'Blocked today';
-          statusClass = 'status-blocked';
-          break;
-        case 'running':
-          statusText = `⏱️ ${formatTime(state.timeRemaining)} left`;
-          statusClass = 'status-running';
-          break;
-        case 'paused':
-          statusText = `⏸️ ${formatTime(state.timeRemaining)} (paused)`;
-          statusClass = 'status-paused';
-          break;
-        case 'resetting':
-          statusText = '🔄 Resetting Timer...';
-          statusClass = 'status-resetting';
-          break;
-        default:
-          // console.log(state);
-          // For ready state, show the remaining time (which could be full limit or partial if previously used)
-          statusText = `⏰ ${formatTime(state.timeRemaining)}`;
-          statusClass = 'status-ready';
+      if (state.status === 'blocked') {
+        statusText = 'Blocked';
+        statusClass = 'blocked';
+      } else if (state.status === 'running') {
+        statusText = formatTime(state.timeRemaining);
+        statusClass = state.timeRemaining <= 300 ? 'warning' : '';
+      } else {
+        statusText = 'Unknown';
+        statusClass = 'unknown';
       }
       
       return `
@@ -1779,7 +1886,6 @@ document.addEventListener('DOMContentLoaded', function() {
               ${domain}
               ${isActive ? '<span class="active-indicator">● Active</span>' : ''}
             </div>
-            <div class="domain-timer ${statusClass}">${statusText}</div>
           </div>
           <div class="domain-buttons">
             <button class="override-btn" data-domain="${domain}" title="Reset timer and override block">Override</button>
@@ -1792,8 +1898,10 @@ document.addEventListener('DOMContentLoaded', function() {
     // Update previous order
     previousDomainOrder = [...sortedDomains];
     
-    // Update subscription UI to reflect domain count changes
-    updateSubscriptionUI();
+    // Update subscription UI only if not skipped
+    if (!skipSubscriptionUpdate) {
+      await updateSubscriptionUI();
+    }
     
     // Remove 'new' class after animation
     setTimeout(() => {
@@ -1879,6 +1987,7 @@ document.addEventListener('DOMContentLoaded', function() {
           domains = changes.blockedDomains.newValue || {};
           updateDomainStates();
           updateStats();
+          updateSubscriptionUI(); // Add this to update subscription UI on storage changes
         }
       } else if (area === 'local') {
         // Timer states changed, update display
@@ -1928,7 +2037,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
   
   // Subscription functions
-  function showSubscriptionModal() {
+  async function showSubscriptionModal() {
     renderSubscriptionPlans();
     subscriptionModal.style.display = 'flex';
   }
@@ -1991,7 +2100,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
   
-  function updateSubscriptionUI() {
+  async function updateSubscriptionUI() {
     const status = subscriptionService.getSubscriptionStatus();
     const currentDomainCount = Object.keys(domains).length;
     
@@ -2011,7 +2120,7 @@ document.addEventListener('DOMContentLoaded', function() {
       // Update plan limits
       const maxDomains = status.limits.maxDomains;
       let limitsText = '';
-      
+
       if (maxDomains === -1) {
         limitsText = 'Unlimited domains';
         domainUsage.textContent = `${currentDomainCount} domains`;
@@ -2032,19 +2141,23 @@ document.addEventListener('DOMContentLoaded', function() {
         limitsText += ' • 1-hour timers only';
       }
       
-      // Add override information
-      if (userProfile) {
-        const totalOverrides = userProfile.total_overrides || userProfile.overrides || 0;
-        const freeOverrides = status.limits.freeOverrides;
-        
-        if (freeOverrides === -1) {
-          limitsText += ' • Unlimited overrides';
-        } else if (totalOverrides > 0) {
-          limitsText += ` • ${totalOverrides} overrides remaining`;
-        } else if (freeOverrides > 0) {
-          limitsText += ` • ${freeOverrides} free overrides/month`;
-        } else {
-          limitsText += ' • No overrides remaining';
+      // Only try to get user overrides if user is authenticated
+      const user = firebaseAuth?.getCurrentUser();
+      if (user && firestore) {
+        try {
+          const userOverrides = await firestore.getUserOverrides(user.uid);
+          // Add override information
+          if (userOverrides) {
+            if (userOverrides.overrides === -1) {
+              limitsText += ' • Unlimited overrides';
+            } else if (userOverrides.overrides > 0) {
+              limitsText += ` • ${userOverrides.overrides} overrides remaining`;
+            } else {
+              limitsText += ' • No overrides remaining';
+            }
+          }
+        } catch (error) {
+          console.warn('Error fetching user overrides:', error);
         }
       }
       
@@ -2103,7 +2216,10 @@ document.addEventListener('DOMContentLoaded', function() {
       // Update helper text
       const helperText = document.querySelector('.input-helper');
       if (helperText) {
-        helperText.innerHTML = 'Free plan: 1-hour timer only. <button onclick="chrome.tabs.create({ url: \'http://localhost:3000\' })" style="background: none; border: none; color: #00d4aa; text-decoration: underline; cursor: pointer; font-size: inherit;">Upgrade to Pro</button> for custom timers.';
+        helperText.innerHTML = 'Free plan: 1-hour timer only. <button id = "upgradeBtn" style="background: none; border: none; color: #00d4aa; text-decoration: underline; cursor: pointer; font-size: inherit;">Upgrade to Pro</button> for custom timers.';
+        document.getElementById('upgradeBtn').addEventListener('click', () => {
+          chrome.tabs.create({ url: 'http://localhost:3000' });
+        });
       }
     } else {
       // Enable timer inputs for paid plans
@@ -2197,4 +2313,214 @@ document.addEventListener('DOMContentLoaded', () => {
   // Make functions available globally for onclick handlers
   window.handlePlanAction = handlePlanAction;
   window.showSubscriptionModal = showSubscriptionModal;
+
+  async function updateAdminStats() {
+    try {
+      const statsDocPath = `${FIREBASE_FIRESTORE_BASE_URL}/admin_stats/global`;
+      
+      // First get the current value
+      const getResponse = await fetch(statsDocPath, {
+        method: 'GET',
+        headers: firebaseAuth.getAuthHeaders()
+      });
+
+      if (!getResponse.ok) {
+        throw new Error('Failed to fetch current admin stats');
+      }
+
+      console.log("getResponse", getResponse);
+      const statsData = await getResponse.json();
+      const currentTotal = parseInt(statsData?.fields?.sites?.mapValue?.fields?.total?.integerValue || '0');
+      const newTotal = currentTotal + 1;
+
+      // Update with the new incremented value, using updateMask to only update sites.total
+      const updateResponse = await fetch(`${statsDocPath}?updateMask.fieldPaths=sites.total`, {
+        method: 'PATCH',
+        headers: firebaseAuth.getAuthHeaders(),
+        body: JSON.stringify({
+          fields: {
+            sites: {
+              mapValue: {
+                fields: {
+                  total: {
+                    integerValue: newTotal.toString()
+                  }
+                }
+              }
+            }
+          }
+        })
+      });
+
+      if (!updateResponse.ok) {
+        const errorData = await updateResponse.json();
+        console.error('Admin stats update failed:', errorData);
+        throw new Error('Failed to update admin stats');
+      }
+    } catch (error) {
+      console.error('Error updating admin stats:', error);
+      // Don't throw the error - we don't want to block domain addition if stats update fails
+    }
+  }
+
+  async function addDomain() {
+    // Check if user is authenticated
+    if (!isUserAuthenticated()) {
+      showError('Please log in to add domains');
+      return;
+    }
+
+    const domain = domainInput.value.trim().toLowerCase();
+    const userPlan = subscriptionService.getCurrentPlan();
+    
+    let hours, minutes, seconds, totalSeconds;
+    
+    if (userPlan.id === 'free') {
+      // Free plan: force 1 hour timer
+      hours = 1;
+      minutes = 0;
+      seconds = 0;
+      totalSeconds = 3600; // 1 hour
+    } else {
+      // Pro/Elite plans: use user input
+      hours = parseInt(hoursInput.value) || 0;
+      minutes = parseInt(minutesInput.value) || 0;
+      seconds = parseInt(secondsInput.value) || 0;
+      totalSeconds = hours * 3600 + minutes * 60 + seconds;
+      
+      // Validate time input for non-free plans
+      if (totalSeconds < 1) {
+        showError('Please enter a time greater than 0');
+        return;
+      }
+      
+      if (totalSeconds > 86400) { // 24 hours max
+        showError('Timer cannot exceed 24 hours');
+        return;
+      }
+    }
+    
+    if (!domain) {
+      showError('Please enter a domain');
+      return;
+    }
+    
+    // Check subscription limits for domain count
+    const currentDomainCount = Object.keys(domains).length;
+    const canAdd = await subscriptionService.canAddDomain(currentDomainCount);
+    
+    if (!canAdd) {
+      const maxDomains = subscriptionService.getMaxDomains();
+      showError('You have reached your domains limit of current plan. Upgrade to Pro for unlimited domains.');
+      showPlanLimitError(`You've reached your limit of ${maxDomains} domains. Upgrade to Pro for unlimited domains.`, 'pro');
+      return;
+    }
+    
+    // Clean domain (remove everything before www, then remove www, then remove path)
+    const cleanDomain = cleanDomainFromUrl(domain);
+    
+    // Validate the cleaned domain format
+    if (!isValidDomainFormat(cleanDomain)) {
+      showError('Please enter a valid domain (e.g., google.com, facebook.net, amazon.co.uk)');
+      return;
+    }
+    
+    // Check if domain already exists in Firestore
+    const user = firebaseAuth.getCurrentUser();
+    if (!user) {
+      showError('Please log in to add domains');
+      return;
+    }
+
+    // const formattedDomain = realtimeDB.formatDomainForFirebase(cleanDomain);
+    const siteId = `${user.uid}_${cleanDomain}`;
+    // const existingSite = await realtimeDB.getBlockedSite(siteId);
+    const existingSite = await firestore.getBlockedSite(siteId);
+    
+    if (existingSite) {
+      if (existingSite.is_active) {
+        // Site already exists and is active - show message and return
+        showWarning(`${cleanDomain} is already being tracked`);
+        return;
+      } else {
+        // Site exists but is inactive - reactivate it without changing time_limit or time_remaining
+        console.log(`Reactivating inactive site: ${cleanDomain}`);
+        const now = new Date();
+        const reactivatedSiteData = {
+          ...existingSite,
+          is_active: true,
+          updated_at: now,
+          last_accessed: now.toISOString(),
+          last_reset_timestamp: existingSite.last_reset_timestamp
+        };
+        
+        await firestore.updateBlockedSite(siteId, reactivatedSiteData, ['url', 'last_reset_date']);
+        
+        // Add to local domains with existing time_limit
+        domains[cleanDomain] = existingSite.time_limit;
+        saveDomains();
+        
+        showFeedback(`Reactivated ${cleanDomain} with existing ${formatTime(existingSite.time_limit)} timer`);
+      }
+    } else {
+      // New site - add normally
+      domains[cleanDomain] = totalSeconds;
+      saveDomains();
+      
+      // Sync to Firestore (create new site)
+      await syncDomainToFirestore(cleanDomain, totalSeconds);
+      
+      // Update admin stats for new site
+      await updateAdminStats();
+      
+      showFeedback(`Added ${cleanDomain} with ${formatTime(totalSeconds)} timer. Open tabs for this site will be reloaded.`);
+    }
+    
+    // Common actions for both new and reactivated sites
+    // Notify background script that a domain was added
+    safeChromeCall(() => {
+      chrome.runtime.sendMessage({ action: 'domainAdded', domain: cleanDomain });
+    });
+    
+    // Clear any existing daily block for this domain to allow fresh timer
+    clearDailyBlock(cleanDomain);
+    
+    // Reload existing tabs that match the new domain
+    chrome.tabs.query({}, (tabs) => {
+      tabs.forEach(tab => {
+        if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+          try {
+            const hostname = new URL(tab.url).hostname.toLowerCase();
+            const cleanHostname = hostname.replace(/^www\./, '');
+            if (cleanHostname === cleanDomain || hostname === cleanDomain) {
+              // Reload the tab so the extension can start tracking immediately
+              chrome.tabs.reload(tab.id).catch((error) => {
+                console.log(`Could not reload tab ${tab.id}:`, error);
+              });
+              // console.log(`Reloaded tab ${tab.id} for domain ${cleanDomain}`);
+            }
+          } catch (error) {
+            // Invalid URL, ignore
+          }
+        }
+      });
+    });
+    
+    updateDomainStates();
+    updateStats();
+    
+    // Clear inputs and reset to plan defaults
+    domainInput.value = '';
+    const planForClear = subscriptionService.getCurrentPlan();
+    if (planForClear.id === 'free') {
+      // Keep 1 hour for free plan (inputs are disabled)
+      hoursInput.value = '1';
+      minutesInput.value = '0';
+      secondsInput.value = '0';
+    } else {
+      hoursInput.value = '';
+      minutesInput.value = '';
+      secondsInput.value = '';
+    }
+  }
 }); 

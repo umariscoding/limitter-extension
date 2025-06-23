@@ -1,6 +1,6 @@
-// Smart Tab Blocker Subscription Service
+// Limitter Subscription Service
 
-class SubscriptionService {
+export class SubscriptionService {
   constructor(firebaseAuth, firestore) {
     this.firebaseAuth = firebaseAuth;
     this.firestore = firestore;
@@ -542,7 +542,7 @@ class SubscriptionService {
   }
 }
 
-// Make it available globally
+// Make it available globally for backward compatibility
 if (typeof window !== 'undefined') {
   window.SubscriptionService = SubscriptionService;
 }

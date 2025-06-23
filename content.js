@@ -10,14 +10,14 @@
     }
     
     if (!isExtensionContextValid()) {
-        console.log('Smart Tab Blocker: Extension context not available, content script will not initialize');
+        console.log('Limitter: Extension context not available, content script will not initialize');
         return;
     }
     
     // Monitor extension context throughout execution
     function checkExtensionContext() {
         if (!isExtensionContextValid()) {
-            console.log('Smart Tab Blocker: Extension context lost during execution');
+            console.log('Limitter: Extension context lost during execution');
             // Clean up any running timers
             if (countdownTimer) {
                 clearInterval(countdownTimer);
@@ -39,7 +39,8 @@
     let isEnabled = false;
     let isInitialized = false;
     let countdownTimer = null;
-    let timeRemaining = 20;
+    let _timeRemaining = 20;  // private variable
+    let _previousTimeRemaining = 20;  // track previous value
     let isTimerPaused = false;
     let tabId = null;
     let currentDomain = null;
@@ -48,6 +49,22 @@
     let lastSyncTime = 0; // Track when we last synced with shared state
     let hasLoadedFromFirebase = false; // Prevent writing to Firebase until we've loaded current state
     let isInitializing = true;
+    let notificationElement = null;
+    let currentNotificationTimeout = null;
+    
+    // Getter/Setter for timeRemaining to track changes
+    Object.defineProperty(window, 'timeRemaining', {
+        get: function() {
+            return _timeRemaining;
+        },
+        set: function(newValue) {
+            if (_previousTimeRemaining !== newValue) {
+                console.log(`Time Remaining Changed: ${_previousTimeRemaining} -> ${newValue}`);
+                _previousTimeRemaining = _timeRemaining;
+                _timeRemaining = newValue;
+            }
+        }
+    });
     
     // Override state variables
     let currentOverrideActive = false;
@@ -55,6 +72,9 @@
     let currentOverrideInitiatedAt = null;
     let currentTimeLimit = null;
     let overrideClearTimeout = null; 
+    
+    // Add at the top with other variables
+    let lastResetTimestamp = 0;
     
     // Get unique tab identifier
     function getTabId() {
@@ -127,14 +147,14 @@
             
             try {
                 if (!chrome.runtime?.id) {
-                    console.log("Smart Tab Blocker: Extension context invalidated, cannot check if domain is blocked");
+                    console.log("Limitter: Extension context invalidated, cannot check if domain is blocked");
                     resolve(false);
                     return;
                 }
                 
                 chrome.storage.local.get([blockKey], (result) => {
                     if (chrome.runtime.lastError) {
-                        console.log("Smart Tab Blocker: Error checking if domain is blocked:", chrome.runtime.lastError);
+                        console.log("Limitter: Error checking if domain is blocked:", chrome.runtime.lastError);
                         resolve(false);
                         return;
                     }
@@ -152,7 +172,7 @@
                     }
                 });
             } catch (e) {
-                console.log("Smart Tab Blocker: Extension context invalidated, cannot check if domain is blocked");
+                console.log("Limitter: Extension context invalidated, cannot check if domain is blocked");
                 resolve(false);
             }
         });
@@ -175,16 +195,16 @@
                     syncTimerToFirebase();
                 }).catch((error) => {
                     if (error.message && error.message.includes('Extension context invalidated')) {
-                        console.log("Smart Tab Blocker: Extension context invalidated, cannot mark domain as blocked");
+                        console.log("Limitter: Extension context invalidated, cannot mark domain as blocked");
                     } else {
-                        console.error("Smart Tab Blocker: Error marking domain as blocked", error);
+                        console.error("Limitter: Error marking domain as blocked", error);
                     }
                 });
             } else {
-                console.log("Smart Tab Blocker: Extension context invalidated, cannot mark domain as blocked");
+                console.log("Limitter: Extension context invalidated, cannot mark domain as blocked");
             }
         } catch (e) {
-            console.log("Smart Tab Blocker: Extension context invalidated, cannot mark domain as blocked");
+            console.log("Limitter: Extension context invalidated, cannot mark domain as blocked");
         }
         
     }
@@ -196,8 +216,6 @@
                 return;
             }
             
-            // console.log('Smart Tab Blocker: Tab became active - loading from Firebase first');
-            
             // Step 1: Load current state from Firebase
             loadTimerStateFromFirebase().then(firebaseState => {
                 const storageKey = getStorageKey();
@@ -205,7 +223,6 @@
                     if (firebaseState && firebaseState.timeRemaining >= 0) {
                         timeRemaining = firebaseState.timeRemaining;
                         gracePeriod = firebaseState.gracePeriod || gracePeriod;
-                        console.log(`Smart Tab Blocker: Using Firebase time: ${timeRemaining}s (no Chrome storage key)`);
                         updateTimerDisplay();
                     }
                     resolve();
@@ -214,7 +231,7 @@
                 
                 chrome.storage.local.get([storageKey], (result) => {
                     if (chrome.runtime.lastError) {
-                        console.log("Smart Tab Blocker: Error loading Chrome storage for comparison:", chrome.runtime.lastError);
+                        console.log("Limitter: Error loading Chrome storage for comparison:", chrome.runtime.lastError);
                         if (firebaseState && firebaseState.timeRemaining >= 0) {
                             timeRemaining = firebaseState.timeRemaining;
                             gracePeriod = firebaseState.gracePeriod || gracePeriod;
@@ -239,37 +256,64 @@
                     }
                     
                     // Step 3: Compare and decide
-                    if (firebaseState && firebaseState.timeRemaining >= 0 && chromeTimeRemaining !== null) {
+                    if (firebaseState && firebaseState.timeRemaining >= 0) {
                         const firebaseTime = firebaseState.timeRemaining;
                         
-                        // console.log(`Smart Tab Blocker: Tab switch comparison - Firebase: ${firebaseTime}s, Chrome: ${chromeTimeRemaining}s`);
+                        // Get timestamps
+                        const firebaseResetTime = firebaseState.last_reset_timestamp || 0;
+                        const chromeResetTime = chromeState?.last_reset_timestamp || 0;
+                        const now = Date.now();
                         
-                        if (firebaseTime <= chromeTimeRemaining) {
-                            // Firebase has lower or equal time - use Firebase
-                            // console.log(`Smart Tab Blocker: Using Firebase time (${firebaseTime}s) - lower than Chrome (${chromeTimeRemaining}s)`);
+                        console.log('Timer State Comparison:', {
+                            firebaseTime,
+                            chromeTimeRemaining,
+                            firebaseResetTime: new Date(firebaseResetTime).toISOString(),
+                            chromeResetTime: chromeResetTime ? new Date(chromeResetTime).toISOString() : 'none',
+                            timeDifference: Math.abs(firebaseTime - chromeTimeRemaining),
+                            resetTimeDifference: Math.abs(firebaseResetTime - chromeResetTime)
+                        });
+                        console.log("lastResetTimestamp", lastResetTimestamp, chromeResetTime)
+                        // Case 1: Firebase has a more recent reset
+                        if (firebaseResetTime > chromeResetTime) {
+                            console.log("firebaseResetTime > chromeResetTime", firebaseResetTime, chromeResetTime, firebaseTime, chromeTimeRemaining)
+                            console.log('Using Firebase time due to more recent reset');
                             timeRemaining = firebaseTime;
-                            gracePeriod = firebaseState.gracePeriod || gracePeriod;
-                        } else {
-                            // Chrome storage has lower time - use Chrome and update Firebase
-                            // console.log(`Smart Tab Blocker: Using Chrome time (${chromeTimeRemaining}s) and updating Firebase - lower than Firebase (${firebaseTime}s)`);
+                            lastResetTimestamp = firebaseResetTime;
+                            chromeTimeRemaining = firebaseTime;
+                            saveTimerState();
+                        }
+                        // Case 2: Chrome has a more recent reset
+                        else if (chromeResetTime > firebaseResetTime) {
+                            console.log('Using Chrome time due to more recent reset');
                             timeRemaining = chromeTimeRemaining;
-                            gracePeriod = chromeState.gracePeriod || gracePeriod;
-                            
-                            // Update Firebase with the lower Chrome storage time
+                            // Update Firebase with our more recent reset
                             setTimeout(() => {
                                 syncTimerToFirebase();
                             }, 500);
                         }
-                    } else if (firebaseState && firebaseState.timeRemaining >= 0) {
-                        // Only Firebase has data
-                        // console.log(`Smart Tab Blocker: Using Firebase time only: ${firebaseState.timeRemaining}s`);
-                        timeRemaining = firebaseState.timeRemaining;
+                        // Case 3: Same reset time or no resets - use minimum time
+                        else {
+                            if (firebaseTime <= chromeTimeRemaining || chromeTimeRemaining === null) {
+                                console.log('Using Firebase time (lower value)');
+                                timeRemaining = firebaseTime;
+                                chromeTimeRemaining = firebaseTime;
+                                saveTimerState();
+                            } else {
+                                console.log('Using Chrome time (lower value)');
+                                timeRemaining = chromeTimeRemaining;
+                                // Update Firebase with the lower time
+                                setTimeout(() => {
+                                    syncTimerToFirebase();
+                                }, 500);
+                            }
+                        }
+                        
+                        // Always update grace period from Firebase if available
                         gracePeriod = firebaseState.gracePeriod || gracePeriod;
                     } else if (chromeTimeRemaining !== null) {
                         // Only Chrome storage has data
-                        // console.log(`Smart Tab Blocker: Using Chrome time only: ${chromeTimeRemaining}s`);
+                        console.log('Using Chrome time (no Firebase data)');
                         timeRemaining = chromeTimeRemaining;
-                        gracePeriod = chromeState.gracePeriod || gracePeriod;
                         
                         // Update Firebase with Chrome storage data
                         setTimeout(() => {
@@ -291,7 +335,7 @@
                     resolve();
                 });
             }).catch(error => {
-                console.log('Smart Tab Blocker: Error loading from Firebase on tab switch:', error);
+                console.log('Limitter: Error loading from Firebase on tab switch:', error);
                 // Fall back to Chrome storage only
                 syncFromSharedState().then(() => {
                     resolve();
@@ -316,7 +360,7 @@
                 
                 chrome.storage.local.get([storageKey], (result) => {
                     if (chrome.runtime.lastError) {
-                        console.log("Smart Tab Blocker: Error syncing from shared state:", chrome.runtime.lastError);
+                        console.log("Limitter: Error syncing from shared state:", chrome.runtime.lastError);
                         resolve();
                         return;
                     }
@@ -339,13 +383,13 @@
                         const currentTime = timeRemaining;
                         const minimumTime = Math.min(currentTime, sharedTimeRemaining);
                         
-                        // console.log(`Smart Tab Blocker: Cross-tab sync - Current: ${currentTime}s, Shared: ${sharedTimeRemaining}s, Using minimum: ${minimumTime}s`);
+                        // console.log(`Limitter: Cross-tab sync - Current: ${currentTime}s, Shared: ${sharedTimeRemaining}s, Using minimum: ${minimumTime}s`);
                         
                         timeRemaining = minimumTime;
                         gracePeriod = sharedState.gracePeriod || gracePeriod;
                         lastSyncTime = now;
                         
-                        // console.log(`Smart Tab Blocker: Synced from shared state - ${timeRemaining}s remaining (was ${sharedState.timeRemaining}s, ${timeDiff}s elapsed)`);
+                        // console.log(`Limitter: Synced from shared state - ${timeRemaining}s remaining (was ${sharedState.timeRemaining}s, ${timeDiff}s elapsed)`);
                         
                         updateTimerDisplay();
                         
@@ -362,7 +406,7 @@
                     resolve();
                 });
             } catch (e) {
-                console.log("Smart Tab Blocker: Extension context invalidated during sync");
+                console.log("Limitter: Extension context invalidated during sync");
                 resolve();
             }
         });
@@ -377,12 +421,34 @@
                 return;
             }
             
-            console.log(`Smart Tab Blocker: Attempting to load timer state for ${getCurrentDomain()}`);
+            console.log(`Limitter: Attempting to load timer state for ${getCurrentDomain()}`);
             
             // First, try to load from Firebase for cross-device syncing
             loadTimerStateFromFirebase().then(firebaseState => {
+                console.log("firebaseState", firebaseState)
+                if(firebaseState === null){
+                    // Check if domain should be tracked (it might have been reactivated)
+                    chrome.runtime.sendMessage({ action: 'checkDomainActive', domain: getCurrentDomain() }, (response) => {
+                        if (response && response.isActive) {
+                            console.log('Limitter: Domain is tracked, requesting fresh config');
+                            // Domain is tracked, get fresh config
+                            chrome.runtime.sendMessage({ action: 'getDomainConfig' }, (configResponse) => {
+                                if (configResponse && configResponse.domainConfig) {
+                                    console.log('Limitter: Got fresh config, initializing');
+                                    initializeWithConfig(configResponse.domainConfig);
+                                }
+                            });
+                            loadTimerState();
+                        } else {
+                            console.log('Limitter: Domain is not tracked');
+                            clearAllStateForDomain();
+                        }
+                    });
+                  
+                    return;
+                }
                 if (firebaseState && firebaseState.timeRemaining > 0) {
-                    console.log(`Smart Tab Blocker: Loaded timer state from Firebase (cross-device) with ${firebaseState.timeRemaining}s remaining`);
+                    console.log(`Limitter: Loaded timer state from Firebase (cross-device) with ${firebaseState.timeRemaining}s remaining`);
                     resolve(firebaseState);
                     return;
                 }
@@ -390,27 +456,29 @@
                 // If no Firebase state, fall back to Chrome storage
                 try {
                     if (!chrome.runtime?.id) {
-                        console.log("Smart Tab Blocker: Extension context invalidated, cannot load timer state");
+                        console.log("Limitter: Extension context invalidated, cannot load timer state");
                         resolve(null);
                         return;
                     }
                     
                     chrome.storage.local.get([storageKey], (result) => {
                         if (chrome.runtime.lastError) {
-                            console.log("Smart Tab Blocker: Error loading timer state:", chrome.runtime.lastError);
+                            console.log("Limitter: Error loading timer state:", chrome.runtime.lastError);
                             resolve(null);
                             return;
                         }
                         
                         const state = result[storageKey];
-                        console.log("Smart Tab Blocker: Retrieved state from Chrome storage:", state);
+                        console.log("Limitter: Retrieved state from Chrome storage:", state);
                         
                         if (state && state.date === getTodayString()) {
                             // Only restore if same day - we're more lenient about URL to handle subdomain variations
-                            console.log(`Smart Tab Blocker: Found saved timer state with ${state.timeRemaining}s remaining`);
-                            
+                            console.log(`Limitter: Found saved timer state with ${state.timeRemaining}s remaining`);
+                            lastResetTimestamp = state.last_reset_timestamp;
                             // Update override state variables from Chrome storage
+                            console.log("last reset timestamp ", state.last_reset_timestamp)
                             if (state.override_active) {
+                                console.log("state.override_active", state.override_active)
                                 setOverrideActive(state.override_initiated_by, state.override_initiated_at);
                             } else {
                                 currentOverrideActive = false;
@@ -425,7 +493,7 @@
                         
                         // Clean up old state
                         if (state && state.date !== getTodayString()) {
-                            console.log("Smart Tab Blocker: Clearing outdated timer state");
+                            console.log("Limitter: Clearing outdated timer state");
                             if (chrome.runtime?.id) {
                                 chrome.storage.local.remove([storageKey]);
                             }
@@ -438,12 +506,12 @@
                                 domain: getCurrentDomain()
                             }, (response) => {
                                 if (chrome.runtime.lastError) {
-                                    console.log("Smart Tab Blocker: Error checking domain tracking:", chrome.runtime.lastError);
+                                    console.log("Limitter: Error checking domain tracking:", chrome.runtime.lastError);
                                     return;
                                 }
                                 
                                 if (response && response.shouldTrack === false) {
-                                    console.log("Smart Tab Blocker: Domain no longer tracked, clearing all state");
+                                    console.log("Limitter: Domain no longer tracked, clearing all state");
                                     clearAllStateForDomain();
                                 }
                             });
@@ -452,11 +520,11 @@
                         resolve(null);
                     });
                 } catch (e) {
-                    console.log("Smart Tab Blocker: Extension context invalidated, cannot load timer state");
+                    console.log("Limitter: Extension context invalidated, cannot load timer state");
                     resolve(null);
                 }
             }).catch(error => {
-                console.log("Smart Tab Blocker: Error loading from Firebase, falling back to Chrome storage:", error);
+                console.log("Limitter: Error loading from Firebase, falling back to Chrome storage:", error);
                 // Fall back to Chrome storage if Firebase fails
                 try {
                     if (!chrome.runtime?.id) {
@@ -469,6 +537,7 @@
                         if (state && state.date === getTodayString()) {
                             // Update override state variables from Chrome storage
                             if (state.override_active) {
+                                console.log("state.override_active 2", state.override_active)
                                 setOverrideActive(state.override_initiated_by, state.override_initiated_at);
                             } else {
                                 currentOverrideActive = false;
@@ -503,17 +572,24 @@
                     domain: currentDomain
                 }, (response) => {
                     if (chrome.runtime.lastError) {
-                        console.log('Smart Tab Blocker: Error loading timer from Firebase:', chrome.runtime.lastError);
+                        console.log('Limitter: Error loading timer from Firebase:', chrome.runtime.lastError);
                         resolve(null);
                         return;
                     }
                     
                     if (response && response.success && response.timerState) {
                         const firebaseState = response.timerState;
-                       
+                        console.log("firebaseState ", firebaseState)
+                        // Update reset timestamp if Firebase has a more recent one
+                        if (firebaseState.last_reset_timestamp > lastResetTimestamp) {
+                            lastResetTimestamp = firebaseState.last_reset_timestamp;
+                            // If Firebase has a more recent reset, use its time
+                            timeRemaining = firebaseState.timeRemaining;
+                        }
                         
                         // Update override state variables
                         if (firebaseState.override_active) {
+                            console.log("firebaseState.override_active 3", firebaseState.override_active)
                             setOverrideActive(firebaseState.override_initiated_by, firebaseState.override_initiated_at);
                         } else {
                             currentOverrideActive = false;
@@ -524,15 +600,15 @@
                         
                         resolve({
                             ...firebaseState,
-                            timeRemaining:  firebaseState.timeRemaining 
+                            timeRemaining: firebaseState.timeRemaining
                         });
                     } else {
-                        console.log('Smart Tab Blocker: No timer state found in Firebase');
+                        console.log('Limitter: No timer state found in Firebase');
                         resolve(null);
                     }
                 });
             } catch (error) {
-                console.log('Smart Tab Blocker: Exception while loading from Firebase:', error);
+                console.log('Limitter: Exception while loading from Firebase:', error);
                 resolve(null);
             }
         });
@@ -556,10 +632,11 @@
             override_active: currentOverrideActive, // Preserve override state
             override_initiated_by: currentOverrideInitiatedBy,
             override_initiated_at: currentOverrideInitiatedAt,
-            time_limit: currentTimeLimit
+            time_limit: currentTimeLimit,
+            last_reset_timestamp: lastResetTimestamp // Add reset timestamp
         };
-        
-        console.log(`Smart Tab Blocker: Saving timer state with ${timeRemaining}s remaining (active: ${isActiveTab}, hasLoadedFromFirebase: ${hasLoadedFromFirebase})`);
+        console.log("state", state)
+        console.log(`Limitter: Saving timer state with ${timeRemaining}s remaining (active: ${isActiveTab}, hasLoadedFromFirebase: ${hasLoadedFromFirebase})`);
         
         try {
             if (chrome.runtime?.id) {
@@ -568,23 +645,23 @@
                 }).then(() => {
                     // Only sync to Firebase if we've loaded the current state first
                     // This prevents race conditions where new devices overwrite existing progress
-                    if (hasLoadedFromFirebase && !isInitializing) {
-                        syncTimerToFirebase();
-                    } else {
-                        console.log('Smart Tab Blocker: Skipping Firebase sync - still initializing or haven\'t loaded from Firebase yet');
-                    }
+                    // if (hasLoadedFromFirebase && !isInitializing) {
+                    //     syncTimerToFirebase();
+                    // } else {
+                    //     console.log('Limitter: Skipping Firebase sync - still initializing or haven\'t loaded from Firebase yet');
+                    // }
                 }).catch((error) => {
                     if (error.message && error.message.includes('Extension context invalidated')) {
-                        console.log("Smart Tab Blocker: Extension context invalidated, cannot save timer state");
+                        console.log("Limitter: Extension context invalidated, cannot save timer state");
                     } else {
-                        console.error("Smart Tab Blocker: Error saving timer state", error);
+                        console.error("Limitter: Error saving timer state", error);
                     }
                 });
             } else {
-                console.log("Smart Tab Blocker: Extension context invalidated, cannot save timer state");
+                console.log("Limitter: Extension context invalidated, cannot save timer state");
             }
         } catch (e) {
-            console.log("Smart Tab Blocker: Extension context invalidated, cannot save timer state");
+            console.log("Limitter: Extension context invalidated, cannot save timer state");
         }
     }
     
@@ -597,16 +674,16 @@
             if (chrome.runtime?.id) {
                 chrome.storage.local.remove([storageKey]).catch((error) => {
                     if (error.message && error.message.includes('Extension context invalidated')) {
-                        console.log("Smart Tab Blocker: Extension context invalidated, cannot clear timer state");
+                        console.log("Limitter: Extension context invalidated, cannot clear timer state");
                     } else {
-                        console.log("Smart Tab Blocker: Error clearing timer state:", error);
+                        console.log("Limitter: Error clearing timer state:", error);
                     }
                 });
             } else {
-                console.log("Smart Tab Blocker: Extension context invalidated, cannot clear timer state");
+                console.log("Limitter: Extension context invalidated, cannot clear timer state");
             }
         } catch (e) {
-            console.log("Smart Tab Blocker: Extension context invalidated, cannot clear timer state");
+            console.log("Limitter: Extension context invalidated, cannot clear timer state");
         }
     }
     
@@ -618,16 +695,16 @@
             if (chrome.runtime?.id) {
                 chrome.storage.local.remove([blockKey]).catch((error) => {
                     if (error.message && error.message.includes('Extension context invalidated')) {
-                        console.log("Smart Tab Blocker: Extension context invalidated, cannot clear daily block");
+                        console.log("Limitter: Extension context invalidated, cannot clear daily block");
                     } else {
-                        console.error("Smart Tab Blocker: Error clearing daily block", error);
+                        console.error("Limitter: Error clearing daily block", error);
                     }
                 });
             } else {
-                console.log("Smart Tab Blocker: Extension context invalidated, cannot clear daily block");
+                console.log("Limitter: Extension context invalidated, cannot clear daily block");
             }
         } catch (e) {
-            console.log("Smart Tab Blocker: Extension context invalidated, cannot clear daily block");
+            console.log("Limitter: Extension context invalidated, cannot clear daily block");
         }
     }
 
@@ -636,46 +713,24 @@
         currentOverrideActive = true;
         currentOverrideInitiatedBy = userId;
         currentOverrideInitiatedAt = initiatedAt;
-        
+        console.log("initiatedAt", initiatedAt, "currentOverrideActive", currentOverrideActive, "currentOverrideInitiatedBy", currentOverrideInitiatedBy, "currentOverrideInitiatedAt", currentOverrideInitiatedAt)
         // Clear any existing timeout
         if (overrideClearTimeout) {
             clearTimeout(overrideClearTimeout);
         }
         
-        // Calculate remaining time if override was initiated earlier
-        let timeoutDuration = 4000; // Default 4 seconds
-        if (initiatedAt) {
-            const initiatedTime = new Date(initiatedAt).getTime();
-            const currentTime = Date.now();
-            const elapsedTime = currentTime - initiatedTime;
-            
-            if (elapsedTime >= 4000) {
-                // Override should have already expired, clear it immediately
-                console.log('Smart Tab Blocker: Override has already expired, clearing immediately');
-                clearOverrideActive();
-                return;
-            } else {
-                // Calculate remaining time
-                timeoutDuration = 4000 - elapsedTime;
-                console.log(`Smart Tab Blocker: Override initiated ${elapsedTime}ms ago, clearing in ${timeoutDuration}ms`);
-            }
-        }
-        
-        // Set timeout to clear override after remaining time
         overrideClearTimeout = setTimeout(() => {
-            console.log('Smart Tab Blocker: Automatically clearing override_active after timeout');
+            console.log('Limitter: Automatically clearing override_active after timeout');
             clearOverrideActive();
-        }, timeoutDuration);
+        }, 6000);
     }
 
     // Clear override active state
     function clearOverrideActive() {
         if (!currentOverrideActive) return;
         
-        console.log('Smart Tab Blocker: Clearing override_active state');
+        console.log('Limitter: Clearing override_active state');
         currentOverrideActive = false;
-        currentOverrideInitiatedBy = null;
-        currentOverrideInitiatedAt = null;
         
         // Clear timeout if it exists
         if (overrideClearTimeout) {
@@ -684,8 +739,9 @@
         }
         
         // Save updated state to Chrome storage
+        console.log("clearing override active", currentOverrideActive)
         saveTimerState();
-        
+        currentOverrideActive = false;
         // Sync to Firebase
         if (hasLoadedFromFirebase && !isInitializing) {
             syncTimerToFirebase();
@@ -713,6 +769,7 @@
     function pauseTimer() {
         if (countdownTimer && !isTimerPaused) {
             isTimerPaused = true;
+            console.log("pausing timer", isTimerPaused)
             saveTimerState();
             updateTimerDisplay();
         }
@@ -725,10 +782,12 @@
             // If this tab is becoming active, sync with shared state first
             if (isActiveTab) {
                 syncFromSharedState().then(() => {
+                    console.log("resuming timer", isTimerPaused)
                     saveTimerState();
                     updateTimerDisplay();
                 });
             } else {
+                console.log("resuming asdtimer", isTimerPaused)
                 saveTimerState();
                 updateTimerDisplay();
             }
@@ -744,7 +803,7 @@
         timeRemaining = gracePeriod;
         currentTimeLimit = gracePeriod; // Initialize time limit
         
-        // console.log(`Smart Tab Blocker: Initializing for ${currentDomain} with ${gracePeriod}s timer`);
+        // console.log(`Limitter: Initializing for ${currentDomain} with ${gracePeriod}s timer`);
         
         isInitialized = true;
         isEnabled = true;
@@ -759,7 +818,7 @@
                 const storageKey = getStorageKey();
                 if (storageKey && changes[storageKey] && !isActiveTab) {
                     // Another tab updated the timer state, sync from it
-                    // console.log('Smart Tab Blocker: Timer state changed by another tab, syncing...');
+                    // console.log('Limitter: Timer state changed by another tab, syncing...');
                     syncFromSharedState();
                 }
             }
@@ -768,36 +827,36 @@
         // First check if domain is blocked for today
         isDomainBlockedToday().then(isBlocked => {
             if (isBlocked) {
-                console.log(`Smart Tab Blocker: ${currentDomain} is already blocked for today`);
+                console.log(`Limitter: ${currentDomain} is already blocked for today`);
                 showModal(true); // true = already blocked
                 return;
             }
             
             // For cross-device syncing, ALWAYS check Firebase first (more aggressive)
-            // console.log(`Smart Tab Blocker: Checking Firebase first for cross-device state...`);
+            // console.log(`Limitter: Checking Firebase first for cross-device state...`);
             loadTimerStateFromFirebase().then(firebaseState => {
                 // Mark that we've attempted to load from Firebase
                 hasLoadedFromFirebase = true;
-                
-                // Set up real-time listener for this specific blocked site
-                try {
-                    chrome.runtime.sendMessage({
-                        action: 'setupRealtimeListener',
-                        domain: currentDomain
-                    }, (response) => {
-                        if (response && response.success) {
-                            console.log(`Firebase Realtime Listener: Set up successfully for ${currentDomain}`);
-                        }
-                    });
-                } catch (error) {
-                    console.error('Failed to set up realtime listener:', error);
-                }
+                console.log("hasLoadedFromFirebase", hasLoadedFromFirebase, firebaseState)
+                // // Set up real-time listener for this specific blocked site
+                // try {
+                //     chrome.runtime.sendMessage({
+                //         action: 'setupRealtimeListener',
+                //         domain: currentDomain
+                //     }, (response) => {
+                //         if (response && response.success) {
+                //             console.log(`Firebase Realtime Listener: Set up successfully for ${currentDomain}`);
+                //         }
+                //     });
+                // } catch (error) {
+                //     console.error('Failed to set up realtime listener:', error);
+                // }
                 
                 // Check if we have local saved state first
                 let localTimeRemaining = null;
                 if (domainConfig.savedState && domainConfig.savedState.timeRemaining > 0) {
                     localTimeRemaining = domainConfig.savedState.timeRemaining;
-                    console.log(`Smart Tab Blocker: Found local saved state: ${localTimeRemaining}s`);
+                    console.log(`Limitter: Found local saved state: ${localTimeRemaining}s`);
                 } else {
                     // Check Chrome storage as fallback
                     const storageKey = getStorageKey();
@@ -815,12 +874,12 @@
                                     
                                     if (calculatedTime > 0) {
                                         localTimeRemaining = calculatedTime;
-                                        console.log(`Smart Tab Blocker: Found Chrome storage state: ${localTimeRemaining}s`);
+                                        console.log(`Limitter: Found Chrome storage state: ${localTimeRemaining}s`);
                                     }
                                 }
                             });
                         } catch (error) {
-                            console.log('Smart Tab Blocker: Error reading Chrome storage:', error);
+                            console.log('Limitter: Error reading Chrome storage:', error);
                         }
                     }
                 }
@@ -828,25 +887,28 @@
                 // If we have both Firebase and local time, or just local time, send site opened signal
                 if (localTimeRemaining !== null || (firebaseState && firebaseState.timeRemaining > 0)) {
                     const timeToSend = localTimeRemaining || (firebaseState ? firebaseState.timeRemaining : null);
-                    
+                    console.log("timeToSend", timeToSend, "firebaseState", firebaseState)
                     if (timeToSend && timeToSend > 0) {
-                        console.log(`Smart Tab Blocker: Sending site opened signal with time: ${timeToSend}s`);
-                        
-                        // Send site opened signal for cross-device sync
-                        chrome.runtime.sendMessage({
-                            action: 'siteOpened',
-                            domain: currentDomain,
-                            localTimeRemaining: timeToSend
-                        }, (response) => {
-                            if (response && response.success) {
-                                console.log(`Smart Tab Blocker: Site opened signal sent successfully: ${response.result.message}`);
-                            } else {
-                                console.log('Smart Tab Blocker: Site opened signal failed:', response?.error);
-                            }
-                        });
-                        
+                        console.log(`Limitter: Sending site opened signal with time: ${timeToSend}s`);
+                    //     if(firebaseState!=null){
+                    //     // Send site opened signal for cross-device sync
+                    //     chrome.runtime.sendMessage({
+                    //         action: 'siteOpened',
+                    //         domain: currentDomain,
+                    //         localTimeRemaining: timeToSend
+                    //     }, (response) => {
+                    //         if (response && response.success) {
+                    //             console.log(`Limitter: Site opened signal sent successfully: ${response.result.message}`);
+                    //         } else {
+                    //             console.log('Limitter: Site opened signal failed:', response?.error);
+                    //         }
+                    //     });
+                    // }
+                    console.log("localTimeRemaining", localTimeRemaining, "firebaseState", firebaseState)
                         // Use the local time if available, otherwise use Firebase time
+                        if(firebaseState?.timeRemaining != 3600){
                         timeRemaining = localTimeRemaining || firebaseState.timeRemaining;
+                        }
                         gracePeriod = (domainConfig.savedState?.gracePeriod) || 
                                      (firebaseState?.gracePeriod) || 
                                      gracePeriod;
@@ -867,7 +929,7 @@
                 // Handle the rest of the cases as before
                 if (firebaseState && firebaseState.timeRemaining > 0) {
                     // Firebase has valid state - use it (this handles cross-device syncing)
-                    // console.log(`Smart Tab Blocker: Using Firebase state (cross-device) with ${firebaseState.timeRemaining}s remaining`);
+                    // console.log(`Limitter: Using Firebase state (cross-device) with ${firebaseState.timeRemaining}s remaining`);
                     timeRemaining = firebaseState.timeRemaining;
                     gracePeriod = firebaseState.gracePeriod || gracePeriod;
                     isTimerPaused = firebaseState.isPaused || document.hidden;
@@ -878,7 +940,7 @@
                     return;
                 } else if (firebaseState && firebaseState.timeRemaining <= 0) {
                     // Firebase shows site is blocked
-                    console.log(`Smart Tab Blocker: Firebase shows site is blocked`);
+                    console.log(`Limitter: Firebase shows site is blocked`);
                     isInitializing = false;
                     showModal(true);
                     return;
@@ -886,7 +948,7 @@
                 
                 // No Firebase state, check if we have local saved state
                 if (domainConfig.savedState) {
-                    // console.log(`Smart Tab Blocker: Using provided saved state with ${domainConfig.savedState.timeRemaining}s remaining`);
+                    // console.log(`Limitter: Using provided saved state with ${domainConfig.savedState.timeRemaining}s remaining`);
                     timeRemaining = domainConfig.savedState.timeRemaining;
                     gracePeriod = domainConfig.savedState.gracePeriod || gracePeriod;
                     isTimerPaused = domainConfig.savedState.isPaused || document.hidden;
@@ -898,7 +960,7 @@
                     // Check Chrome storage as last resort
                     loadTimerState().then(savedState => {
                         if (savedState && savedState.timeRemaining > 0) {
-                            // console.log(`Smart Tab Blocker: Using Chrome storage state with ${savedState.timeRemaining}s remaining`);
+                            // console.log(`Limitter: Using Chrome storage state with ${savedState.timeRemaining}s remaining`);
                             timeRemaining = savedState.timeRemaining;
                             gracePeriod = savedState.gracePeriod || gracePeriod;
                             isTimerPaused = savedState.isPaused || document.hidden;
@@ -907,7 +969,7 @@
                             isInitializing = false;
                             startCountdownTimer(true);
                         } else {
-                            // console.log(`Smart Tab Blocker: Starting fresh timer with ${gracePeriod}s`);
+                            // console.log(`Limitter: Starting fresh timer with ${gracePeriod}s`);
                             // Finish initialization and start timer
                             isInitializing = false;
                             startCountdownTimer();
@@ -915,7 +977,7 @@
                     });
                 }
             }).catch(error => {
-                console.log('Smart Tab Blocker: Error loading from Firebase, falling back to local state:', error);
+                console.log('Limitter: Error loading from Firebase, falling back to local state:', error);
                 hasLoadedFromFirebase = true; // Mark as attempted even if failed
                 
                 // Fall back to local state if Firebase fails
@@ -944,7 +1006,7 @@
         
         // Listen for messages from background script
         chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-            // console.log('Smart Tab Blocker: Message received:', request);
+            // console.log('Limitter: Message received:', request);
             // console.log('request.action', request.action);
             if (request.action === 'updateConfig') {
                 if (request.enabled && request.domainConfig) {
@@ -954,18 +1016,11 @@
                     
                     if (request.overrideActivated) {
                         // Override was activated - reset timer completely
-                        console.log(`Smart Tab Blocker: Override activated, resetting timer to ${gracePeriod}s`);
+                        console.log(`Limitter: Override activated, resetting timer to ${gracePeriod}s`);
                         timeRemaining = gracePeriod;
-                        
-                        // Set override active with automatic clearing after 4 seconds
                         setOverrideActive(null, new Date().toISOString());
-                        
-                        // Stop existing timer and start fresh
                         stopCountdownTimer();
                         startCountdownTimer();
-                        
-                        // Save the new state (will be called by setOverrideActive, but call again to ensure timer state is saved)
-                        saveTimerState();
                     } else if (!countdownTimer) {
                         // No existing timer, start new one
                         timeRemaining = gracePeriod;
@@ -974,7 +1029,7 @@
                     sendResponse({ success: true });
                 } else {
                     // Domain was removed from tracking or extension disabled
-                    // console.log('Smart Tab Blocker: Domain removed from tracking or extension disabled');
+                    // console.log('Limitter: Domain removed from tracking or extension disabled');
                     clearAllStateForDomain();
                     sendResponse({ success: true });
                 }
@@ -985,7 +1040,7 @@
                 });
             } else if (request.action === 'stopTracking') {
                 // Direct command to stop tracking this domain
-                console.log(`Smart Tab Blocker: Received direct command to stop tracking ${getCurrentDomain()}`);
+                console.log(`Limitter: Received direct command to stop tracking ${getCurrentDomain()}`);
                 isEnabled = false;
                 isInitialized = false;
                 stopCountdownTimer();
@@ -1023,6 +1078,7 @@
                         currentTimeLimit = originalTimeLimit;
                         gracePeriod = originalTimeLimit;
                         
+                        console.log("setting override active 5")
                         // Set override active with automatic clearing after 4 seconds (same as override button)
                         setOverrideActive(null, new Date().toISOString());
                         
@@ -1037,6 +1093,7 @@
                         sendTimerUpdateToPopup();
                         
                         // Save the new state (same as override button)
+                        console.log("saving timer staasdasdaste", timeRemaining)
                         saveTimerState();
                         
                         // Also update Chrome sync storage to ensure domain is properly tracked
@@ -1090,6 +1147,7 @@
                     updateTimerDisplay();
                     
                     // Save the updated state
+                    console.log("saving timerasdasasdasdasdsad state", timeRemaining)
                     saveTimerState();
                     
                     // If timer expired, handle blocking
@@ -1149,11 +1207,11 @@
     
     // Check if current domain should be tracked
     function checkDomainAndInitialize() {
-        // console.log(`Smart Tab Blocker: Checking domain ${getCurrentDomain()}`);
+        // console.log(`Limitter: Checking domain ${getCurrentDomain()}`);
         
         // Check extension context before proceeding
         if (!checkExtensionContext()) {
-            console.log('Smart Tab Blocker: Extension context not available, cannot initialize');
+            console.log('Limitter: Extension context not available, cannot initialize');
             return;
         }
         
@@ -1163,10 +1221,10 @@
             domain: getCurrentDomain() 
         }, (response) => {
             if (chrome.runtime.lastError) {
-                console.log('Smart Tab Blocker: Error communicating with background script:', chrome.runtime.lastError);
+                console.log('Limitter: Error communicating with background script:', chrome.runtime.lastError);
                 // Retry after a delay if there's a communication error
                 setTimeout(() => {
-                    console.log('Smart Tab Blocker: Retrying domain check...');
+                    console.log('Limitter: Retrying domain check...');
                     checkDomainAndInitialize();
                 }, 3000);
                 return;
@@ -1174,14 +1232,14 @@
             
             // If background responds that authentication is still initializing, wait for retry
             // if (response && response.initializing) {
-            //     console.log(`Smart Tab Blocker: Background script is still initializing for ${getCurrentDomain()}, waiting for retry`);
+            //     console.log(`Limitter: Background script is still initializing for ${getCurrentDomain()}, waiting for retry`);
             //     return; // Background will send updateConfig message when ready
             // }
             
             // If background responds that domain should not be tracked, stop initialization
             if (response && response.shouldTrack === false) {
                 // console.log('Response:', response);
-                console.log(`Smart Tab Blocker: Background script says not to track ${getCurrentDomain()}`);
+                console.log(`Limitter: Background script says not to track ${getCurrentDomain()}`);
                 // Ensure we clean up any state for this domain
                 clearAllStateForDomain();
                 return;
@@ -1197,7 +1255,7 @@
         // First check if domain is already blocked today
         isDomainBlockedToday().then(isBlocked => {
             if (isBlocked) {
-                console.log(`Smart Tab Blocker: ${getCurrentDomain()} is already blocked for today`);
+                console.log(`Limitter: ${getCurrentDomain()} is already blocked for today`);
                 // Initialize with config so we can show the blocked modal
                 initializeWithConfig({ timer: 20 });
                 return;
@@ -1209,12 +1267,12 @@
                     // Double-check that domain should still be tracked before using saved state
                     chrome.runtime.sendMessage({ action: 'checkDomainTracking', domain: getCurrentDomain() }, (trackingResponse) => {
                         if (trackingResponse && trackingResponse.shouldTrack === false) {
-                            console.log(`Smart Tab Blocker: Domain no longer tracked, ignoring saved state`);
+                            console.log(`Limitter: Domain no longer tracked, ignoring saved state`);
                             clearAllStateForDomain();
                             return;
                         }
                         
-                        console.log(`Smart Tab Blocker: Restoring from saved timer state with ${savedState.timeRemaining}s remaining`);
+                        console.log(`Limitter: Restoring from saved timer state with ${savedState.timeRemaining}s remaining`);
                         // We have saved state, initialize with it
                         initializeWithConfig({ 
                             timer: savedState.gracePeriod || 20,
@@ -1223,13 +1281,13 @@
                     });
                 } else {
                     // No saved state, proceed with normal initialization
-                    // console.log(`Smart Tab Blocker: No saved state, requesting domain config`);
+                    // console.log(`Limitter: No saved state, requesting domain config`);
                     chrome.runtime.sendMessage({ action: 'getDomainConfig' }, (response) => {
                         if (chrome.runtime.lastError) {
-                            console.error("Smart Tab Blocker: Error getting domain config", chrome.runtime.lastError);
+                            console.error("Limitter: Error getting domain config", chrome.runtime.lastError);
                             // Retry after delay if there's an error
                             setTimeout(() => {
-                                console.log('Smart Tab Blocker: Retrying domain config request...');
+                                console.log('Limitter: Retrying domain config request...');
                                 initializeDomainTracking();
                             }, 3000);
                             return;
@@ -1238,10 +1296,10 @@
                         if (response && response.domainConfig) {
                             initializeWithConfig(response.domainConfig);
                         } else if (response && response.shouldTrack === false) {
-                            // console.log(`Smart Tab Blocker: Domain ${getCurrentDomain()} should not be tracked`);
+                            // console.log(`Limitter: Domain ${getCurrentDomain()} should not be tracked`);
                             clearAllStateForDomain();
                         } else {
-                            // console.log('Smart Tab Blocker: No domain config received, may need to retry');
+                            // console.log('Limitter: No domain config received, may need to retry');
                             // Wait a bit and check again
                             setTimeout(() => {
                                 initializeDomainTracking();
@@ -1255,7 +1313,7 @@
     
     // Helper function to clean up all state for a domain
     function clearAllStateForDomain() {
-        console.log(`Smart Tab Blocker: Cleaning up all state for ${getCurrentDomain()}`);
+        console.log(`Limitter: Cleaning up all state for ${getCurrentDomain()}`);
         
         // Clear timer state
         const storageKey = getStorageKey();
@@ -1491,20 +1549,31 @@
         setTimeout(() => {
             hasLoadedFromFirebase = true;
             isInitializing = false;
-            // console.log('Smart Tab Blocker: Firebase syncing enabled');
+            // console.log('Limitter: Firebase syncing enabled');
         }, 1000); // 1 second delay to prevent race conditions
     }
 
     function startCountdownTimer(isResuming = false) {
         if (!isEnabled || !checkExtensionContext()) return;
         
-        stopCountdownTimer();
-        
-        if (!isResuming) {
-            timeRemaining = gracePeriod;
-            // If starting fresh, enable Firebase sync after a delay
-            enableFirebaseSync();
+        // If timer is already running, don't start a new one
+        if (countdownTimer) {
+            console.log('Limitter: Timer already running, not starting new one');
+            return;
         }
+        
+        // Only set initial time if we're not resuming and haven't loaded from Firebase
+        if (!isResuming && !hasLoadedFromFirebase) {
+            console.log('Limitter: Starting fresh timer - waiting for Firebase load');
+            return; // Don't start timer until we've loaded from Firebase
+        }
+        
+        // If starting fresh (not resuming), set initial time
+        // if (!isResuming) {
+        //     // timeRemaining = gracePeriod;
+        //     // If starting fresh, enable Firebase sync after a delay
+        //     // enableFirebaseSync();
+        // }
         
         isTimerPaused = document.hidden;
         isActiveTab = !document.hidden; // Set active status based on visibility
@@ -1540,7 +1609,8 @@
             }
         }, 1000);
         
-        // Immediate save when timer starts (but won't sync to Firebase until enabled)
+        // Immediate save when timer starts
+        console.log("saving timer stateas213", timeRemaining)
         saveTimerState();
     }
     
@@ -1560,11 +1630,11 @@
         
         // Extra protection: Don't sync during initialization
         if (isInitializing || !hasLoadedFromFirebase) {
-            console.log('Smart Tab Blocker: Skipping Firebase sync - initialization not complete');
+            console.log('Limitter: Skipping Firebase sync - initialization not complete');
             return Promise.resolve();
         }
         
-        // console.log(`Smart Tab Blocker: Syncing timer to Firebase for ${currentDomain} - ${timeRemaining}s remaining`);
+        // console.log(`Limitter: Syncing timer to Firebase for ${currentDomain} - ${timeRemaining}s remaining`);
         
         return new Promise((resolve) => {
             try {
@@ -1579,23 +1649,24 @@
                     override_active: currentOverrideActive,
                     override_initiated_by: currentOverrideInitiatedBy,
                     override_initiated_at: currentOverrideInitiatedAt,
-                    time_limit: currentTimeLimit
+                    time_limit: currentTimeLimit,
                 }, (response) => {
+                    console.log("response", response)
                     if (chrome.runtime.lastError) {
-                        console.log('Smart Tab Blocker: Error syncing timer to Firebase:', chrome.runtime.lastError);
+                        console.log('Limitter: Error syncing timer to Firebase:', chrome.runtime.lastError);
                         resolve();
                         return;
                     }
                     
                     if (response && response.success) {
-                        // console.log(`Smart Tab Blocker: Timer synced to Firebase successfully for ${currentDomain}`);
+                        // console.log(`Limitter: Timer synced to Firebase successfully for ${currentDomain}`);
                     } else {
-                        console.log('Smart Tab Blocker: Failed to sync timer to Firebase:', response?.error);
+                        console.log('Limitter: Failed to sync timer to Firebase:', response?.error);
                     }
                     resolve();
                 });
             } catch (error) {
-                console.log('Smart Tab Blocker: Exception while syncing timer to Firebase:', error);
+                console.log('Limitter: Exception while syncing timer to Firebase:', error);
                 resolve();
             }
         });
@@ -1759,7 +1830,7 @@
         if (request.action === 'updateConfig' && !isInitialized) {
             // Handle delayed initialization when authentication completes
             if (request.enabled && request.domainConfig) {
-                console.log(`Smart Tab Blocker: Received delayed initialization for ${getCurrentDomain()}`);
+                console.log(`Limitter: Received delayed initialization for ${getCurrentDomain()}`);
                 initializeWithConfig(request.domainConfig);
                 sendResponse({ success: true });
             }
@@ -1788,7 +1859,7 @@
     // Handle page unload to save state
     window.addEventListener('beforeunload', () => {
         if (isEnabled && isInitialized) {
-            // console.log(`Smart Tab Blocker: Saving timer state before unload - ${timeRemaining}s remaining`);
+            // console.log(`Limitter: Saving timer state before unload - ${timeRemaining}s remaining`);
             // Force immediate save to ensure it completes before page closes
             const storageKey = getStorageKey();
             if (storageKey) {
@@ -1810,7 +1881,7 @@
                         state: state
                     }));
                 } catch (e) {
-                    console.error("Smart Tab Blocker: Error saving state to localStorage", e);
+                    console.error("Limitter: Error saving state to localStorage", e);
                 }
                 
                 // Also try the async API
@@ -1820,14 +1891,14 @@
                             [storageKey]: state
                         }).catch((error) => {
                             if (error.message && error.message.includes('Extension context invalidated')) {
-                                console.log("Smart Tab Blocker: Extension context invalidated during beforeunload save");
+                                console.log("Limitter: Extension context invalidated during beforeunload save");
                             } else {
-                                console.log("Smart Tab Blocker: Error saving during beforeunload:", error);
+                                console.log("Limitter: Error saving during beforeunload:", error);
                             }
                         });
                     }
                 } catch (e) {
-                    console.log("Smart Tab Blocker: Extension context invalidated, cannot save to chrome.storage");
+                    console.log("Limitter: Extension context invalidated, cannot save to chrome.storage");
                 }
             }
         }
@@ -1840,7 +1911,7 @@
             if (tempData) {
                 const parsed = JSON.parse(tempData);
                 if (parsed && parsed.key && parsed.state) {
-                    // console.log("Smart Tab Blocker: Found temporary state in localStorage, restoring to chrome.storage");
+                    // console.log("Limitter: Found temporary state in localStorage, restoring to chrome.storage");
                     try {
                         if (chrome.runtime?.id) {
                             chrome.storage.local.set({
@@ -1848,14 +1919,14 @@
                             });
                         }
                     } catch (e) {
-                        console.log("Smart Tab Blocker: Extension context invalidated, cannot restore to chrome.storage");
+                        console.log("Limitter: Extension context invalidated, cannot restore to chrome.storage");
                     }
                 }
                 // Clear the temporary storage
                 localStorage.removeItem('_smartBlockerTemp');
             }
         } catch (e) {
-            console.error("Smart Tab Blocker: Error checking localStorage", e);
+            console.error("Limitter: Error checking localStorage", e);
         }
     }
     
@@ -1865,7 +1936,7 @@
     // Periodic extension context check to handle developer tools being opened
     setInterval(() => {
         if (isInitialized && !checkExtensionContext()) {
-            console.log('Smart Tab Blocker: Extension context lost, cleaning up');
+            console.log('Limitter: Extension context lost, cleaning up');
             isInitialized = false;
             isEnabled = false;
         }
@@ -1882,16 +1953,16 @@
     
 
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        // console.log('Smart Tab Blocker: Message received:', message);
+        // console.log('Limitter: Message received:', message);
         
         if (message.action === 'startTracking') {
             const currentHostname = getCurrentDomain();
-            console.log(`Smart Tab Blocker: Start tracking request - Current: ${currentHostname}, Tracking: ${message.domain}`);
+            console.log(`Limitter: Start tracking request - Current: ${currentHostname}, Tracking: ${message.domain}`);
             
             const cleanCurrentHostname = currentHostname.replace(/^www\./, '');
             const cleanMessageDomain = message.domain.replace(/^www\./, '');
             if (cleanCurrentHostname === cleanMessageDomain || currentHostname === message.domain) {
-                console.log(`Smart Tab Blocker: Starting tracking for ${message.domain} with ${message.timer}s timer`);
+                console.log(`Limitter: Starting tracking for ${message.domain} with ${message.timer}s timer`);
                 
                 // Clear any existing state first
                 if (isInitialized) {
@@ -1915,7 +1986,7 @@
                 
                 sendResponse({ success: true, message: `Started tracking ${message.domain}` });
             } else {
-                console.log(`Smart Tab Blocker: Domain mismatch - current: ${currentHostname}, tracking: ${message.domain}`);
+                console.log(`Limitter: Domain mismatch - current: ${currentHostname}, tracking: ${message.domain}`);
                 sendResponse({ success: false, message: 'Domain does not match current page' });
             }
             
@@ -1924,7 +1995,7 @@
         
         // Handle timer update requests from popup
         if (message.action === 'requestTimerUpdate') {
-            console.log('Smart Tab Blocker: Timer update requested by popup');
+            console.log('Limitter: Timer update requested by popup');
             if (isEnabled && currentDomain) {
                 updateTimerDisplay();
                 sendResponse({ success: true, message: 'Timer update sent' });
@@ -1941,7 +2012,7 @@
             const blockKey = getDailyBlockKey();
             if (blockKey && changes[blockKey] && changes[blockKey].newValue === undefined) {
                 // Daily block was removed - hide modal and reset
-                // console.log('Smart Tab Blocker: Daily block cleared, restoring access');
+                // console.log('Limitter: Daily block cleared, restoring access');
                 hideModal();
                 hideTimer();
                 
@@ -1974,11 +2045,11 @@
                 const minimumTime = Math.min(currentTime, firebaseTime);
                 const timeDifference = Math.abs(firebaseTime - currentTime);
                 
-                console.log(`Smart Tab Blocker: Cross-device comparison - Current: ${currentTime}s, Firebase: ${firebaseTime}s, Minimum: ${minimumTime}s`);
+                console.log(`Limitter: Cross-device comparison - Current: ${currentTime}s, Firebase: ${firebaseTime}s, Minimum: ${minimumTime}s`);
                 
                 // Update if there's a difference and use minimum time
                 if (timeDifference > 1) {
-                    console.log(`Smart Tab Blocker: Cross-device update detected - using minimum time: ${minimumTime}s (difference: ${timeDifference}s)`);
+                    console.log(`Limitter: Cross-device update detected - using minimum time: ${minimumTime}s (difference: ${timeDifference}s)`);
                     
                     // Use minimum time to prevent inflation
                     timeRemaining = minimumTime;
@@ -1989,7 +2060,7 @@
                     
                     // If timer has expired, handle blocking immediately
                     if (timeRemaining <= 0) {
-                        console.log('Smart Tab Blocker: Timer expired - blocking now');
+                        console.log('Limitter: Timer expired - blocking now');
                         stopCountdownTimer();
                         clearTimerState();
                         markDomainBlockedToday();
@@ -2000,13 +2071,14 @@
                     
                     // If this tab becomes active and we've updated the time, sync to Chrome storage
                     if (isActiveTab && timeDifference > 2) {
+                        console.log("savi22ng timer state", timeRemaining)
                         saveTimerState();
                     }
                 }
                 
                 // Special case: If either source shows blocked, enforce blocking
                 if (firebaseTime <= 0 || currentTime <= 0) {
-                    console.log('Smart Tab Blocker: Either Firebase or current state shows blocked - enforcing block');
+                    console.log('Limitter: Either Firebase or current state shows blocked - enforcing block');
                     timeRemaining = 0;
                     stopCountdownTimer();
                     clearTimerState();
@@ -2016,8 +2088,375 @@
                 }
             }
         }).catch(error => {
-            console.log('Smart Tab Blocker: Error checking for cross-device updates:', error);
+            console.log('Limitter: Error checking for cross-device updates:', error);
         });
     }
     
-})(); 
+    // Add Firestore polling function for timer synchronization
+    let pollingInterval;
+    
+    function startTimerPolling() {
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+        }
+            pollingInterval = setInterval(async () => {
+                console.log("documnet", document.URL)
+                if(document.visibilityState == "hidden") {
+                    return;
+                }
+                if (!currentDomain || !isEnabled || isInitializing || !hasLoadedFromFirebase) {
+                    return;
+                }
+                
+                try {
+                    // Load current Firestore state
+                    const response = await chrome.runtime.sendMessage({
+                        action: 'loadTimerFromFirestore',
+                        domain: currentDomain
+                    });
+                    
+                    if (!response || !response.success || !response.timerState) {
+                        return;
+                    }
+
+                    if(!response.timerState.isActive) {
+                        clearDailyBlock(currentDomain);
+                        stopCountdownTimer();
+                        clearTimerState();
+                        hideTimer();
+                        hideModal();
+                        chrome.runtime.sendMessage({
+                            action: 'triggerDomainListRefresh'
+                        });
+                        pollingInterval = null;
+                        // return;
+                        
+                    }
+                    const firestoreState = response.timerState;
+                    const firestoreTime = firestoreState.time_remaining;
+                    
+                    // Get date parts for comparison
+                    const resetDateStr = response.timerState.last_reset_date;
+                    const todayStr = getTodayString();
+                    
+                    console.log("Checking dates for reset - Last reset:", resetDateStr, "Today:", todayStr);
+                    // Parse dates into components
+                    const [resetYear, resetMonth, resetDay] = resetDateStr.split('-').map(Number);
+                    const [todayYear, todayMonth, todayDay] = todayStr.split('-').map(Number);
+                    
+                    // Compare dates systematically
+                    const needsReset = (
+                        resetYear < todayYear || // Different years
+                        (resetYear === todayYear && resetMonth < todayMonth) || // Same year, different months
+                        (resetYear === todayYear && resetMonth === todayMonth && resetDay < todayDay) // Same year and month, different days
+                    );
+                    
+                    console.log("Date comparison details:", {
+                        resetDate: { year: resetYear, month: resetMonth, day: resetDay },
+                        today: { year: todayYear, month: todayMonth, day: todayDay },
+                        needsReset
+                    });
+                    
+                    if (needsReset) {
+                        console.log("Timer needs reset - Previous day detected");
+                        // Reset timer to the time limit
+                        timeRemaining = response.timerState.time_limit;
+                        lastResetTimestamp = Date.now();
+                        saveTimerState();
+                        updateTimerDisplay();
+                        
+                        // Sync the reset back to Firebase
+                        chrome.runtime.sendMessage({
+                            action: 'syncTimerToFirestore',
+                            domain: currentDomain,
+                            timeRemaining: currentTimeLimit,
+                            gracePeriod: gracePeriod,
+                            isActive: true,
+                            isPaused: isTimerPaused,
+                            timestamp: Date.now(),
+                            override_active: response.timerState.override_active,
+                            override_initiated_by: response.timerState.override_initiated_by,
+                            override_initiated_at: response.timerState.override_initiated_at,
+                            last_reset_timestamp: lastResetTimestamp,
+                            last_reset_date: getTodayString(),
+                            time_limit: currentTimeLimit,
+                            url: document.URL,
+                            reset: true
+                        });
+                        return;
+                    }
+                    
+                    // Compare with local time
+                    if (typeof firestoreTime === 'number' && typeof timeRemaining === 'number') {
+                        console.log(`Timer Polling - Local: ${timeRemaining}s, Firestore: ${firestoreTime}s`);
+                        console.log("reset timestamp", response.timerState.last_reset_timestamp, lastResetTimestamp)
+                        if(response.timerState.override_active || ((response.timerState.last_reset_timestamp > lastResetTimestamp)) || (lastResetTimestamp == undefined)) {
+                            console.log("override active", response.timerState.override_active)
+                            if(response.timerState.time_limit - response.timerState.time_remaining > 10) {
+                                chrome.runtime.sendMessage({
+                                    action: 'syncTimerToFirestore',
+                                    domain: currentDomain,
+                                    timeRemaining: currentTimeLimit,
+                                    gracePeriod: gracePeriod,
+                                    isActive: true,
+                                    isPaused: isTimerPaused,
+                                    timestamp: Date.now(),
+                                    override_active: response.timerState.override_active,
+                                    override_initiated_by: response.timerState.override_initiated_by,
+                                    override_initiated_at: response.timerState.override_initiated_at,
+                                    last_reset_timestamp: response.timerState.last_reset_timestamp,
+                                    time_limit: currentTimeLimit,
+                                    url: document.URL
+                                });
+                                return;
+                            }
+                            currentOverrideActive = response.timerState.override_active;
+                            currentOverrideInitiatedBy = response.timerState.override_initiated_by;
+                            currentOverrideInitiatedAt = response.timerState.override_initiated_at;
+                            lastResetTimestamp = response.timerState.last_reset_timestamp;
+                            timeRemaining = firestoreTime;
+                            saveTimerState();
+                            updateTimerDisplay();
+                            startCountdownTimer();
+                            return;
+                        }
+
+                        if (timeRemaining < firestoreTime) {
+                            // Local time is less than Firestore - update Firestore
+                            if(firestoreTime - timeRemaining > 4) {
+                                console.log('Local time is less - updating Firestore');
+                                chrome.runtime.sendMessage({
+                                    action: 'syncTimerToFirestore',
+                                    domain: currentDomain,
+                                    timeRemaining: timeRemaining,
+                                    gracePeriod: gracePeriod,
+                                    isActive: true,
+                                    isPaused: isTimerPaused,
+                                    timestamp: Date.now(),
+                                    override_active: currentOverrideActive,
+                                    override_initiated_by: currentOverrideInitiatedBy,
+                                    override_initiated_at: currentOverrideInitiatedAt,
+                                    time_limit: currentTimeLimit,
+                                    last_reset_timestamp: lastResetTimestamp,
+                                    url: document.URL
+                                });
+                            }
+                        } else if (firestoreTime < timeRemaining) {
+                            // Firestore time is less than local - update local
+                            console.log('Firestore time is less - updating local');
+                            timeRemaining = firestoreTime;
+                            updateTimerDisplay();
+                        }
+                    }
+                } catch (error) {
+                    console.error('Timer polling error:', error);
+                }
+        }, 5000); // 5 seconds interval
+        
+    }
+    
+    function stopTimerPolling() {
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+            pollingInterval = null;
+        }
+    }
+    
+    // Start polling when the timer starts
+    const originalStartCountdownTimer = startCountdownTimer;
+    startCountdownTimer = function() {
+        originalStartCountdownTimer();
+        startTimerPolling();
+    };
+    
+    // Stop polling when the timer stops
+    const originalStopCountdownTimer = stopCountdownTimer;
+    stopCountdownTimer = function() {
+        originalStopCountdownTimer();
+        stopTimerPolling();
+    };
+
+    // Create and show a custom notification
+    function showCustomNotification(title, message, type = 'info', duration = 5000) {
+        console.log('Showing custom notification:', { title, message, type, duration });
+        
+        // Remove any existing notification
+        if (notificationElement) {
+            notificationElement.remove();
+        }
+        
+        // Clear any existing timeout
+        if (currentNotificationTimeout) {
+            clearTimeout(currentNotificationTimeout);
+        }
+
+        try {
+            // Create notification element
+            notificationElement = document.createElement('div');
+            notificationElement.className = `limitter-banner-notification ${type}`;
+            notificationElement.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                max-width: 400px;
+                min-width: 300px;
+                background: rgba(33, 33, 33, 0.98);
+                color: white;
+                padding: 16px 20px;
+                border-radius: 12px;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+                z-index: 2147483647;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            `;
+            
+            const titleElement = document.createElement('div');
+            titleElement.style.cssText = `
+                font-size: 16px;
+                font-weight: 600;
+                margin: 0 0 8px 0;
+            `;
+            titleElement.textContent = title;
+            
+            const messageElement = document.createElement('div');
+            messageElement.style.cssText = `
+                font-size: 14px;
+                margin: 0;
+                line-height: 1.4;
+            `;
+            messageElement.textContent = message;
+            
+            const closeButton = document.createElement('button');
+            closeButton.style.cssText = `
+                position: absolute;
+                top: 12px;
+                right: 12px;
+                background: none;
+                border: none;
+                color: inherit;
+                font-size: 20px;
+                cursor: pointer;
+                padding: 0;
+                line-height: 1;
+            `;
+            closeButton.innerHTML = '×';
+            closeButton.onclick = () => notificationElement.remove();
+            
+            notificationElement.appendChild(closeButton);
+            notificationElement.appendChild(titleElement);
+            notificationElement.appendChild(messageElement);
+            
+            // Add to page
+            document.body.appendChild(notificationElement);
+            console.log('Notification element added to page');
+            
+            // Auto-hide after duration
+            currentNotificationTimeout = setTimeout(() => {
+                if (notificationElement) {
+                    notificationElement.remove();
+                    notificationElement = null;
+                }
+            }, duration);
+        } catch (error) {
+            console.error('Error showing notification:', error);
+        }
+    }
+
+    // Listen for custom notification messages
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        console.log('Content script received message:', message);
+        if (message.action === 'showCustomNotification') {
+            console.log('Showing notification from message:', message);
+            showCustomNotification(
+                message.title,
+                message.message,
+                message.type || 'info',
+                message.duration || 5000
+            );
+            sendResponse({ success: true });
+        }
+        return true; // Keep the message channel open for the async response
+    });
+
+    // Create force logout overlay
+    function showForceLogoutMessage(message) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 2147483647;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        `;
+
+        const messageBox = document.createElement('div');
+        messageBox.style.cssText = `
+            background: #1a1a1a;
+            padding: 30px;
+            border-radius: 12px;
+            text-align: center;
+            max-width: 400px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        `;
+
+        const icon = document.createElement('div');
+        icon.style.cssText = `
+            font-size: 48px;
+            margin-bottom: 20px;
+        `;
+        icon.textContent = '🔒';
+
+        const title = document.createElement('div');
+        title.style.cssText = `
+            color: #ff3b30;
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        `;
+        title.textContent = 'Device Removed';
+
+        const text = document.createElement('div');
+        text.style.cssText = `
+            color: white;
+            font-size: 16px;
+            line-height: 1.5;
+            margin-bottom: 20px;
+        `;
+        text.textContent = message;
+
+        const subtext = document.createElement('div');
+        subtext.style.cssText = `
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 14px;
+        `;
+        subtext.textContent = 'This page will reload automatically...';
+
+        messageBox.appendChild(icon);
+        messageBox.appendChild(title);
+        messageBox.appendChild(text);
+        messageBox.appendChild(subtext);
+        overlay.appendChild(messageBox);
+        document.body.appendChild(overlay);
+
+        // Remove overlay after 5 seconds (page will reload anyway)
+        setTimeout(() => {
+            overlay.remove();
+        }, 5000);
+    }
+
+    // Listen for messages from background script
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message.action === 'forceLogout') {
+            showForceLogoutMessage(message.message);
+            sendResponse({ success: true });
+        }
+        // ... existing message handlers ...
+    });
+
+})(); // End of IIFE 
