@@ -2135,6 +2135,57 @@
                     const firestoreState = response.timerState;
                     const firestoreTime = firestoreState.time_remaining;
                     
+                    // Get date parts for comparison
+                    const resetDateStr = response.timerState.last_reset_date;
+                    const todayStr = getTodayString();
+                    
+                    console.log("Checking dates for reset - Last reset:", resetDateStr, "Today:", todayStr);
+                    // Parse dates into components
+                    const [resetYear, resetMonth, resetDay] = resetDateStr.split('-').map(Number);
+                    const [todayYear, todayMonth, todayDay] = todayStr.split('-').map(Number);
+                    
+                    // Compare dates systematically
+                    const needsReset = (
+                        resetYear < todayYear || // Different years
+                        (resetYear === todayYear && resetMonth < todayMonth) || // Same year, different months
+                        (resetYear === todayYear && resetMonth === todayMonth && resetDay < todayDay) // Same year and month, different days
+                    );
+                    
+                    console.log("Date comparison details:", {
+                        resetDate: { year: resetYear, month: resetMonth, day: resetDay },
+                        today: { year: todayYear, month: todayMonth, day: todayDay },
+                        needsReset
+                    });
+                    
+                    if (needsReset) {
+                        console.log("Timer needs reset - Previous day detected");
+                        // Reset timer to the time limit
+                        timeRemaining = response.timerState.time_limit;
+                        lastResetTimestamp = Date.now();
+                        saveTimerState();
+                        updateTimerDisplay();
+                        
+                        // Sync the reset back to Firebase
+                        chrome.runtime.sendMessage({
+                            action: 'syncTimerToFirestore',
+                            domain: currentDomain,
+                            timeRemaining: currentTimeLimit,
+                            gracePeriod: gracePeriod,
+                            isActive: true,
+                            isPaused: isTimerPaused,
+                            timestamp: Date.now(),
+                            override_active: response.timerState.override_active,
+                            override_initiated_by: response.timerState.override_initiated_by,
+                            override_initiated_at: response.timerState.override_initiated_at,
+                            last_reset_timestamp: lastResetTimestamp,
+                            last_reset_date: getTodayString(),
+                            time_limit: currentTimeLimit,
+                            url: document.URL,
+                            reset: true
+                        });
+                        return;
+                    }
+                    
                     // Compare with local time
                     if (typeof firestoreTime === 'number' && typeof timeRemaining === 'number') {
                         console.log(`Timer Polling - Local: ${timeRemaining}s, Firestore: ${firestoreTime}s`);
@@ -2164,7 +2215,6 @@
                             currentOverrideInitiatedAt = response.timerState.override_initiated_at;
                             lastResetTimestamp = response.timerState.last_reset_timestamp;
                             timeRemaining = firestoreTime;
-                            console.log("saving timsadsadasd123123er state", timeRemaining)
                             saveTimerState();
                             updateTimerDisplay();
                             startCountdownTimer();

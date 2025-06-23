@@ -604,7 +604,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           }
 
           // Sync to Realtime Database
-          firestore.updateBlockedSite(timerSiteId, siteData, ['url'])
+          firestore.updateBlockedSite(timerSiteId, siteData, ['url', 'last_reset_date'])
             .then(() => {
               sendResponse({ success: true });
             })
@@ -1009,7 +1009,6 @@ async function loadTimerStateFromFirebase(domain) {
     if (siteData) {
       // Rest of the existing timer state loading code...
       const today = getTodayString();
-      const lastResetDate = siteData.last_reset_date;
  
       if (siteData.is_blocked && siteData.time_remaining <= 0) {
         return {
@@ -1670,7 +1669,6 @@ async function loadTimerStateFromFirestore(domain) {
       
       // Check if it's a new day
       const today = getTodayString();
-      const lastResetDate = siteData.last_reset_date;
   
       
       return {
@@ -1686,7 +1684,8 @@ async function loadTimerStateFromFirestore(domain) {
         override_initiated_by: siteData.override_initiated_by,
         override_initiated_at: siteData.override_initiated_at,
         time_limit: siteData.time_limit,
-        last_reset_timestamp: siteData.last_reset_timestamp
+        last_reset_timestamp: siteData.last_reset_timestamp,
+        last_reset_date: siteData.last_reset_date
       };
     }
     
@@ -1724,18 +1723,21 @@ async function syncTimerStateToFirestore(domain, timerState) {
       is_blocked: timerState.timeRemaining <= 0,
       last_accessed: now,
       updated_at: now,
-      last_reset_date: getTodayString(),
+      last_reset_date: timerState.last_reset_date,
       last_reset_timestamp: timerState.last_reset_timestamp,
       last_sync_timestamp: Date.now()
     };
-    console.log("siteData in firestore", siteData)
     // Query existing site document
     const siteId = `${user.uid}_${normalizedDomain}`;
     console.log("siteId", siteId)
     const existingSite = await firestore.getBlockedSite(siteId);
     console.log("existingSite", existingSite)
     if (existingSite) {
-      await firestore.updateBlockedSite(siteId, siteData, ['is_active', 'override_active', 'override_initiated_by', 'override_initiated_at', 'last_reset_timestamp',]);
+      if(timerState.reset) {
+        await firestore.updateBlockedSite(siteId, siteData, ['is_active', 'override_active', 'override_initiated_by', 'override_initiated_at']);
+      } else {
+        await firestore.updateBlockedSite(siteId, siteData, ['is_active', 'override_active', 'override_initiated_by', 'override_initiated_at', 'last_reset_timestamp', 'last_reset_date']);
+      }
     } else {
       // Create new document using updateBlockedSite with a new ID
       await firestore.updateBlockedSite(siteId, {
