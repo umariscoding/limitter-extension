@@ -498,12 +498,36 @@ export class FirebaseAuth {
       // Reset failed attempts on successful login
       this.resetFailedAttempts();
 
+      // Get user info to check email verification
+      const userInfoUrl = `${FIREBASE_AUTH_BASE_URL}:lookup?key=${this.apiKey}`;
+      const userInfoResponse = await fetch(userInfoUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          idToken: data.idToken
+        }),
+      });
+
+      const userInfo = await userInfoResponse.json();
+      
+      if (!userInfoResponse.ok) {
+        throw new Error("Failed to get user information");
+      }
+
+      // Check if email is verified
+      if (!userInfo.users[0].emailVerified) {
+        throw new Error("Please verify your email address before signing in. Check your inbox for the verification link.");
+      }
+
       this.currentUser = {
         uid: data.localId,
         email: data.email,
         idToken: data.idToken,
         refreshToken: data.refreshToken,
         expiresIn: data.expiresIn,
+        emailVerified: userInfo.users[0].emailVerified
       };
 
       try {

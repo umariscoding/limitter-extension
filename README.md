@@ -170,7 +170,6 @@ This extension:
 - Check if the domain is correctly added (no protocols like `https://`)
 - Ensure the extension is enabled with the main toggle
 - Try refreshing the page after adding a new domain
-
 ### Timer shows wrong time
 - Check if you're on the exact domain you configured
 - Subdomains inherit parent domain settings

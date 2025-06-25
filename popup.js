@@ -726,6 +726,23 @@ document.addEventListener('DOMContentLoaded', function() {
         // Clear the form
         emailInput.value = '';
         passwordInput.value = '';
+      } else if (error.message.includes('verify your email')) {
+        showAuthError(error.message);
+        
+        // Show a more prominent notification for email verification
+        chrome.notifications.create('email-verification-required', {
+          type: 'basic',
+          iconUrl: 'icons/icon128.png',
+          title: 'Email Verification Required',
+          message: 'Please check your inbox and verify your email address before signing in.',
+          priority: 2,
+          buttons: [
+            { title: 'Resend Verification Email' }
+          ]
+        });
+        
+        // Keep the email but clear the password
+        passwordInput.value = '';
       } else {
         showAuthError(error.message || 'Login failed. Please check your credentials.');
       }
