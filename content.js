@@ -52,14 +52,12 @@
     let notificationElement = null;
     let currentNotificationTimeout = null;
     
-    // Getter/Setter for timeRemaining to track changes
     Object.defineProperty(window, 'timeRemaining', {
         get: function() {
             return _timeRemaining;
         },
         set: function(newValue) {
             if (_previousTimeRemaining !== newValue) {
-                console.log(`Time Remaining Changed: ${_previousTimeRemaining} -> ${newValue}`);
                 _previousTimeRemaining = _timeRemaining;
                 _timeRemaining = newValue;
             }
@@ -160,11 +158,9 @@
                     }
                     
                     const blockData = result[blockKey];
-                    console.log("Block check result:", blockKey, blockData);
                     if (blockData && blockData.date === getTodayString()) {
                         resolve(true);
                     } else {
-                        // Clean up old block data if it exists
                         if (blockData && blockData.date !== getTodayString() && chrome.runtime?.id) {
                             chrome.storage.local.remove([blockKey]);
                         }
@@ -216,7 +212,6 @@
                 return;
             }
             
-            // Step 1: Load current state from Firebase
             loadTimerStateFromFirebase().then(firebaseState => {
                 const storageKey = getStorageKey();
                 if (!storageKey) {
@@ -245,7 +240,6 @@
                     let chromeTimeRemaining = null;
                     
                     if (chromeState && chromeState.date === getTodayString()) {
-                        // Calculate elapsed time for Chrome storage
                         const now = Date.now();
                         const timeDiff = Math.floor((now - chromeState.timestamp) / 1000);
                         
@@ -255,28 +249,12 @@
                         }
                     }
                     
-                    // Step 3: Compare and decide
                     if (firebaseState && firebaseState.timeRemaining >= 0) {
                         const firebaseTime = firebaseState.timeRemaining;
                         
-                        // Get timestamps
                         const firebaseResetTime = firebaseState.last_reset_timestamp || 0;
                         const chromeResetTime = chromeState?.last_reset_timestamp || 0;
-                        const now = Date.now();
-                        
-                        console.log('Timer State Comparison:', {
-                            firebaseTime,
-                            chromeTimeRemaining,
-                            firebaseResetTime: new Date(firebaseResetTime).toISOString(),
-                            chromeResetTime: chromeResetTime ? new Date(chromeResetTime).toISOString() : 'none',
-                            timeDifference: Math.abs(firebaseTime - chromeTimeRemaining),
-                            resetTimeDifference: Math.abs(firebaseResetTime - chromeResetTime)
-                        });
-                        console.log("lastResetTimestamp", lastResetTimestamp, chromeResetTime)
-                        // Case 1: Firebase has a more recent reset
                         if (firebaseResetTime > chromeResetTime) {
-                            console.log("firebaseResetTime > chromeResetTime", firebaseResetTime, chromeResetTime, firebaseTime, chromeTimeRemaining)
-                            console.log('Using Firebase time due to more recent reset');
                             timeRemaining = firebaseTime;
                             lastResetTimestamp = firebaseResetTime;
                             chromeTimeRemaining = firebaseTime;
@@ -284,44 +262,33 @@
                         }
                         // Case 2: Chrome has a more recent reset
                         else if (chromeResetTime > firebaseResetTime) {
-                            console.log('Using Chrome time due to more recent reset');
                             timeRemaining = chromeTimeRemaining;
-                            // Update Firebase with our more recent reset
                             setTimeout(() => {
                                 syncTimerToFirebase();
                             }, 500);
                         }
-                        // Case 3: Same reset time or no resets - use minimum time
                         else {
                             if (firebaseTime <= chromeTimeRemaining || chromeTimeRemaining === null) {
-                                console.log('Using Firebase time (lower value)');
                                 timeRemaining = firebaseTime;
                                 chromeTimeRemaining = firebaseTime;
                                 saveTimerState();
                             } else {
-                                console.log('Using Chrome time (lower value)');
                                 timeRemaining = chromeTimeRemaining;
-                                // Update Firebase with the lower time
                                 setTimeout(() => {
                                     syncTimerToFirebase();
                                 }, 500);
                             }
                         }
                         
-                        // Always update grace period from Firebase if available
                         gracePeriod = firebaseState.gracePeriod || gracePeriod;
                     } else if (chromeTimeRemaining !== null) {
-                        // Only Chrome storage has data
-                        console.log('Using Chrome time (no Firebase data)');
                         timeRemaining = chromeTimeRemaining;
                         
-                        // Update Firebase with Chrome storage data
                         setTimeout(() => {
                             syncTimerToFirebase();
                         }, 500);
                     }
                     
-                    // Update display and handle blocking if needed
                     updateTimerDisplay();
                     
                     if (timeRemaining <= 0) {
@@ -336,7 +303,6 @@
                 });
             }).catch(error => {
                 console.log('Limitter: Error loading from Firebase on tab switch:', error);
-                // Fall back to Chrome storage only
                 syncFromSharedState().then(() => {
                     resolve();
                 });
@@ -366,8 +332,7 @@
                     }
                     
                     const sharedState = result[storageKey];
-                    if (sharedState && sharedState.date === getTodayString()) {
-                        // Calculate elapsed time since last update
+                    if (sharedState && sharedState.date === getTodayString()) { 
                         const now = Date.now();
                         const timeDiff = Math.floor((now - sharedState.timestamp) / 1000);
                         
@@ -383,13 +348,9 @@
                         const currentTime = timeRemaining;
                         const minimumTime = Math.min(currentTime, sharedTimeRemaining);
                         
-                        // console.log(`Limitter: Cross-tab sync - Current: ${currentTime}s, Shared: ${sharedTimeRemaining}s, Using minimum: ${minimumTime}s`);
-                        
                         timeRemaining = minimumTime;
                         gracePeriod = sharedState.gracePeriod || gracePeriod;
                         lastSyncTime = now;
-                        
-                        // console.log(`Limitter: Synced from shared state - ${timeRemaining}s remaining (was ${sharedState.timeRemaining}s, ${timeDiff}s elapsed)`);
                         
                         updateTimerDisplay();
                         
@@ -421,11 +382,8 @@
                 return;
             }
             
-            console.log(`Limitter: Attempting to load timer state for ${getCurrentDomain()}`);
-            
             // First, try to load from Firebase for cross-device syncing
             loadTimerStateFromFirebase().then(firebaseState => {
-                console.log("firebaseState", firebaseState)
                 if(firebaseState === null){
                     // Check if domain should be tracked (it might have been reactivated)
                     chrome.runtime.sendMessage({ action: 'checkDomainActive', domain: getCurrentDomain() }, (response) => {
@@ -448,7 +406,6 @@
                     return;
                 }
                 if (firebaseState && firebaseState.timeRemaining > 0) {
-                    console.log(`Limitter: Loaded timer state from Firebase (cross-device) with ${firebaseState.timeRemaining}s remaining`);
                     resolve(firebaseState);
                     return;
                 }
@@ -469,16 +426,16 @@
                         }
                         
                         const state = result[storageKey];
-                        console.log("Limitter: Retrieved state from Chrome storage:", state);
+                        // console.log("Limitter: Retrieved state from Chrome storage:", state);
                         
                         if (state && state.date === getTodayString()) {
                             // Only restore if same day - we're more lenient about URL to handle subdomain variations
-                            console.log(`Limitter: Found saved timer state with ${state.timeRemaining}s remaining`);
+                            // console.log(`Limitter: Found saved timer state with ${state.timeRemaining}s remaining`);
                             lastResetTimestamp = state.last_reset_timestamp;
                             // Update override state variables from Chrome storage
-                            console.log("last reset timestamp ", state.last_reset_timestamp)
+                            // console.log("last reset timestamp ", state.last_reset_timestamp)
                             if (state.override_active) {
-                                console.log("state.override_active", state.override_active)
+                                // console.log("state.override_active", state.override_active)
                                 setOverrideActive(state.override_initiated_by, state.override_initiated_at);
                             } else {
                                 currentOverrideActive = false;
@@ -537,7 +494,7 @@
                         if (state && state.date === getTodayString()) {
                             // Update override state variables from Chrome storage
                             if (state.override_active) {
-                                console.log("state.override_active 2", state.override_active)
+                                // console.log("state.override_active 2", state.override_active)
                                 setOverrideActive(state.override_initiated_by, state.override_initiated_at);
                             } else {
                                 currentOverrideActive = false;
@@ -579,7 +536,7 @@
                     
                     if (response && response.success && response.timerState) {
                         const firebaseState = response.timerState;
-                        console.log("firebaseState ", firebaseState)
+                        // console.log("firebaseState ", firebaseState)
                         // Update reset timestamp if Firebase has a more recent one
                         if (firebaseState.last_reset_timestamp > lastResetTimestamp) {
                             lastResetTimestamp = firebaseState.last_reset_timestamp;
@@ -589,7 +546,7 @@
                         
                         // Update override state variables
                         if (firebaseState.override_active) {
-                            console.log("firebaseState.override_active 3", firebaseState.override_active)
+                            // console.log("firebaseState.override_active 3", firebaseState.override_active)
                             setOverrideActive(firebaseState.override_initiated_by, firebaseState.override_initiated_at);
                         } else {
                             currentOverrideActive = false;
@@ -618,7 +575,7 @@
     function saveTimerState() {
         const storageKey = getStorageKey();
         if (!storageKey) return;
-        console.log("timeRemaining", timeRemaining)
+        // console.log("timeRemaining", timeRemaining)
         const state = {
             timeRemaining: timeRemaining,
             isActive: !!countdownTimer && isActiveTab, // Only active tab should be marked as running the timer
@@ -635,8 +592,8 @@
             time_limit: currentTimeLimit,
             last_reset_timestamp: lastResetTimestamp // Add reset timestamp
         };
-        console.log("state", state)
-        console.log(`Limitter: Saving timer state with ${timeRemaining}s remaining (active: ${isActiveTab}, hasLoadedFromFirebase: ${hasLoadedFromFirebase})`);
+        // console.log("state", state)
+        // console.log(`Limitter: Saving timer state with ${timeRemaining}s remaining (active: ${isActiveTab}, hasLoadedFromFirebase: ${hasLoadedFromFirebase})`);
         
         try {
             if (chrome.runtime?.id) {
@@ -713,7 +670,7 @@
         currentOverrideActive = true;
         currentOverrideInitiatedBy = userId;
         currentOverrideInitiatedAt = initiatedAt;
-        console.log("initiatedAt", initiatedAt, "currentOverrideActive", currentOverrideActive, "currentOverrideInitiatedBy", currentOverrideInitiatedBy, "currentOverrideInitiatedAt", currentOverrideInitiatedAt)
+        // console.log("initiatedAt", initiatedAt, "currentOverrideActive", currentOverrideActive, "currentOverrideInitiatedBy", currentOverrideInitiatedBy, "currentOverrideInitiatedAt", currentOverrideInitiatedAt)
         // Clear any existing timeout
         if (overrideClearTimeout) {
             clearTimeout(overrideClearTimeout);
@@ -739,7 +696,7 @@
         }
         
         // Save updated state to Chrome storage
-        console.log("clearing override active", currentOverrideActive)
+        // console.log("clearing override active", currentOverrideActive)
         saveTimerState();
         currentOverrideActive = false;
         // Sync to Firebase
@@ -769,7 +726,7 @@
     function pauseTimer() {
         if (countdownTimer && !isTimerPaused) {
             isTimerPaused = true;
-            console.log("pausing timer", isTimerPaused)
+            // console.log("pausing timer", isTimerPaused)
             saveTimerState();
             updateTimerDisplay();
         }
@@ -782,12 +739,12 @@
             // If this tab is becoming active, sync with shared state first
             if (isActiveTab) {
                 syncFromSharedState().then(() => {
-                    console.log("resuming timer", isTimerPaused)
+                    // console.log("resuming timer", isTimerPaused)
                     saveTimerState();
                     updateTimerDisplay();
                 });
             } else {
-                console.log("resuming asdtimer", isTimerPaused)
+                // console.log("resuming asdtimer", isTimerPaused)
                 saveTimerState();
                 updateTimerDisplay();
             }
@@ -837,7 +794,7 @@
             loadTimerStateFromFirebase().then(firebaseState => {
                 // Mark that we've attempted to load from Firebase
                 hasLoadedFromFirebase = true;
-                console.log("hasLoadedFromFirebase", hasLoadedFromFirebase, firebaseState)
+                // console.log("hasLoadedFromFirebase", hasLoadedFromFirebase, firebaseState)
                 // // Set up real-time listener for this specific blocked site
                 // try {
                 //     chrome.runtime.sendMessage({
@@ -887,9 +844,9 @@
                 // If we have both Firebase and local time, or just local time, send site opened signal
                 if (localTimeRemaining !== null || (firebaseState && firebaseState.timeRemaining > 0)) {
                     const timeToSend = localTimeRemaining || (firebaseState ? firebaseState.timeRemaining : null);
-                    console.log("timeToSend", timeToSend, "firebaseState", firebaseState)
+                    // console.log("timeToSend", timeToSend, "firebaseState", firebaseState)
                     if (timeToSend && timeToSend > 0) {
-                        console.log(`Limitter: Sending site opened signal with time: ${timeToSend}s`);
+                        //  console.log(`Limitter: Sending site opened signal with time: ${timeToSend}s`);
                     //     if(firebaseState!=null){
                     //     // Send site opened signal for cross-device sync
                     //     chrome.runtime.sendMessage({
@@ -904,7 +861,7 @@
                     //         }
                     //     });
                     // }
-                    console.log("localTimeRemaining", localTimeRemaining, "firebaseState", firebaseState)
+                    // console.log("localTimeRemaining", localTimeRemaining, "firebaseState", firebaseState)
                         // Use the local time if available, otherwise use Firebase time
                         if(firebaseState?.timeRemaining != 3600){
                         timeRemaining = localTimeRemaining || firebaseState.timeRemaining;
@@ -1016,7 +973,6 @@
                     
                     if (request.overrideActivated) {
                         // Override was activated - reset timer completely
-                        console.log(`Limitter: Override activated, resetting timer to ${gracePeriod}s`);
                         timeRemaining = gracePeriod;
                         setOverrideActive(null, new Date().toISOString());
                         stopCountdownTimer();
@@ -1040,7 +996,7 @@
                 });
             } else if (request.action === 'stopTracking') {
                 // Direct command to stop tracking this domain
-                console.log(`Limitter: Received direct command to stop tracking ${getCurrentDomain()}`);
+                // console.log(`Limitter: Received direct command to stop tracking ${getCurrentDomain()}`);
                 isEnabled = false;
                 isInitialized = false;
                 stopCountdownTimer();
@@ -1063,40 +1019,24 @@
                 sendResponse({ success: true });
             } else if (request.action === 'overrideActiveChanged') {
                 // Handle Firebase realtime update for override_active property
-                console.log(`Firebase Realtime Update: override_active changed for ${request.domain}: ${request.override_active}`);
-                
                 if (request.override_active) {
-                    console.log(`Override activated for ${request.domain} from another device - updating local state`);
-                    console.log("request.data", request.data)
-                    // Update local override state if this matches current domain
-                        // Follow the EXACT same pattern as when override button is clicked
-                        // Use the time_limit as the full timer value (like originalTimeLimit in popup)
                         const originalTimeLimit = request.data.time_limit;
                         
-                        console.log(`Firebase override: resetting timer to full time_limit: ${originalTimeLimit}s`);
                         timeRemaining = originalTimeLimit; // Reset to full time like override button click
                         currentTimeLimit = originalTimeLimit;
                         gracePeriod = originalTimeLimit;
                         
-                        console.log("setting override active 5")
-                        // Set override active with automatic clearing after 4 seconds (same as override button)
                         setOverrideActive(null, new Date().toISOString());
                         
-                        // Stop existing timer and start fresh (same as override button)
                         stopCountdownTimer();
                         startCountdownTimer();
                         
-                        // Update timer display immediately to show the reset time
                         updateTimerDisplay();
                         
-                        // Notify popup of timer update (same as override button)
                         sendTimerUpdateToPopup();
                         
-                        // Save the new state (same as override button)
-                        console.log("saving timer staasdasdaste", timeRemaining)
                         saveTimerState();
                         
-                        // Also update Chrome sync storage to ensure domain is properly tracked
                         try {
                             chrome.storage.sync.get(['blockedDomains'], (result) => {
                                 const domains = result.blockedDomains || {};
@@ -1111,25 +1051,10 @@
                             console.error('Error updating Chrome sync storage:', error);
                         }
                         
-                        // Clear any daily block since override is active
                         clearDailyBlock();
                         clearOverrideActive();
-                        console.log(`Timer reset to full time due to override from another device: ${timeRemaining}s remaining`);
-                        console.log(`Chrome local and sync storage updated with Firebase override state`);
                     }
-                // } else {
-                //     console.log(`Override deactivated for ${request.domain} from another device`);
                     
-                //     // Clear override state if this matches current domain
-                //     if (getCurrentDomain() === request.domain) {
-                //         clearOverrideActive();
-                        
-                //         // Update Chrome local storage after clearing override
-                //         saveTimerState();
-                        
-                //         console.log(`Chrome local storage updated - override cleared`);
-                //     }
-                // }
                 
                 sendResponse({ success: true });
             } else if (request.action === 'getTimerState') {
@@ -1140,14 +1065,11 @@
                     gracePeriod: gracePeriod
                 });
             } else if (request.action === 'updateTimer') {
-                // Update timer from background script (for cross-device sync)
                 if (typeof request.timeRemaining === 'number' && request.timeRemaining >= 0) {
-                    console.log(`🔄 Updating timer from background script: ${timeRemaining}s → ${request.timeRemaining}s`);
                     timeRemaining = request.timeRemaining;
                     updateTimerDisplay();
                     
                     // Save the updated state
-                    console.log("saving timerasdasasdasdasdsad state", timeRemaining)
                     saveTimerState();
                     
                     // If timer expired, handle blocking
@@ -1162,13 +1084,7 @@
                 sendResponse({ success: true });
             } else if (request.action === 'domainDeactivated') {
                 // Handle domain deactivation from Firebase realtime update
-                console.log(`Firebase Realtime Update: Domain deactivated for ${request.domain}`);
-                console.log("request.data", request.data);
-                
-                // Check if this matches current domain
                 if (getCurrentDomain() === request.domain) {
-                    console.log(`Domain ${request.domain} deactivated from another device - stopping tracking immediately`);
-                    
                     // Immediately stop all tracking for this domain
                     isEnabled = false;
                     isInitialized = false;
@@ -1195,7 +1111,6 @@
                         console.error('Error updating Chrome sync storage:', error);
                     }
                     
-                    console.log(`Domain ${request.domain} completely stopped tracking due to deactivation from another device`);
                 }
                 
                 sendResponse({ success: true });
@@ -1207,11 +1122,7 @@
     
     // Check if current domain should be tracked
     function checkDomainAndInitialize() {
-        // console.log(`Limitter: Checking domain ${getCurrentDomain()}`);
-        
-        // Check extension context before proceeding
         if (!checkExtensionContext()) {
-            console.log('Limitter: Extension context not available, cannot initialize');
             return;
         }
         
@@ -1221,26 +1132,15 @@
             domain: getCurrentDomain() 
         }, (response) => {
             if (chrome.runtime.lastError) {
-                console.log('Limitter: Error communicating with background script:', chrome.runtime.lastError);
-                // Retry after a delay if there's a communication error
                 setTimeout(() => {
-                    console.log('Limitter: Retrying domain check...');
                     checkDomainAndInitialize();
                 }, 3000);
                 return;
             }
             
             // If background responds that authentication is still initializing, wait for retry
-            // if (response && response.initializing) {
-            //     console.log(`Limitter: Background script is still initializing for ${getCurrentDomain()}, waiting for retry`);
-            //     return; // Background will send updateConfig message when ready
-            // }
-            
             // If background responds that domain should not be tracked, stop initialization
             if (response && response.shouldTrack === false) {
-                // console.log('Response:', response);
-                console.log(`Limitter: Background script says not to track ${getCurrentDomain()}`);
-                // Ensure we clean up any state for this domain
                 clearAllStateForDomain();
                 return;
             }
@@ -1254,8 +1154,7 @@
     function initializeDomainTracking() {
         // First check if domain is already blocked today
         isDomainBlockedToday().then(isBlocked => {
-            if (isBlocked) {
-                console.log(`Limitter: ${getCurrentDomain()} is already blocked for today`);
+            if (isBlocked) {    
                 // Initialize with config so we can show the blocked modal
                 initializeWithConfig({ timer: 20 });
                 return;
@@ -1267,13 +1166,10 @@
                     // Double-check that domain should still be tracked before using saved state
                     chrome.runtime.sendMessage({ action: 'checkDomainTracking', domain: getCurrentDomain() }, (trackingResponse) => {
                         if (trackingResponse && trackingResponse.shouldTrack === false) {
-                            console.log(`Limitter: Domain no longer tracked, ignoring saved state`);
                             clearAllStateForDomain();
                             return;
                         }
                         
-                        console.log(`Limitter: Restoring from saved timer state with ${savedState.timeRemaining}s remaining`);
-                        // We have saved state, initialize with it
                         initializeWithConfig({ 
                             timer: savedState.gracePeriod || 20,
                             savedState: savedState
@@ -1281,13 +1177,10 @@
                     });
                 } else {
                     // No saved state, proceed with normal initialization
-                    // console.log(`Limitter: No saved state, requesting domain config`);
                     chrome.runtime.sendMessage({ action: 'getDomainConfig' }, (response) => {
                         if (chrome.runtime.lastError) {
                             console.error("Limitter: Error getting domain config", chrome.runtime.lastError);
-                            // Retry after delay if there's an error
                             setTimeout(() => {
-                                console.log('Limitter: Retrying domain config request...');
                                 initializeDomainTracking();
                             }, 3000);
                             return;
@@ -1296,11 +1189,8 @@
                         if (response && response.domainConfig) {
                             initializeWithConfig(response.domainConfig);
                         } else if (response && response.shouldTrack === false) {
-                            // console.log(`Limitter: Domain ${getCurrentDomain()} should not be tracked`);
                             clearAllStateForDomain();
                         } else {
-                            // console.log('Limitter: No domain config received, may need to retry');
-                            // Wait a bit and check again
                             setTimeout(() => {
                                 initializeDomainTracking();
                             }, 5000);
@@ -1313,32 +1203,25 @@
     
     // Helper function to clean up all state for a domain
     function clearAllStateForDomain() {
-        console.log(`Limitter: Cleaning up all state for ${getCurrentDomain()}`);
-        
-        // Clear timer state
         const storageKey = getStorageKey();
         if (storageKey) {
             chrome.storage.local.remove([storageKey]);
         }
         
-        // Clear daily block
         const blockKey = getDailyBlockKey();
         if (blockKey) {
             chrome.storage.local.remove([blockKey]);
         }
         
-        // Clean up UI and variables
         stopCountdownTimer();
         hideTimer();
         hideModal();
         isEnabled = false;
         isInitialized = false;
         
-        // Try to clean up localStorage temp data too
         try {
             localStorage.removeItem('_smartBlockerTemp');
         } catch (e) {
-            // Ignore localStorage errors
         }
     }
     
@@ -1381,13 +1264,8 @@
         
         hideTimer();
         
-        // Send timer data to extension popup instead of showing on page
-        sendTimerUpdateToPopup();
+            sendTimerUpdateToPopup();
         
-        // Note: Timer is now displayed in the extension popup
-        // No longer appending to document.body
-        
-        // Add timer styles
         if (!document.getElementById('smart-blocker-timer-styles')) {
             const styles = document.createElement('style');
             styles.id = 'smart-blocker-timer-styles';
@@ -1507,7 +1385,6 @@
     }
     
     function hideTimer() {
-        // Send message to popup to hide timer
         sendTimerStoppedToPopup();
         
         if (timerElement && timerElement.parentNode) {
@@ -1539,7 +1416,6 @@
     function updateTimerDisplay() {
         if (!isEnabled) return;
         
-        // Send updated timer data to popup instead of updating on-page elements
         sendTimerUpdateToPopup();
     }
     
@@ -1549,7 +1425,6 @@
         setTimeout(() => {
             hasLoadedFromFirebase = true;
             isInitializing = false;
-            // console.log('Limitter: Firebase syncing enabled');
         }, 1000); // 1 second delay to prevent race conditions
     }
 
@@ -1558,13 +1433,11 @@
         
         // If timer is already running, don't start a new one
         if (countdownTimer) {
-            console.log('Limitter: Timer already running, not starting new one');
             return;
         }
         
         // Only set initial time if we're not resuming and haven't loaded from Firebase
         if (!isResuming && !hasLoadedFromFirebase) {
-            console.log('Limitter: Starting fresh timer - waiting for Firebase load');
             return; // Don't start timer until we've loaded from Firebase
         }
         
@@ -1609,8 +1482,6 @@
             }
         }, 1000);
         
-        // Immediate save when timer starts
-        console.log("saving timer stateas213", timeRemaining)
         saveTimerState();
     }
     
@@ -1630,12 +1501,9 @@
         
         // Extra protection: Don't sync during initialization
         if (isInitializing || !hasLoadedFromFirebase) {
-            console.log('Limitter: Skipping Firebase sync - initialization not complete');
             return Promise.resolve();
         }
-        
-        // console.log(`Limitter: Syncing timer to Firebase for ${currentDomain} - ${timeRemaining}s remaining`);
-        
+                
         return new Promise((resolve) => {
             try {
                 chrome.runtime.sendMessage({
@@ -1651,15 +1519,12 @@
                     override_initiated_at: currentOverrideInitiatedAt,
                     time_limit: currentTimeLimit,
                 }, (response) => {
-                    console.log("response", response)
-                    if (chrome.runtime.lastError) {
-                        console.log('Limitter: Error syncing timer to Firebase:', chrome.runtime.lastError);
+                    if (chrome.runtime.lastError) { 
                         resolve();
                         return;
                     }
                     
                     if (response && response.success) {
-                        // console.log(`Limitter: Timer synced to Firebase successfully for ${currentDomain}`);
                     } else {
                         console.log('Limitter: Failed to sync timer to Firebase:', response?.error);
                     }
@@ -1830,7 +1695,6 @@
         if (request.action === 'updateConfig' && !isInitialized) {
             // Handle delayed initialization when authentication completes
             if (request.enabled && request.domainConfig) {
-                console.log(`Limitter: Received delayed initialization for ${getCurrentDomain()}`);
                 initializeWithConfig(request.domainConfig);
                 sendResponse({ success: true });
             }
@@ -1859,8 +1723,6 @@
     // Handle page unload to save state
     window.addEventListener('beforeunload', () => {
         if (isEnabled && isInitialized) {
-            // console.log(`Limitter: Saving timer state before unload - ${timeRemaining}s remaining`);
-            // Force immediate save to ensure it completes before page closes
             const storageKey = getStorageKey();
             if (storageKey) {
                 const state = {
@@ -1957,12 +1819,11 @@
         
         if (message.action === 'startTracking') {
             const currentHostname = getCurrentDomain();
-            console.log(`Limitter: Start tracking request - Current: ${currentHostname}, Tracking: ${message.domain}`);
+            // console.log(`Limitter: Start tracking request - Current: ${currentHostname}, Tracking: ${message.domain}`);
             
             const cleanCurrentHostname = currentHostname.replace(/^www\./, '');
             const cleanMessageDomain = message.domain.replace(/^www\./, '');
             if (cleanCurrentHostname === cleanMessageDomain || currentHostname === message.domain) {
-                console.log(`Limitter: Starting tracking for ${message.domain} with ${message.timer}s timer`);
                 
                 // Clear any existing state first
                 if (isInitialized) {
@@ -1995,7 +1856,7 @@
         
         // Handle timer update requests from popup
         if (message.action === 'requestTimerUpdate') {
-            console.log('Limitter: Timer update requested by popup');
+            // console.log('Limitter: Timer update requested by popup');
             if (isEnabled && currentDomain) {
                 updateTimerDisplay();
                 sendResponse({ success: true, message: 'Timer update sent' });
@@ -2045,11 +1906,11 @@
                 const minimumTime = Math.min(currentTime, firebaseTime);
                 const timeDifference = Math.abs(firebaseTime - currentTime);
                 
-                console.log(`Limitter: Cross-device comparison - Current: ${currentTime}s, Firebase: ${firebaseTime}s, Minimum: ${minimumTime}s`);
+                // console.log(`Limitter: Cross-device comparison - Current: ${currentTime}s, Firebase: ${firebaseTime}s, Minimum: ${minimumTime}s`);
                 
                 // Update if there's a difference and use minimum time
                 if (timeDifference > 1) {
-                    console.log(`Limitter: Cross-device update detected - using minimum time: ${minimumTime}s (difference: ${timeDifference}s)`);
+                    // console.log(`Limitter: Cross-device update detected - using minimum time: ${minimumTime}s (difference: ${timeDifference}s)`);
                     
                     // Use minimum time to prevent inflation
                     timeRemaining = minimumTime;
@@ -2060,7 +1921,7 @@
                     
                     // If timer has expired, handle blocking immediately
                     if (timeRemaining <= 0) {
-                        console.log('Limitter: Timer expired - blocking now');
+                        // console.log('Limitter: Timer expired - blocking now');
                         stopCountdownTimer();
                         clearTimerState();
                         markDomainBlockedToday();
@@ -2071,14 +1932,14 @@
                     
                     // If this tab becomes active and we've updated the time, sync to Chrome storage
                     if (isActiveTab && timeDifference > 2) {
-                        console.log("savi22ng timer state", timeRemaining)
+                        // console.log("savi22ng timer state", timeRemaining)
                         saveTimerState();
                     }
                 }
                 
                 // Special case: If either source shows blocked, enforce blocking
                 if (firebaseTime <= 0 || currentTime <= 0) {
-                    console.log('Limitter: Either Firebase or current state shows blocked - enforcing block');
+                    // console.log('Limitter: Either Firebase or current state shows blocked - enforcing block');
                     timeRemaining = 0;
                     stopCountdownTimer();
                     clearTimerState();
@@ -2100,7 +1961,7 @@
             clearInterval(pollingInterval);
         }
             pollingInterval = setInterval(async () => {
-                console.log("documnet", document.URL)
+                //  console.log("documnet", document.URL)
                 if(document.visibilityState == "hidden") {
                     return;
                 }
@@ -2139,7 +2000,7 @@
                     const resetDateStr = response.timerState.last_reset_date;
                     const todayStr = getTodayString();
                     
-                    console.log("Checking dates for reset - Last reset:", resetDateStr, "Today:", todayStr);
+                    // console.log("Checking dates for reset - Last reset:", resetDateStr, "Today:", todayStr);
                     // Parse dates into components
                     const [resetYear, resetMonth, resetDay] = resetDateStr.split('-').map(Number);
                     const [todayYear, todayMonth, todayDay] = todayStr.split('-').map(Number);
@@ -2151,14 +2012,14 @@
                         (resetYear === todayYear && resetMonth === todayMonth && resetDay < todayDay) // Same year and month, different days
                     );
                     
-                    console.log("Date comparison details:", {
-                        resetDate: { year: resetYear, month: resetMonth, day: resetDay },
-                        today: { year: todayYear, month: todayMonth, day: todayDay },
-                        needsReset
-                    });
+                    // console.log("Date comparison details:", {
+                    //     resetDate: { year: resetYear, month: resetMonth, day: resetDay },
+                    //     today: { year: todayYear, month: todayMonth, day: todayDay },
+                    //     needsReset
+                    // });
                     
                     if (needsReset) {
-                        console.log("Timer needs reset - Previous day detected");
+                        // console.log("Timer needs reset - Previous day detected");
                         // Reset timer to the time limit
                         timeRemaining = response.timerState.time_limit;
                         lastResetTimestamp = Date.now();
@@ -2188,10 +2049,10 @@
                     
                     // Compare with local time
                     if (typeof firestoreTime === 'number' && typeof timeRemaining === 'number') {
-                        console.log(`Timer Polling - Local: ${timeRemaining}s, Firestore: ${firestoreTime}s`);
-                        console.log("reset timestamp", response.timerState.last_reset_timestamp, lastResetTimestamp)
+                        // console.log(`Timer Polling - Local: ${timeRemaining}s, Firestore: ${firestoreTime}s`);
+                        // console.log("reset timestamp", response.timerState.last_reset_timestamp, lastResetTimestamp)
                         if(response.timerState.override_active || ((response.timerState.last_reset_timestamp > lastResetTimestamp)) || (lastResetTimestamp == undefined)) {
-                            console.log("override active", response.timerState.override_active)
+                            // console.log("override active", response.timerState.override_active)
                             if(response.timerState.time_limit - response.timerState.time_remaining > 10) {
                                 chrome.runtime.sendMessage({
                                     action: 'syncTimerToFirestore',
@@ -2224,7 +2085,7 @@
                         if (timeRemaining < firestoreTime) {
                             // Local time is less than Firestore - update Firestore
                             if(firestoreTime - timeRemaining > 4) {
-                                console.log('Local time is less - updating Firestore');
+                                // console.log('Local time is less - updating Firestore');
                                 chrome.runtime.sendMessage({
                                     action: 'syncTimerToFirestore',
                                     domain: currentDomain,
@@ -2243,7 +2104,7 @@
                             }
                         } else if (firestoreTime < timeRemaining) {
                             // Firestore time is less than local - update local
-                            console.log('Firestore time is less - updating local');
+                            // console.log('Firestore time is less - updating local');
                             timeRemaining = firestoreTime;
                             updateTimerDisplay();
                         }
@@ -2278,7 +2139,7 @@
 
     // Create and show a custom notification
     function showCustomNotification(title, message, type = 'info', duration = 5000) {
-        console.log('Showing custom notification:', { title, message, type, duration });
+        // console.log('Showing custom notification:', { title, message, type, duration });
         
         // Remove any existing notification
         if (notificationElement) {
@@ -2347,7 +2208,7 @@
             
             // Add to page
             document.body.appendChild(notificationElement);
-            console.log('Notification element added to page');
+            //  console.log('Notification element added to page');
             
             // Auto-hide after duration
             currentNotificationTimeout = setTimeout(() => {
